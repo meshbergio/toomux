@@ -52,7 +52,10 @@ pub const HISTORY: usize = 2000;
 impl Live {
     pub fn new(pane: &str, cols: u16, lines: u16) -> Self {
         let size = TermSize::new(cols.max(2) as usize, lines.max(1) as usize);
-        let config = term::Config { scrolling_history: HISTORY, ..Default::default() };
+        let config = term::Config {
+            scrolling_history: HISTORY,
+            ..Default::default()
+        };
         Self {
             pane: pane.to_string(),
             term: Term::new(config, &size, Quiet),
@@ -85,7 +88,9 @@ impl Live {
 
     /// A reply arrived; returns true once the view is seeded.
     pub fn reply(&mut self, seq: u64, lines: Vec<String>) -> bool {
-        let Some((cap, state)) = self.seed else { return false };
+        let Some((cap, state)) = self.seed else {
+            return false;
+        };
         if seq == cap {
             self.captured = Some(lines);
             return false;
@@ -95,16 +100,26 @@ impl Live {
         }
         self.seed = None;
         let captured = self.captured.take().unwrap_or_default();
-        let f: Vec<i64> = lines.first().map(|l| l.split(' ').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
+        let f: Vec<i64> = lines
+            .first()
+            .map(|l| l.split(' ').filter_map(|x| x.parse().ok()).collect())
+            .unwrap_or_default();
         let get = |i: usize| f.get(i).copied().unwrap_or(0);
         let (w, h) = (get(0).max(2) as u16, get(1).max(1) as u16);
         self.cols = w;
         self.lines = h;
         let size = TermSize::new(w as usize, h as usize);
-        let config = term::Config { scrolling_history: HISTORY, ..Default::default() };
+        let config = term::Config {
+            scrolling_history: HISTORY,
+            ..Default::default()
+        };
         self.term = Term::new(config, &size, Quiet);
         self.parser = ansi::Processor::new();
-        self.flags = Flags2 { mouse: get(6) == 1 || get(7) == 1, mouse_motion: get(7) == 1, sgr: get(8) == 1 };
+        self.flags = Flags2 {
+            mouse: get(6) == 1 || get(7) == 1,
+            mouse_motion: get(7) == 1,
+            sgr: get(8) == 1,
+        };
         let alternate = get(5) == 1;
         let mut seed: Vec<u8> = Vec::new();
         if alternate {
@@ -114,7 +129,11 @@ impl Live {
         // lines are the screen. Written in order, the rest scrolls into
         // history the way it did in the pane.
         let n = captured.len();
-        let start = if alternate { n.saturating_sub(h as usize) } else { 0 };
+        let start = if alternate {
+            n.saturating_sub(h as usize)
+        } else {
+            0
+        };
         for (i, l) in captured[start..].iter().enumerate() {
             if i > 0 {
                 seed.extend(b"\r\n");
@@ -170,7 +189,13 @@ impl Live {
     }
 
     /// Draw into `area`; returns where the cursor is (absolute) and its shape.
-    pub fn render(&self, buf: &mut Buffer, area: Rect, fg: Color, bg: Color) -> Option<(u16, u16, CursorShape)> {
+    pub fn render(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        fg: Color,
+        bg: Color,
+    ) -> Option<(u16, u16, CursorShape)> {
         let content = self.term.renderable_content();
         let offset = content.display_offset as i32;
         for y in area.y..area.y + area.height {
@@ -221,9 +246,19 @@ impl Live {
         }
         let cur = content.cursor;
         let row = cur.point.line.0 + offset;
-        let visible = content.mode.contains(TermMode::SHOW_CURSOR) && cur.shape != CursorShape::Hidden;
-        (visible && row >= 0 && (row as u16) < area.height && (cur.point.column.0 as u16) < area.width)
-            .then(|| (area.x + cur.point.column.0 as u16, area.y + row as u16, cur.shape))
+        let visible =
+            content.mode.contains(TermMode::SHOW_CURSOR) && cur.shape != CursorShape::Hidden;
+        (visible
+            && row >= 0
+            && (row as u16) < area.height
+            && (cur.point.column.0 as u16) < area.width)
+            .then(|| {
+                (
+                    area.x + cur.point.column.0 as u16,
+                    area.y + row as u16,
+                    cur.shape,
+                )
+            })
     }
 
     pub fn columns(&self) -> usize {
@@ -236,10 +271,15 @@ fn color(c: AColor, fg: Color, bg: Color) -> Color {
         AColor::Spec(r) => Color::Rgb(r.r, r.g, r.b),
         AColor::Indexed(i) => Color::Indexed(i),
         AColor::Named(n) => match n {
-            NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground | NamedColor::Cursor => fg,
+            NamedColor::Foreground
+            | NamedColor::BrightForeground
+            | NamedColor::DimForeground
+            | NamedColor::Cursor => fg,
             NamedColor::Background => bg,
             n if (n as usize) < 16 => Color::Indexed(n as u8),
-            n if (n as usize) >= NamedColor::DimBlack as usize && (n as usize) <= NamedColor::DimWhite as usize => {
+            n if (n as usize) >= NamedColor::DimBlack as usize
+                && (n as usize) <= NamedColor::DimWhite as usize =>
+            {
                 Color::Indexed((n as usize - NamedColor::DimBlack as usize) as u8)
             }
             _ => fg,
@@ -326,7 +366,9 @@ pub fn mouse(ev: &MouseEvent, col: u16, row: u16, flags: Flags2) -> Option<Vec<u
         + 16 * u8::from(ev.modifiers.contains(KeyModifiers::CONTROL));
     let (x, y) = (col as u32 + 1, row as u32 + 1);
     if flags.sgr {
-        return Some(format!("\x1b[<{code};{x};{y}{}", if pressed { 'M' } else { 'm' }).into_bytes());
+        return Some(
+            format!("\x1b[<{code};{x};{y}{}", if pressed { 'M' } else { 'm' }).into_bytes(),
+        );
     }
     let code = if pressed { code } else { 3 + (code & !3) };
     (x <= 223 && y <= 223).then(|| vec![0x1b, b'[', b'M', 32 + code, 32 + x as u8, 32 + y as u8])
@@ -342,7 +384,11 @@ fn button(b: MouseButton) -> u8 {
 
 /// Hex arguments for `send-keys -H`.
 pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -370,14 +416,30 @@ mod tests {
         let mut live = Live::new("%1", 10, 3);
         live.seed = Some((0, 1));
         live.output(b"ignored: already in the capture");
-        assert!(!live.reply(0, vec!["old".into(), "line1".into(), "line2".into(), "\x1b[31mred\x1b[39m".into()]));
+        assert!(!live.reply(
+            0,
+            vec![
+                "old".into(),
+                "line1".into(),
+                "line2".into(),
+                "\x1b[31mred\x1b[39m".into()
+            ]
+        ));
         live.output(b"!");
         assert!(live.reply(1, vec!["10 3 3 2 1 0 0 0 0 1".into()]));
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 3));
         let cur = live.render(&mut buf, Rect::new(0, 0, 10, 3), Color::White, Color::Black);
-        let row = |y| (0..10).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        let row = |y| {
+            (0..10)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
         assert_eq!(row(0).trim_end(), "line1");
-        assert_eq!(row(2).trim_end(), "red!", "later output lands after the seed, at the cursor");
+        assert_eq!(
+            row(2).trim_end(),
+            "red!",
+            "later output lands after the seed, at the cursor"
+        );
         assert_eq!(buf[(0, 2)].fg, Color::Indexed(1));
         assert_eq!(cur.map(|c| (c.0, c.1)), Some((4, 2)));
         live.scroll(1);

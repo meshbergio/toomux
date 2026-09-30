@@ -59,13 +59,22 @@ fn run_in(roots: &[PathBuf], to: &Path, now: SystemTime) -> Result<Pass> {
                     continue;
                 }
                 let Ok(md) = e.metadata() else { continue };
-                let Ok(modified) = md.modified() else { continue };
-                let Ok(rel) = path.strip_prefix(root) else { continue };
+                let Ok(modified) = md.modified() else {
+                    continue;
+                };
+                let Ok(rel) = path.strip_prefix(root) else {
+                    continue;
+                };
                 let target = copy_path(&to, rel);
-                if std::fs::metadata(&target).and_then(|m| m.modified()).is_ok_and(|t| t == modified) {
+                if std::fs::metadata(&target)
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t == modified)
+                {
                     continue;
                 }
-                let quiet = now.duration_since(modified).is_ok_and(|d| d.as_secs() >= QUIET_SECS);
+                let quiet = now
+                    .duration_since(modified)
+                    .is_ok_and(|d| d.as_secs() >= QUIET_SECS);
                 if !quiet || (pass.bytes_in > 0 && pass.bytes_in + md.len() > PASS_BYTES) {
                     pass.waiting += 1;
                     continue;
@@ -88,7 +97,10 @@ fn run_in(roots: &[PathBuf], to: &Path, now: SystemTime) -> Result<Pass> {
 /// Each account's folder is kept apart (two can hold the same path): named
 /// after the folder `projects/` is in, without its dot (`claude-shared`).
 fn root_name(root: &Path) -> String {
-    root.parent().and_then(Path::file_name).map_or_else(|| "projects".into(), |n| n.to_string_lossy().trim_start_matches('.').to_string())
+    root.parent().and_then(Path::file_name).map_or_else(
+        || "projects".into(),
+        |n| n.to_string_lossy().trim_start_matches('.').to_string(),
+    )
 }
 
 fn copy_path(to: &Path, rel: &Path) -> PathBuf {
@@ -136,9 +148,17 @@ pub fn transcript(cfg: &Config, session: &str, agent: Option<&str>) -> Option<St
     transcript_in(&crate::index::roots(cfg), &dir(), session, agent)
 }
 
-fn transcript_in(roots: &[PathBuf], archive: &Path, session: &str, agent: Option<&str>) -> Option<String> {
+fn transcript_in(
+    roots: &[PathBuf],
+    archive: &Path,
+    session: &str,
+    agent: Option<&str>,
+) -> Option<String> {
     let rel = |project: &str| match agent {
-        Some(a) => PathBuf::from(project).join(session).join("subagents").join(format!("agent-{a}.jsonl")),
+        Some(a) => PathBuf::from(project)
+            .join(session)
+            .join("subagents")
+            .join(format!("agent-{a}.jsonl")),
         None => PathBuf::from(project).join(format!("{session}.jsonl")),
     };
     for root in roots {
@@ -150,8 +170,15 @@ fn transcript_in(roots: &[PathBuf], archive: &Path, session: &str, agent: Option
         }
     }
     for account in std::fs::read_dir(archive).into_iter().flatten().flatten() {
-        for p in std::fs::read_dir(account.path()).into_iter().flatten().flatten() {
-            if let Some(text) = read_copy(&copy_path(&account.path(), &rel(&p.file_name().to_string_lossy()))) {
+        for p in std::fs::read_dir(account.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if let Some(text) = read_copy(&copy_path(
+                &account.path(),
+                &rel(&p.file_name().to_string_lossy()),
+            )) {
                 return Some(text);
             }
         }
@@ -162,7 +189,10 @@ fn transcript_in(roots: &[PathBuf], archive: &Path, session: &str, agent: Option
 fn read_copy(path: &Path) -> Option<String> {
     let f = std::fs::File::open(path).ok()?;
     let mut text = String::new();
-    zstd::stream::read::Decoder::new(f).ok()?.read_to_string(&mut text).ok()?;
+    zstd::stream::read::Decoder::new(f)
+        .ok()?
+        .read_to_string(&mut text)
+        .ok()?;
     Some(text)
 }
 
@@ -188,15 +218,24 @@ fn version_path(archive: &Path, root: &Path, path: &Path, at_ms: i64) -> PathBuf
 /// The kept versions of a file, oldest first.
 pub fn versions(archive: &Path, root: &Path, path: &Path) -> Vec<PathBuf> {
     let probe = version_path(archive, root, path, 0);
-    let Some(dir) = probe.parent() else { return Vec::new() };
-    let stem = path.file_name().map(|n| format!("{}.", n.to_string_lossy())).unwrap_or_default();
+    let Some(dir) = probe.parent() else {
+        return Vec::new();
+    };
+    let stem = path
+        .file_name()
+        .map(|n| format!("{}.", n.to_string_lossy()))
+        .unwrap_or_default();
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix(&stem)).and_then(|r| r.strip_suffix(".zst")).is_some_and(|ms| ms.parse::<i64>().is_ok())
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix(&stem))
+                .and_then(|r| r.strip_suffix(".zst"))
+                .is_some_and(|ms| ms.parse::<i64>().is_ok())
         })
         .collect();
     found.sort();
@@ -247,18 +286,42 @@ mod tests {
         let roots = vec![root.clone()];
         let now = SystemTime::now();
         let pass = run_in(&roots, &to, now).unwrap();
-        assert_eq!((pass.copied, pass.waiting), (0, 2), "nothing is copied while it may still change");
+        assert_eq!(
+            (pass.copied, pass.waiting),
+            (0, 2),
+            "nothing is copied while it may still change"
+        );
         let later = now + Duration::from_secs(QUIET_SECS + 60);
         let pass = run_in(&roots, &to, later).unwrap();
-        assert_eq!(pass.copied, 2, "the transcript and its tool result, not memory");
+        assert_eq!(
+            pass.copied, 2,
+            "the transcript and its tool result, not memory"
+        );
         assert!(!to.join("acct/-work-app/memory").exists());
-        assert_eq!(read_copy(&to.join("acct/-work-app/s1.jsonl.zst")).unwrap(), std::fs::read_to_string(&t).unwrap());
-        assert_eq!(run_in(&roots, &to, later).unwrap().copied, 0, "unchanged, not copied again");
+        assert_eq!(
+            read_copy(&to.join("acct/-work-app/s1.jsonl.zst")).unwrap(),
+            std::fs::read_to_string(&t).unwrap()
+        );
+        assert_eq!(
+            run_in(&roots, &to, later).unwrap().copied,
+            0,
+            "unchanged, not copied again"
+        );
         std::fs::write(&t, "{\"type\":\"user\"}\n{\"more\":1}\n").unwrap();
-        let pass = run_in(&roots, &to, SystemTime::now() + Duration::from_secs(QUIET_SECS + 60)).unwrap();
+        let pass = run_in(
+            &roots,
+            &to,
+            SystemTime::now() + Duration::from_secs(QUIET_SECS + 60),
+        )
+        .unwrap();
         assert_eq!(pass.copied, 1, "changed, so copied again");
         std::fs::remove_file(&t).unwrap();
-        assert!(read_copy(&to.join("acct/-work-app/s1.jsonl.zst")).unwrap().contains("more"), "kept after the original is gone");
+        assert!(
+            read_copy(&to.join("acct/-work-app/s1.jsonl.zst"))
+                .unwrap()
+                .contains("more"),
+            "kept after the original is gone"
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 
@@ -266,15 +329,26 @@ mod tests {
     fn two_accounts_with_the_same_path_are_both_kept() {
         let tmp = std::env::temp_dir().join(format!("toomux-archive2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        let roots = vec![tmp.join(".claude/projects"), tmp.join(".claude-work/projects")];
+        let roots = vec![
+            tmp.join(".claude/projects"),
+            tmp.join(".claude-work/projects"),
+        ];
         for (i, r) in roots.iter().enumerate() {
             std::fs::create_dir_all(r.join("-p")).unwrap();
             std::fs::write(r.join("-p/pointer.json"), format!("{{\"account\":{i}}}")).unwrap();
         }
         let later = SystemTime::now() + Duration::from_secs(QUIET_SECS + 60);
         assert_eq!(run_in(&roots, &tmp.join("a"), later).unwrap().copied, 2);
-        assert_eq!(run_in(&roots, &tmp.join("a"), later).unwrap().copied, 0, "neither overwrites the other");
-        assert!(read_copy(&tmp.join("a/claude-work/-p/pointer.json.zst")).unwrap().contains('1'));
+        assert_eq!(
+            run_in(&roots, &tmp.join("a"), later).unwrap().copied,
+            0,
+            "neither overwrites the other"
+        );
+        assert!(
+            read_copy(&tmp.join("a/claude-work/-p/pointer.json.zst"))
+                .unwrap()
+                .contains('1')
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 
@@ -290,11 +364,25 @@ mod tests {
             std::fs::write(p, text).unwrap();
         }
         let to = tmp.join("a");
-        assert_eq!(transcript_in(&roots, &to, "s9", None).as_deref(), Some("main"));
-        run_in(&roots, &to, SystemTime::now() + Duration::from_secs(QUIET_SECS + 60)).unwrap();
+        assert_eq!(
+            transcript_in(&roots, &to, "s9", None).as_deref(),
+            Some("main")
+        );
+        run_in(
+            &roots,
+            &to,
+            SystemTime::now() + Duration::from_secs(QUIET_SECS + 60),
+        )
+        .unwrap();
         std::fs::remove_dir_all(roots[0].join("-p")).unwrap();
-        assert_eq!(transcript_in(&roots, &to, "s9", None).as_deref(), Some("main"));
-        assert_eq!(transcript_in(&roots, &to, "s9", Some("a2")).as_deref(), Some("sub"));
+        assert_eq!(
+            transcript_in(&roots, &to, "s9", None).as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            transcript_in(&roots, &to, "s9", Some("a2")).as_deref(),
+            Some("sub")
+        );
         assert!(transcript_in(&roots, &to, "nope", None).is_none());
         let _ = std::fs::remove_dir_all(tmp);
     }

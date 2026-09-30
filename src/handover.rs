@@ -35,9 +35,9 @@
 use crate::actions;
 use crate::config::Config;
 use crate::registry::{self, Session, State};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -105,7 +105,12 @@ pub fn context_tokens(transcript: &Path) -> Option<u64> {
         // Compacted since its last call: the context is what the compaction left.
         if line.contains("\"compact_boundary\"") {
             let v = serde_json::from_str::<Value>(line).ok();
-            if let Some(post) = v.as_ref().filter(|v| v.get("subtype").and_then(Value::as_str) == Some("compact_boundary")).and_then(|v| v.pointer("/compactMetadata/postTokens")).and_then(Value::as_u64) {
+            if let Some(post) = v
+                .as_ref()
+                .filter(|v| v.get("subtype").and_then(Value::as_str) == Some("compact_boundary"))
+                .and_then(|v| v.pointer("/compactMetadata/postTokens"))
+                .and_then(Value::as_u64)
+            {
                 return Some(post);
             }
             continue;
@@ -113,10 +118,15 @@ pub fn context_tokens(transcript: &Path) -> Option<u64> {
         if !line.contains("\"usage\"") || !line.contains("\"assistant\"") {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        let Some(u) = v.pointer("/message/usage") else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(u) = v.pointer("/message/usage") else {
+            continue;
+        };
         let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-        let total = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+        let total =
+            n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
         if total > 0 {
             return Some(total);
         }
@@ -133,9 +143,13 @@ fn first_context(transcript: &Path) -> Option<u64> {
         if !line.contains("\"usage\"") || !line.contains("\"assistant\"") {
             return None;
         }
-        let u = serde_json::from_str::<Value>(line).ok()?.pointer("/message/usage").cloned()?;
+        let u = serde_json::from_str::<Value>(line)
+            .ok()?
+            .pointer("/message/usage")
+            .cloned()?;
         let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-        Some(n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens")).filter(|t| *t > 0)
+        Some(n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens"))
+            .filter(|t| *t > 0)
     })
 }
 
@@ -156,7 +170,11 @@ fn own_limit(limit: u64, transcript: &Path) -> u64 {
 
 /// The context it had when it was asked to hand over.
 fn asked_at(session: &str, agent: Option<&str>) -> Option<u64> {
-    std::fs::read_to_string(requested_path(session, agent)).ok()?.trim().parse().ok()
+    std::fs::read_to_string(requested_path(session, agent))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Asked, not yet written, and its context has shrunk well below where it
@@ -167,7 +185,9 @@ fn shrank(session: &str, agent: Option<&str>, tokens: u64, limit: u64) -> bool {
 
 /// A subagent's transcript, beside its session's.
 fn subagent_transcript(main: &Path, session: &str, agent: &str) -> PathBuf {
-    main.with_file_name(session).join("subagents").join(format!("agent-{agent}.jsonl"))
+    main.with_file_name(session)
+        .join("subagents")
+        .join(format!("agent-{agent}.jsonl"))
 }
 
 // ---- the gate (PreToolUse) ------------------------------------------------------
@@ -184,7 +204,10 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
     let session = v.get("session_id").and_then(Value::as_str)?;
     let transcript = PathBuf::from(v.get("transcript_path").and_then(Value::as_str)?);
     let agent = v.get("agent_id").and_then(Value::as_str);
-    let agent_type = v.get("agent_type").and_then(Value::as_str).unwrap_or("general-purpose");
+    let agent_type = v
+        .get("agent_type")
+        .and_then(Value::as_str)
+        .unwrap_or("general-purpose");
     let tool = v.get("tool_name").and_then(Value::as_str).unwrap_or("");
     let brief = brief_path(session, agent);
     let asked_here = requested_path(session, agent).exists();
@@ -193,10 +216,18 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         Some(a) => subagent_transcript(&transcript, session, a),
         None => transcript.clone(),
     };
-    let tokens = if asked { context_tokens(&own).unwrap_or(0) } else { context_tokens(&own)? };
+    let tokens = if asked {
+        context_tokens(&own).unwrap_or(0)
+    } else {
+        context_tokens(&own)?
+    };
     // Mid-turn a conversation goes only at the hard limit; a subagent has no
     // turns, so its own limit applies here.
-    let limit = if agent.is_some() { own_limit(cfg.subagent_limit(), &own) } else { cfg.handover_tokens };
+    let limit = if agent.is_some() {
+        own_limit(cfg.subagent_limit(), &own)
+    } else {
+        cfg.handover_tokens
+    };
     if !asked && tokens < limit {
         return None;
     }
@@ -219,7 +250,11 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
             return None;
         }
         // Its context shrank (/compact) before it wrote a brief: no need any more.
-        if asked_here && !written(&brief) && shrank(session, None, tokens, limit) && !in_progress_for(session) {
+        if asked_here
+            && !written(&brief)
+            && shrank(session, None, tokens, limit)
+            && !in_progress_for(session)
+        {
             release();
             return None;
         }
@@ -232,7 +267,10 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         }
     }
     // Writing the brief is the one thing to do now.
-    let target = v.pointer("/tool_input/file_path").and_then(Value::as_str).map(PathBuf::from);
+    let target = v
+        .pointer("/tool_input/file_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
     if matches!(tool, "Write" | "Edit") && target.as_deref() == Some(brief.as_path()) {
         // Allowed outright: a permission prompt here would stall an unattended
         // session (the brief lives outside the project).
@@ -246,13 +284,24 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         return None;
     }
     // A main session may wait on, and hear from, its subagents meanwhile.
-    if agent.is_none() && (tool.contains("Output") || tool == "SendMessage" || tool == "ToolSearch") {
+    if agent.is_none() && (tool.contains("Output") || tool == "SendMessage" || tool == "ToolSearch")
+    {
         return None;
     }
     let k = tokens / 1000;
     let turn_end = asked_at(session, None).is_some_and(|t| t < cfg.handover_tokens);
     let reason = match (agent, written(&brief)) {
-        (None, false) => main_instruction(k, if turn_end { cfg.turn_end_limit() } else { limit } / 1000, &brief, turn_end, Some(&transcript)),
+        (None, false) => main_instruction(
+            k,
+            if turn_end {
+                cfg.turn_end_limit()
+            } else {
+                limit
+            } / 1000,
+            &brief,
+            turn_end,
+            Some(&transcript),
+        ),
         (None, true) => format!(
             "toomux: your handover brief is written. To add to it, use Edit or Write on {}; otherwise stop here and end your turn \
              with: handover written",
@@ -262,9 +311,16 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
             let own_limit = tokens >= limit;
             // A fork's successor starts fresh: another fork would carry the
             // parent's whole context again, and the brief has what it needs.
-            let next = if agent_type == "fork" { "general-purpose" } else { agent_type };
+            let next = if agent_type == "fork" {
+                "general-purpose"
+            } else {
+                agent_type
+            };
             let why = if own_limit {
-                format!("this {agent_type} subagent is at {k}k tokens of context (the limit is {}k)", limit / 1000)
+                format!(
+                    "this {agent_type} subagent is at {k}k tokens of context (the limit is {}k)",
+                    limit / 1000
+                )
             } else {
                 "the session this subagent belongs to is handing over to a fresh one".to_string()
             };
@@ -285,7 +341,9 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
                 )
             };
             if done {
-                format!("STOP. toomux: your brief is written. Call no more tools; your final message must be:\n\n{signoff}")
+                format!(
+                    "STOP. toomux: your brief is written. Call no more tools; your final message must be:\n\n{signoff}"
+                )
             } else {
                 format!(
                     "STOP. toomux: {why}, so it hands over to a fresh subagent instead of growing further. Do not call any more \
@@ -308,7 +366,9 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
 /// past 240k cost 2.6 times what the same work cost starting fresh.
 fn fork_steer(cfg: &Config, v: &Value) -> Option<String> {
     let tool = v.get("tool_name").and_then(Value::as_str)?;
-    let kind = v.pointer("/tool_input/subagent_type").and_then(Value::as_str)?;
+    let kind = v
+        .pointer("/tool_input/subagent_type")
+        .and_then(Value::as_str)?;
     if !matches!(tool, "Agent" | "Task") || kind != "fork" || cfg.fork_context_tokens == 0 {
         return None;
     }
@@ -336,7 +396,13 @@ fn fork_steer(cfg: &Config, v: &Value) -> Option<String> {
 /// What a main session is told when it has to hand over. `turn_end`: asked
 /// at a turn's end (past the turn-end limit, not the hard one), when a new
 /// request may be waiting that the fresh session will do.
-fn main_instruction(k: u64, limit: u64, brief: &Path, turn_end: bool, transcript: Option<&Path>) -> String {
+fn main_instruction(
+    k: u64,
+    limit: u64,
+    brief: &Path,
+    turn_end: bool,
+    transcript: Option<&Path>,
+) -> String {
     let (why, pending) = if turn_end {
         (
             format!(
@@ -349,7 +415,9 @@ fn main_instruction(k: u64, limit: u64, brief: &Path, turn_end: bool, transcript
         )
     } else {
         (
-            format!("this conversation is at {k}k tokens of context (the limit is {limit}k), so it continues in a fresh session instead of growing further. Don't continue the task"),
+            format!(
+                "this conversation is at {k}k tokens of context (the limit is {limit}k), so it continues in a fresh session instead of growing further. Don't continue the task"
+            ),
             "",
         )
     };
@@ -382,7 +450,9 @@ fn memory_dir(transcript: &Path) -> Option<PathBuf> {
 /// What a session handing over is asked to do for its workspace's memory:
 /// it knows best what it learned, and its context is still cached.
 fn memory_ask(transcript: &Path) -> String {
-    let Some(dir) = memory_dir(transcript) else { return String::new() };
+    let Some(dir) = memory_dir(transcript) else {
+        return String::new();
+    };
     let index = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap_or_default();
     let (lines, bytes) = (index.lines().count(), index.len());
     let over = if lines > INDEX_LINES || bytes > INDEX_BYTES {
@@ -395,12 +465,17 @@ fn memory_ask(transcript: &Path) -> String {
     } else {
         String::new()
     };
-    let prefix = std::fs::canonicalize(&dir).unwrap_or(dir.clone()).display().to_string();
+    let prefix = std::fs::canonicalize(&dir)
+        .unwrap_or(dir.clone())
+        .display()
+        .to_string();
     let stale = stale_list(crate::upkeep::gone_files(&prefix));
     let stale = if stale.is_empty() {
         String::new()
     } else {
-        format!(" These memory files cite paths that are gone: {stale}. Correct any you know the new place of; leave the rest.")
+        format!(
+            " These memory files cite paths that are gone: {stale}. Correct any you know the new place of; leave the rest."
+        )
     };
     format!(
         " Before the brief, bring this workspace's memory up to date in {}: what this session learned that will matter beyond \
@@ -420,7 +495,10 @@ fn stale_list(files: Vec<(String, Vec<String>)>) -> String {
     let mut parts = Vec::new();
     let mut unnamed = 0;
     for (f, paths) in files {
-        let name = Path::new(&f).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or(f);
+        let name = Path::new(&f)
+            .file_name()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or(f);
         if left == 0 {
             unnamed += paths.len();
             continue;
@@ -439,13 +517,26 @@ fn stale_list(files: Vec<(String, Vec<String>)>) -> String {
 
 /// A tool call that only touches this conversation's workspace memory.
 fn in_memory_dir(tool: &str, v: &Value, transcript: &Path) -> bool {
-    if !matches!(tool, "Read" | "Write" | "Edit" | "MultiEdit" | "Glob" | "Grep") {
+    if !matches!(
+        tool,
+        "Read" | "Write" | "Edit" | "MultiEdit" | "Glob" | "Grep"
+    ) {
         return false;
     }
-    let Some(dir) = memory_dir(transcript) else { return false };
-    let target = v.pointer("/tool_input/file_path").or_else(|| v.pointer("/tool_input/path")).and_then(Value::as_str);
-    let Some(target) = target.map(Path::new) else { return false };
-    if target.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    let Some(dir) = memory_dir(transcript) else {
+        return false;
+    };
+    let target = v
+        .pointer("/tool_input/file_path")
+        .or_else(|| v.pointer("/tool_input/path"))
+        .and_then(Value::as_str);
+    let Some(target) = target.map(Path::new) else {
+        return false;
+    };
+    if target
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return false;
     }
     let canon = |p: &Path| std::fs::canonicalize(p).ok();
@@ -472,17 +563,33 @@ fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
     // At a stop the turn's last call lands in the transcript a moment after
     // the hook starts: within reach of the limit, give it a second.
     let start = Instant::now();
-    while how == "stop" && tokens < soft && tokens >= soft / 2 && start.elapsed() < Duration::from_secs(1) {
+    while how == "stop"
+        && tokens < soft
+        && tokens >= soft / 2
+        && start.elapsed() < Duration::from_secs(1)
+    {
         std::thread::sleep(Duration::from_millis(100));
         tokens = context_tokens(&transcript)?;
     }
-    if tokens < soft || born_big(soft, &transcript) || load_lineage().iter().any(|l| l.old_id == session) || !registry::is_interactive(cfg, session) {
+    if tokens < soft
+        || born_big(soft, &transcript)
+        || load_lineage().iter().any(|l| l.old_id == session)
+        || !registry::is_interactive(cfg, session)
+    {
         return None;
     }
     touch(&requested_path(session, None), &tokens.to_string());
     touch(&drain_path(session), "");
-    log(json!({"session": session, "event": format!("asked at turn end ({how})"), "tokens": tokens}));
-    Some(main_instruction(tokens / 1000, soft / 1000, &brief_path(session, None), true, Some(&transcript)))
+    log(
+        json!({"session": session, "event": format!("asked at turn end ({how})"), "tokens": tokens}),
+    );
+    Some(main_instruction(
+        tokens / 1000,
+        soft / 1000,
+        &brief_path(session, None),
+        true,
+        Some(&transcript),
+    ))
 }
 
 /// `toomux hook prompt`: you've sent a prompt to a conversation past the
@@ -525,7 +632,13 @@ pub struct Marker {
 /// forever).
 fn live(m: &Marker, now: i64) -> bool {
     let age = now - m.at_ms;
-    m.state == "writing" && age < 40 * 60_000 && if m.owner > 0 { registry::alive(m.owner, None) } else { age < 60_000 }
+    m.state == "writing"
+        && age < 40 * 60_000
+        && if m.owner > 0 {
+            registry::alive(m.owner, None)
+        } else {
+            age < 60_000
+        }
 }
 
 /// Every marker about this conversation (they're per process, and a
@@ -535,8 +648,16 @@ fn markers_for(session: &str) -> Vec<Marker> {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".json") && n[..n.len() - 5].chars().all(|c| c.is_ascii_digit())))
-        .filter_map(|e| std::fs::read_to_string(e.path()).ok().and_then(|r| serde_json::from_str::<Marker>(&r).ok()))
+        .filter(|e| {
+            e.file_name().to_str().is_some_and(|n| {
+                n.ends_with(".json") && n[..n.len() - 5].chars().all(|c| c.is_ascii_digit())
+            })
+        })
+        .filter_map(|e| {
+            std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|r| serde_json::from_str::<Marker>(&r).ok())
+        })
         .filter(|m| m.id == session)
         .collect()
 }
@@ -552,7 +673,9 @@ fn marker_path(pid: i32) -> PathBuf {
 }
 
 pub fn marker(pid: i32) -> Option<Marker> {
-    std::fs::read_to_string(marker_path(pid)).ok().and_then(|r| serde_json::from_str(&r).ok())
+    std::fs::read_to_string(marker_path(pid))
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
 }
 
 /// Where a session is in handing over, for the list.
@@ -570,12 +693,22 @@ pub fn phase(session: &str, pid: i32) -> Option<Phase> {
     let now = registry::now_ms();
     match marker(pid) {
         Some(m) if live(&m, now) => return Some(Phase::Running),
-        Some(m) if m.state == "failed" && m.id == session && registry::now_ms() - m.at_ms < 6 * 3_600_000 => {
-            return Some(Phase::Failed(if m.why.is_empty() { "see handovers/log.jsonl".into() } else { m.why }));
+        Some(m)
+            if m.state == "failed"
+                && m.id == session
+                && registry::now_ms() - m.at_ms < 6 * 3_600_000 =>
+        {
+            return Some(Phase::Failed(if m.why.is_empty() {
+                "see handovers/log.jsonl".into()
+            } else {
+                m.why
+            }));
         }
         _ => {}
     }
-    requested(session).then(|| Phase::Asked { written: written(&brief_path(session, None)) })
+    requested(session).then(|| Phase::Asked {
+        written: written(&brief_path(session, None)),
+    })
 }
 
 /// A session asked by the gate to hand over (its brief may be on the way).
@@ -589,14 +722,27 @@ pub fn prune() {
     let now = registry::now_ms();
     for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let marker = name.strip_suffix(".json").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        let marker = name
+            .strip_suffix(".json")
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
         let stray = name.contains(".tmp");
-        if !(name.starts_with("req-") || name.starts_with("drain-") || name.starts_with("tick-") || marker || stray) {
+        if !(name.starts_with("req-")
+            || name.starts_with("drain-")
+            || name.starts_with("tick-")
+            || marker
+            || stray)
+        {
             continue;
         }
-        let Some(at) = mtime_ms(&e.path()) else { continue };
+        let Some(at) = mtime_ms(&e.path()) else {
+            continue;
+        };
         let keep = if stray { 3_600_000 } else { 3 * 86_400_000 };
-        let running = marker && std::fs::read_to_string(e.path()).ok().and_then(|r| serde_json::from_str::<Marker>(&r).ok()).is_some_and(|m| live(&m, now));
+        let running = marker
+            && std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|r| serde_json::from_str::<Marker>(&r).ok())
+                .is_some_and(|m| live(&m, now));
         if now - at > keep && !running {
             let _ = std::fs::remove_file(e.path());
         }
@@ -613,7 +759,10 @@ fn write_atomic(p: &Path, text: &str) {
 }
 
 fn write_marker(m: &Marker) {
-    write_atomic(&marker_path(m.pid), &serde_json::to_string(m).unwrap_or_default());
+    write_atomic(
+        &marker_path(m.pid),
+        &serde_json::to_string(m).unwrap_or_default(),
+    );
 }
 
 /// Main sessions ready to hand over now: idle past the threshold, or asked by
@@ -632,7 +781,11 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
         .filter(|s| !lineage.iter().any(|l| l.old_id == s.id))
         // One conversation open in two processes (an old copy left behind in
         // a pane, say): only the one in use hands over.
-        .filter(|s| !sessions.iter().any(|o| o.pid != s.pid && o.id == s.id && !o.dormant && o.since_ms > s.since_ms))
+        .filter(|s| {
+            !sessions
+                .iter()
+                .any(|o| o.pid != s.pid && o.id == s.id && !o.dormant && o.since_ms > s.since_ms)
+        })
         // Background work no longer holds a handover back: it carries over.
         .filter(|s| matches!(s.state, State::Idle | State::Finished | State::Background))
         .filter(|s| {
@@ -651,7 +804,9 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
             let tokens = || transcript.as_deref().and_then(context_tokens);
             if asked {
                 // Compacted instead of writing a brief: nothing to hand over.
-                if !written(&brief_path(&s.id, None)) && tokens().is_some_and(|t| shrank(&s.id, None, t, cfg.handover_tokens)) {
+                if !written(&brief_path(&s.id, None))
+                    && tokens().is_some_and(|t| shrank(&s.id, None, t, cfg.handover_tokens))
+                {
                     let _ = std::fs::remove_file(requested_path(&s.id, None));
                     let _ = std::fs::remove_file(drain_path(&s.id));
                     return false;
@@ -663,7 +818,8 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
             let limit = idle_limit(cfg, idle);
             // The status line's figure first (cheap), then the transcript's,
             // which a /compact since has changed.
-            info.get(&s.id).is_some_and(|i| i.tokens.unwrap_or(0) >= limit && now - i.at_ms < 6 * 3_600_000)
+            info.get(&s.id)
+                .is_some_and(|i| i.tokens.unwrap_or(0) >= limit && now - i.at_ms < 6 * 3_600_000)
                 && tokens().is_none_or(|t| t >= limit)
                 && !transcript.as_deref().is_some_and(|t| born_big(limit, t))
         })
@@ -677,7 +833,11 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
             let ms = markers_for(&s.id);
             !ms.iter().any(|m| live(m, now))
                 && !ms.iter().any(|m| {
-                    let wait = if m.retry_at_ms > 0 { m.retry_at_ms } else { m.at_ms + RETRY_MS };
+                    let wait = if m.retry_at_ms > 0 {
+                        m.retry_at_ms
+                    } else {
+                        m.at_ms + RETRY_MS
+                    };
                     // A brief written since the failure is worth another try now.
                     m.state == "failed" && now < wait && !brief_since(&s.id, m.at_ms)
                 })
@@ -688,7 +848,11 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
 
 /// The context past which a session idle this long is asked to hand over.
 fn idle_limit(cfg: &Config, idle_ms: i64) -> u64 {
-    if idle_ms >= TURN_END_QUIET_MS { cfg.turn_end_limit() } else { cfg.handover_tokens }
+    if idle_ms >= TURN_END_QUIET_MS {
+        cfg.turn_end_limit()
+    } else {
+        cfg.handover_tokens
+    }
 }
 
 /// A failure in a few words, for the list (the log keeps the whole message).
@@ -727,7 +891,11 @@ fn brief_since(session: &str, at_ms: i64) -> bool {
 fn log(what: Value) {
     use std::io::Write;
     let _ = std::fs::create_dir_all(dir());
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir().join("log.jsonl")) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir().join("log.jsonl"))
+    {
         let mut v = what;
         v["at"] = json!(chrono_now());
         let _ = writeln!(f, "{v}");
@@ -735,7 +903,9 @@ fn log(what: Value) {
 }
 
 fn chrono_now() -> String {
-    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%z")
+        .to_string()
 }
 
 /// Start every handover that is due. Called from the tmux status tick and,
@@ -743,13 +913,23 @@ fn chrono_now() -> String {
 pub fn start_due(cfg: &Config, sessions: &[Session], now: i64) {
     use std::os::fd::AsRawFd;
     let _ = std::fs::create_dir_all(dir());
-    let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir().join("due.lock")) else { return };
+    let Ok(lock) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir().join("due.lock"))
+    else {
+        return;
+    };
     // Two ticks at once would start the same handover twice.
     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
     for pid in due(cfg, sessions, now) {
         // Someone is typing in it: wait, quietly, rather than fail each minute.
         let typing = sessions.iter().find(|s| s.pid == pid).is_some_and(|s| {
-            !written(&brief_path(&s.id, None)) && s.pane.as_ref().is_some_and(|p| !actions::prompt_empty(&p.id))
+            !written(&brief_path(&s.id, None))
+                && s.pane
+                    .as_ref()
+                    .is_some_and(|p| !actions::prompt_empty(&p.id))
         });
         if !typing {
             spawn(pid);
@@ -772,7 +952,11 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
     // Not twice in a row: a stop that follows our own instruction is the
     // brief being done. A voyage's loop keeps the Stop hook active turn after
     // turn, so there it's whether the brief was asked for.
-    let voyaging = v.get("session_id").and_then(Value::as_str).and_then(crate::voyage::open_for).is_some();
+    let voyaging = v
+        .get("session_id")
+        .and_then(Value::as_str)
+        .and_then(crate::voyage::open_for)
+        .is_some();
     if (v.get("stop_hook_active").and_then(Value::as_bool) != Some(true) || voyaging)
         && let Some(said) = ask_at_turn_end(cfg, v, "stop")
     {
@@ -783,13 +967,20 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
 }
 
 fn schedule_tick(cfg: &Config, v: &Value) {
-    let Some(session) = v.get("session_id").and_then(Value::as_str) else { return };
-    let transcript = v.get("transcript_path").and_then(Value::as_str).map(PathBuf::from);
+    let Some(session) = v.get("session_id").and_then(Value::as_str) else {
+        return;
+    };
+    let transcript = v
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
     let asked = requested(session);
     // Half the limit, not the limit: the turn's last call may not be in the
     // transcript yet when this runs (it lands a few ms later), and one turn can
     // add tens of thousands of tokens. The tick decides on settled numbers.
-    if !asked && transcript.as_deref().and_then(context_tokens).unwrap_or(0) < cfg.turn_end_limit() / 2 {
+    if !asked
+        && transcript.as_deref().and_then(context_tokens).unwrap_or(0) < cfg.turn_end_limit() / 2
+    {
         return;
     }
     // Asked: its brief should be ready once it settles. Only big: toomux asks
@@ -803,9 +994,12 @@ fn schedule_tick(cfg: &Config, v: &Value) {
         return;
     }
     touch(&stamp, "");
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg("tick").args(after.iter().map(|s| s.to_string()))
+    cmd.arg("tick")
+        .args(after.iter().map(|s| s.to_string()))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -841,7 +1035,9 @@ pub fn tick(cfg: &Config, after: &[u64]) {
 
 /// Start `toomux handover <pid>` in the background.
 pub fn spawn(pid: i32) {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["handover", &pid.to_string()])
         .stdin(std::process::Stdio::null())
@@ -855,7 +1051,17 @@ pub fn spawn(pid: i32) {
         });
     }
     // Claim it before the child starts, so the next status tick can't too.
-    let mut claim = Marker { pid, id: String::new(), pane: String::new(), state: "writing".into(), at_ms: registry::now_ms(), tokens: 0, retry_at_ms: 0, why: String::new(), owner: 0 };
+    let mut claim = Marker {
+        pid,
+        id: String::new(),
+        pane: String::new(),
+        state: "writing".into(),
+        at_ms: registry::now_ms(),
+        tokens: 0,
+        retry_at_ms: 0,
+        why: String::new(),
+        owner: 0,
+    };
     write_marker(&claim);
     match cmd.spawn() {
         Ok(child) => {
@@ -880,7 +1086,10 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
     let s = find(cfg, pid).context("that session has gone")?;
     if load_lineage().iter().any(|l| l.old_id == s.id) {
         let _ = std::fs::remove_file(marker_path(pid));
-        bail!("{} has already handed over (this process holds an old copy of it)", s.title);
+        bail!(
+            "{} has already handed over (this process holds an old copy of it)",
+            s.title
+        );
     }
     let transcript = s.transcript(cfg);
     let tokens = transcript
@@ -901,13 +1110,24 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
         owner: std::process::id() as i32,
     };
     write_marker(&m);
-    log(json!({"event": "start", "session": s.id, "pid": pid, "title": s.title, "pane": pane, "tokens": tokens}));
+    log(
+        json!({"event": "start", "session": s.id, "pid": pid, "title": s.title, "pane": pane, "tokens": tokens}),
+    );
     let result = hand_over(cfg, &s, pane.as_deref(), tokens, transcript.as_deref());
     let now = registry::now_ms();
-    m.state = if result.is_ok() { "done".into() } else { "failed".into() };
+    m.state = if result.is_ok() {
+        "done".into()
+    } else {
+        "failed".into()
+    };
     m.at_ms = now;
     if let Err(e) = &result {
-        m.retry_at_ms = now + if e.to_string() == TYPED { RETRY_TYPED_MS } else { RETRY_MS };
+        m.retry_at_ms = now
+            + if e.to_string() == TYPED {
+                RETRY_TYPED_MS
+            } else {
+                RETRY_MS
+            };
         m.why = short_why(&e.to_string());
         // Its background commands go back to it (they'd otherwise run on,
         // unowned).
@@ -922,59 +1142,95 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
         }
     }
     let msg = match &result {
-        Ok(where_) => format!("{} handed over at {}k · continuing in a fresh session{where_}", s.title, tokens / 1000),
+        Ok(where_) => format!(
+            "{} handed over at {}k · continuing in a fresh session{where_}",
+            s.title,
+            tokens / 1000
+        ),
         Err(e) => format!("couldn't hand over {}: {e}", s.title),
     };
-    log(json!({"event": if result.is_ok() { "done" } else { "failed" }, "session": s.id, "pid": pid, "message": msg}));
+    log(
+        json!({"event": if result.is_ok() { "done" } else { "failed" }, "session": s.id, "pid": pid, "message": msg}),
+    );
     crate::watch::announce_text(cfg, &msg, "handover", &s.title, &s.id);
     result.map(|_| msg)
 }
 
 /// Hands the session over; on success, says where the fresh one is when
 /// that isn't where the old one was.
-fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcript: Option<&Path>) -> Result<String> {
+fn hand_over(
+    cfg: &Config,
+    s: &Session,
+    pane: Option<&str>,
+    tokens: u64,
+    transcript: Option<&Path>,
+) -> Result<String> {
     let brief = brief_path(&s.id, None);
     if !written(&brief) {
-        let Some(pane) = pane else { bail!("it runs outside tmux, so toomux can't ask it for a brief") };
+        let Some(pane) = pane else {
+            bail!("it runs outside tmux, so toomux can't ask it for a brief")
+        };
         if !actions::prompt_empty(pane) {
             bail!("{TYPED}");
         }
     }
     // Subagent briefs from before this session was asked belong to earlier
     // rounds, already relaunched by it.
-    let asked_at = mtime_ms(&drain_path(&s.id)).or_else(|| mtime_ms(&requested_path(&s.id, None))).unwrap_or_else(registry::now_ms) - 120_000;
+    let asked_at = mtime_ms(&drain_path(&s.id))
+        .or_else(|| mtime_ms(&requested_path(&s.id, None)))
+        .unwrap_or_else(registry::now_ms)
+        - 120_000;
     // From here the gate holds the session (and its subagents) to the brief.
     touch(&requested_path(&s.id, None), &tokens.to_string());
     touch(&drain_path(&s.id), "");
     if let (false, Some(pane)) = (written(&brief), pane) {
         let turn_end = tokens < cfg.handover_tokens;
-        let limit = if turn_end { cfg.turn_end_limit() } else { cfg.handover_tokens };
-        let ask = format!("[toomux handover] {}", main_instruction(tokens / 1000, limit / 1000, &brief, turn_end, transcript));
+        let limit = if turn_end {
+            cfg.turn_end_limit()
+        } else {
+            cfg.handover_tokens
+        };
+        let ask = format!(
+            "[toomux handover] {}",
+            main_instruction(tokens / 1000, limit / 1000, &brief, turn_end, transcript)
+        );
         actions::type_prompt(pane, &ask)?;
     }
     // The brief, and the session settled after writing it.
     let start = Instant::now();
     loop {
-        let Some(now) = find(cfg, s.pid) else { bail!("the session ended while writing its handover") };
+        let Some(now) = find(cfg, s.pid) else {
+            bail!("the session ended while writing its handover")
+        };
         if now.id != s.id {
             bail!("the session moved to another conversation");
         }
         // It can't write anything until the limit resets; it's asked again then.
         if let Some(l) = &now.limit {
-            bail!("the account hit its usage limit ({l}) before the brief was written; it hands over once that resets");
+            bail!(
+                "the account hit its usage limit ({l}) before the brief was written; it hands over once that resets"
+            );
         }
         let settled = matches!(now.state, State::Idle | State::Finished | State::Background);
         // A session that a Stop hook keeps waking (a goal loop) never
         // settles: once its brief is written and it has signed off, it goes.
         let signed_off = || {
             mtime_ms(&brief).is_some_and(|t| registry::now_ms() - t > 10_000)
-                && transcript.and_then(last_words).is_some_and(|w| w.trim().trim_end_matches('.').eq_ignore_ascii_case("handover written"))
+                && transcript.and_then(last_words).is_some_and(|w| {
+                    w.trim()
+                        .trim_end_matches('.')
+                        .eq_ignore_ascii_case("handover written")
+                })
         };
-        if written(&brief) && start.elapsed() > Duration::from_secs(3) && (settled || signed_off()) {
+        if written(&brief) && start.elapsed() > Duration::from_secs(3) && (settled || signed_off())
+        {
             break;
         }
         if start.elapsed() > WRITE_TIMEOUT {
-            bail!("no handover was written within {} minutes", WRITE_TIMEOUT.as_secs() / 60);
+            bail!(
+                "no handover was written within {} minutes",
+                WRITE_TIMEOUT.as_secs() / 60
+            );
         }
         std::thread::sleep(Duration::from_secs(3));
     }
@@ -987,7 +1243,8 @@ fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcr
         }
     }
     // What the successor has to pick up besides the brief.
-    let handed: Vec<(String, String, PathBuf)> = subagent_briefs(&s.id, subagents.as_deref(), asked_at);
+    let handed: Vec<(String, String, PathBuf)> =
+        subagent_briefs(&s.id, subagents.as_deref(), asked_at);
     let jobs = crate::jobs::running_for(&s.id);
     let mut own = std::fs::read_to_string(&brief)?;
     if let Some(i) = own.find(UNSEEN) {
@@ -1013,10 +1270,20 @@ fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcr
     }
     if let Ok(mem) = crate::memory::Memory::open() {
         let scope = crate::memory::project_scope(&s.cwd);
-        let _ = mem.index(&scope, &format!("handover:{} {}", s.id, s.title), &crate::redact::redact(&text), registry::now_ms());
+        let _ = mem.index(
+            &scope,
+            &format!("handover:{} {}", s.id, s.title),
+            &crate::redact::redact(&text),
+            registry::now_ms(),
+        );
         for (kind, what, path) in &handed {
             if let Ok(b) = std::fs::read_to_string(path) {
-                let _ = mem.index(&scope, &format!("handover:{} subagent {kind}: {what}", s.id), &crate::redact::redact(&b), registry::now_ms());
+                let _ = mem.index(
+                    &scope,
+                    &format!("handover:{} subagent {kind}: {what}", s.id),
+                    &crate::redact::redact(&b),
+                    registry::now_ms(),
+                );
             }
         }
     }
@@ -1034,7 +1301,10 @@ fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcr
         short = &s.id[..8.min(s.id.len())]
     );
     if !handed.is_empty() {
-        fresh.push_str(&format!(" {} subagent(s) handed over with it: relaunch them as the brief's last section says.", handed.len()));
+        fresh.push_str(&format!(
+            " {} subagent(s) handed over with it: relaunch them as the brief's last section says.",
+            handed.len()
+        ));
     }
     if !jobs.is_empty() {
         fresh.push_str(&format!(
@@ -1056,19 +1326,27 @@ fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcr
 
     // A last look before anything is stopped: still this conversation, in
     // this process and place, and nobody typing in it.
-    let Some(cur) = find(cfg, s.pid) else { bail!("the session ended before it could hand over") };
-    if cur.id != s.id || cur.proc_start != s.proc_start || cur.pane.as_ref().map(|p| p.id.as_str()) != pane {
+    let Some(cur) = find(cfg, s.pid) else {
+        bail!("the session ended before it could hand over")
+    };
+    if cur.id != s.id
+        || cur.proc_start != s.proc_start
+        || cur.pane.as_ref().map(|p| p.id.as_str()) != pane
+    {
         bail!("the session changed while handing over");
     }
     if let Some(p) = pane
-        && !actions::prompt_empty(p) {
-            bail!("{TYPED}");
-        }
+        && !actions::prompt_empty(p)
+    {
+        bail!("{TYPED}");
+    }
     // Same account, flags and environment (a handover isn't a move), and the
     // brief's folder readable without asking.
     let mut next = cur.clone();
     let lineage = load_lineage();
-    let ai_title = transcript.map(crate::transcript::meta).and_then(|m| m.title);
+    let ai_title = transcript
+        .map(crate::transcript::meta)
+        .and_then(|m| m.title);
     // A name chosen for you describes the work, as long as it's still the
     // name (you may have renamed it in Claude since).
     let for_you = chosen_for_you && name.as_deref() == Some(cur.title.as_str());
@@ -1098,7 +1376,14 @@ fn hand_over(cfg: &Config, s: &Session, pane: Option<&str>, tokens: u64, transcr
             (p.clone(), format!(" in its own tmux server, {server}"))
         }
     };
-    remember(Lineage::new(s.id.clone(), pane, registry::now_ms(), name, title, derived));
+    remember(Lineage::new(
+        s.id.clone(),
+        pane,
+        registry::now_ms(),
+        name,
+        title,
+        derived,
+    ));
     // Subagent requests are settled: their briefs are listed.
     let sub_req = format!("req-{}-", s.id);
     for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
@@ -1123,7 +1408,11 @@ const CARRIED: &str = "\n\n## Carried over by toomux";
 
 /// The brief with what toomux carries over listed at its end (in place of any
 /// list from an earlier try).
-fn with_carried(brief: &str, handed: &[(String, String, PathBuf)], jobs: &[crate::jobs::Job]) -> String {
+fn with_carried(
+    brief: &str,
+    handed: &[(String, String, PathBuf)],
+    jobs: &[crate::jobs::Job],
+) -> String {
     let mut text = brief.to_string();
     if let Some(i) = text.find(CARRIED) {
         text.truncate(i);
@@ -1140,7 +1429,12 @@ fn with_carried(brief: &str, handed: &[(String, String, PathBuf)], jobs: &[crate
         if !jobs.is_empty() {
             text.push_str("\nBackground commands still running (they kept going). Re-attach to each one first thing: the Bash tool with run_in_background: true and the command `toomux job follow <id> --tail 40`, so you hear when it ends. Stop one with `toomux job stop <id>`:\n");
             for j in jobs {
-                text.push_str(&format!("- job {} · started {} ago · `{}`\n", j.id, registry::ago(registry::now_ms() - j.started_ms), j.command.lines().next().unwrap_or("")));
+                text.push_str(&format!(
+                    "- job {} · started {} ago · `{}`\n",
+                    j.id,
+                    registry::ago(registry::now_ms() - j.started_ms),
+                    j.command.lines().next().unwrap_or("")
+                ));
             }
         }
     }
@@ -1167,16 +1461,24 @@ struct Unseen {
 
 fn unseen(transcript: &Path) -> Option<Unseen> {
     let text = std::fs::read_to_string(transcript).ok()?;
-    let mut u = Unseen { finished: true, ..Default::default() };
+    let mut u = Unseen {
+        finished: true,
+        ..Default::default()
+    };
     for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
         let content = v.pointer("/message/content");
         match v.get("type").and_then(Value::as_str) {
             Some("user") => {
-                let results: Vec<String> = content.and_then(Value::as_array).into_iter().flatten()
+                let results: Vec<String> = content
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
                     .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
                     .map(|b| text_of(b.get("content")))
                     .collect();
@@ -1185,8 +1487,13 @@ fn unseen(transcript: &Path) -> Option<Unseen> {
                     break;
                 }
                 // Answers to a question put to them are a message from them.
-                if let Some(a) = results.iter().find(|r| r.starts_with("The user answered") || r.starts_with("User has answered")) {
-                    u = from_prompt(u, a.split(" Read the answers carefully").next().unwrap_or(a));
+                if let Some(a) = results.iter().find(|r| {
+                    r.starts_with("The user answered") || r.starts_with("User has answered")
+                }) {
+                    u = from_prompt(
+                        u,
+                        a.split(" Read the answers carefully").next().unwrap_or(a),
+                    );
                     continue;
                 }
                 let said = text_of(content);
@@ -1198,22 +1505,44 @@ fn unseen(transcript: &Path) -> Option<Unseen> {
                 }
             }
             // A prompt sent mid-turn.
-            Some("attachment") if v.pointer("/attachment/type").and_then(Value::as_str) == Some("queued_command") => {
-                u = from_prompt(u, v.pointer("/attachment/prompt").and_then(Value::as_str).unwrap_or(""));
+            Some("attachment")
+                if v.pointer("/attachment/type").and_then(Value::as_str)
+                    == Some("queued_command") =>
+            {
+                u = from_prompt(
+                    u,
+                    v.pointer("/attachment/prompt")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                );
             }
             Some("assistant") => {
                 for b in content.and_then(Value::as_array).into_iter().flatten() {
                     match b.get("type").and_then(Value::as_str) {
                         Some("text") => {
                             let t = b.get("text").and_then(Value::as_str).unwrap_or("").trim();
-                            if !t.is_empty() && !t.trim_end_matches('.').eq_ignore_ascii_case("handover written") {
+                            if !t.is_empty()
+                                && !t
+                                    .trim_end_matches('.')
+                                    .eq_ignore_ascii_case("handover written")
+                            {
                                 u.reply = Some(t.to_string());
                             }
                         }
-                        Some("tool_use") if b.get("name").and_then(Value::as_str) == Some("SendUserFile") => {
-                            let files: Vec<String> = b.pointer("/input/files").and_then(Value::as_array).into_iter().flatten()
-                                .filter_map(|f| f.as_str().map(str::to_string)).collect();
-                            let caption = b.pointer("/input/caption").and_then(Value::as_str).map(str::to_string);
+                        Some("tool_use")
+                            if b.get("name").and_then(Value::as_str) == Some("SendUserFile") =>
+                        {
+                            let files: Vec<String> = b
+                                .pointer("/input/files")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|f| f.as_str().map(str::to_string))
+                                .collect();
+                            let caption = b
+                                .pointer("/input/caption")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
                             if !files.is_empty() {
                                 u.files.push((files, caption));
                             }
@@ -1232,10 +1561,12 @@ fn unseen(transcript: &Path) -> Option<Unseen> {
 fn text_of(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => parts.iter()
+        Some(Value::Array(parts)) => parts
+            .iter()
             .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
             .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>().join("\n"),
+            .collect::<Vec<_>>()
+            .join("\n"),
         _ => String::new(),
     }
 }
@@ -1259,11 +1590,23 @@ fn is_ask(s: &str) -> bool {
 /// toomux's own prompt to a successor starts it too, but isn't theirs.
 fn from_prompt(u: Unseen, said: &str) -> Unseen {
     let said = said.trim();
-    if said.is_empty() || said.starts_with('<') || said.starts_with("Caveat:") || said.starts_with("[toomux") {
+    if said.is_empty()
+        || said.starts_with('<')
+        || said.starts_with("Caveat:")
+        || said.starts_with("[toomux")
+    {
         return u;
     }
-    let asked = if said.starts_with("Continue from a handover.") { String::new() } else { said.to_string() };
-    Unseen { asked, finished: true, ..Default::default() }
+    let asked = if said.starts_with("Continue from a handover.") {
+        String::new()
+    } else {
+        said.to_string()
+    };
+    Unseen {
+        asked,
+        finished: true,
+        ..Default::default()
+    }
 }
 
 /// The brief's section for it.
@@ -1282,10 +1625,17 @@ fn unseen_section(u: &Unseen) -> String {
          else, tell them where the work stood (the brief has it), and send the files again.\n"
     });
     if !u.asked.is_empty() {
-        s.push_str(&format!("\nTheir last message:\n\n> {}\n", clip(&u.asked, 600).replace('\n', "\n> ")));
+        s.push_str(&format!(
+            "\nTheir last message:\n\n> {}\n",
+            clip(&u.asked, 600).replace('\n', "\n> ")
+        ));
     }
     if let Some(r) = &u.reply {
-        let what = if u.finished { "The last reply" } else { "Its last words to them" };
+        let what = if u.finished {
+            "The last reply"
+        } else {
+            "Its last words to them"
+        };
         s.push_str(&format!("\n{what}:\n\n````\n{}\n````\n", clip(r, MAX)));
     }
     if !u.files.is_empty() {
@@ -1311,19 +1661,27 @@ fn mtime_ms(p: &Path) -> Option<i64> {
 /// tool call, which writes nothing while it runs.
 fn any_active(dir: &Path) -> bool {
     let now = registry::now_ms();
-    std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
-        let p = e.path();
-        if p.extension().is_none_or(|x| x != "jsonl") {
-            return false;
-        }
-        let Some(age) = mtime_ms(&p).map(|t| now - t) else { return false };
-        age < 20_000 || (age < 10 * 60_000 && !finished(&p))
-    })
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| {
+            let p = e.path();
+            if p.extension().is_none_or(|x| x != "jsonl") {
+                return false;
+            }
+            let Some(age) = mtime_ms(&p).map(|t| now - t) else {
+                return false;
+            };
+            age < 20_000 || (age < 10 * 60_000 && !finished(&p))
+        })
 }
 
 /// An agent's transcript ends with its final answer (text, no tool call).
 fn finished(transcript: &Path) -> bool {
-    let Ok(mut f) = std::fs::File::open(transcript) else { return true };
+    let Ok(mut f) = std::fs::File::open(transcript) else {
+        return true;
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let from = len.saturating_sub(256 * 1024);
     if f.seek(SeekFrom::Start(from)).is_err() {
@@ -1333,12 +1691,18 @@ fn finished(transcript: &Path) -> bool {
     let _ = f.take(len - from).read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf);
     for line in text.lines().rev() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         match v.get("type").and_then(Value::as_str) {
             Some("assistant") => {
-                let calls = v.pointer("/message/content").and_then(Value::as_array).is_some_and(|c| {
-                    c.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
-                });
+                let calls = v
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|c| {
+                        c.iter()
+                            .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    });
                 return !calls;
             }
             Some("user") => return false,
@@ -1351,11 +1715,17 @@ fn finished(transcript: &Path) -> bool {
 /// (type, description, brief) of each subagent of `session` that handed over
 /// since `since_ms`. A read-only subagent gives its brief as its final
 /// message; that is saved to the brief's file here.
-fn subagent_briefs(session: &str, subagents: Option<&Path>, since_ms: i64) -> Vec<(String, String, PathBuf)> {
+fn subagent_briefs(
+    session: &str,
+    subagents: Option<&Path>,
+    since_ms: i64,
+) -> Vec<(String, String, PathBuf)> {
     let asked = format!("req-{session}-");
     for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        let Some(agent) = name.strip_prefix(&asked) else { continue };
+        let Some(agent) = name.strip_prefix(&asked) else {
+            continue;
+        };
         let file = brief_path(session, Some(agent));
         if written(&file) {
             continue;
@@ -1369,7 +1739,12 @@ fn subagent_briefs(session: &str, subagents: Option<&Path>, since_ms: i64) -> Ve
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        let Some(agent) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".md")) else { continue };
+        let Some(agent) = name
+            .strip_prefix(&prefix)
+            .and_then(|r| r.strip_suffix(".md"))
+        else {
+            continue;
+        };
         if !written(&e.path()) || mtime_ms(&e.path()).is_none_or(|t| t < since_ms) {
             continue;
         }
@@ -1377,8 +1752,16 @@ fn subagent_briefs(session: &str, subagents: Option<&Path>, since_ms: i64) -> Ve
             .and_then(|d| std::fs::read_to_string(d.join(format!("agent-{agent}.meta.json"))).ok())
             .and_then(|r| serde_json::from_str(&r).ok())
             .unwrap_or(Value::Null);
-        let kind = meta.get("agentType").and_then(Value::as_str).unwrap_or("general-purpose").to_string();
-        let what = meta.get("description").and_then(Value::as_str).unwrap_or("subagent").to_string();
+        let kind = meta
+            .get("agentType")
+            .and_then(Value::as_str)
+            .unwrap_or("general-purpose")
+            .to_string();
+        let what = meta
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("subagent")
+            .to_string();
         out.push((kind, what, e.path()));
     }
     out
@@ -1404,10 +1787,10 @@ fn last_words(transcript: &Path) -> Option<String> {
 }
 
 mod successor;
-pub use successor::{generic, topics};
-use successor::{carry, load_lineage, remember, successor_name, Lineage};
 #[cfg(test)]
 use successor::brief_title;
+use successor::{Lineage, carry, load_lineage, remember, successor_name};
+pub use successor::{generic, topics};
 
 #[cfg(test)]
 mod tests {
@@ -1416,20 +1799,43 @@ mod tests {
     #[test]
     fn the_ask_names_gone_paths_up_to_a_limit() {
         let files = vec![
-            ("/m/a.md".to_string(), vec!["/home/x/one".to_string(), "/home/x/two".to_string()]),
-            ("/m/b.md".to_string(), (0..25).map(|i| format!("/home/x/p{i}")).collect()),
+            (
+                "/m/a.md".to_string(),
+                vec!["/home/x/one".to_string(), "/home/x/two".to_string()],
+            ),
+            (
+                "/m/b.md".to_string(),
+                (0..25).map(|i| format!("/home/x/p{i}")).collect(),
+            ),
             ("/m/c.md".to_string(), vec!["/home/x/late".to_string()]),
         ];
         let s = stale_list(files);
-        assert!(s.starts_with("a.md cites /home/x/one, /home/x/two; b.md cites /home/x/p0,"), "{s}");
-        assert!(s.contains("/home/x/p17") && !s.contains("/home/x/p18"), "20 paths in all: {s}");
-        assert!(!s.contains("c.md") && s.ends_with("and 8 more, for a later handover"), "{s}");
+        assert!(
+            s.starts_with("a.md cites /home/x/one, /home/x/two; b.md cites /home/x/p0,"),
+            "{s}"
+        );
+        assert!(
+            s.contains("/home/x/p17") && !s.contains("/home/x/p18"),
+            "20 paths in all: {s}"
+        );
+        assert!(
+            !s.contains("c.md") && s.ends_with("and 8 more, for a later handover"),
+            "{s}"
+        );
         assert_eq!(stale_list(vec![]), "");
     }
 
     fn unseen_in(name: &str, lines: &[Value]) -> Option<Unseen> {
-        let p = std::env::temp_dir().join(format!("toomux-unseen-{name}-{}.jsonl", std::process::id()));
-        std::fs::write(&p, lines.iter().map(|l| l.to_string() + "\n").collect::<String>()).unwrap();
+        let p =
+            std::env::temp_dir().join(format!("toomux-unseen-{name}-{}.jsonl", std::process::id()));
+        std::fs::write(
+            &p,
+            lines
+                .iter()
+                .map(|l| l.to_string() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
         let u = unseen(&p);
         let _ = std::fs::remove_file(&p);
         u
@@ -1463,15 +1869,37 @@ mod tests {
         ];
         let u = unseen_in("end", &lines).unwrap();
         assert_eq!(u.asked, "There should be legends on the tui");
-        assert_eq!(u.reply.as_deref(), Some("Legends are in. Restart toomux to see them."));
-        assert_eq!(u.files, vec![(vec!["/a/graph.png".to_string(), "/b/shot.png".to_string()], Some("the renders".to_string()))]);
+        assert_eq!(
+            u.reply.as_deref(),
+            Some("Legends are in. Restart toomux to see them.")
+        );
+        assert_eq!(
+            u.files,
+            vec![(
+                vec!["/a/graph.png".to_string(), "/b/shot.png".to_string()],
+                Some("the renders".to_string())
+            )]
+        );
         assert!(u.finished);
         let s = unseen_section(&u);
-        assert!(s.contains("Restart toomux") && s.contains("/a/graph.png, /b/shot.png · \"the renders\"") && !s.contains("older"), "{s}");
+        assert!(
+            s.contains("Restart toomux")
+                && s.contains("/a/graph.png, /b/shot.png · \"the renders\"")
+                && !s.contains("older"),
+            "{s}"
+        );
 
         // Asked by toomux typing into an idle session: the same.
-        let typed = [you("go"), says("Done."), you(&format!("[toomux handover] {ASK} 210k")), says("handover written")];
-        assert_eq!(unseen_in("typed", &typed).unwrap().reply.as_deref(), Some("Done."));
+        let typed = [
+            you("go"),
+            says("Done."),
+            you(&format!("[toomux handover] {ASK} 210k")),
+            says("handover written"),
+        ];
+        assert_eq!(
+            unseen_in("typed", &typed).unwrap().reply.as_deref(),
+            Some("Done.")
+        );
 
         // Stopped mid-task by the gate: its last word, marked unfinished.
         let mid = [
@@ -1486,11 +1914,24 @@ mod tests {
         // A successor quotes the user, not toomux's prompt to it; a message
         // sent mid-turn counts as theirs.
         let queued = json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": "add a legend"}});
-        let chain = [you("Continue from a handover. The previous session here"), says("Picked up."), says("All done.")];
+        let chain = [
+            you("Continue from a handover. The previous session here"),
+            says("Picked up."),
+            says("All done."),
+        ];
         assert_eq!(unseen_in("chain", &chain).unwrap().asked, "");
-        let u = unseen_in("queued", &[you("go"), says("Working."), queued, says("Legend added.")]).unwrap();
-        assert_eq!((u.asked.as_str(), u.reply.as_deref()), ("add a legend", Some("Legend added.")));
-        assert!(!unseen_section(&unseen_in("chain", &chain).unwrap()).contains("Their last message"));
+        let u = unseen_in(
+            "queued",
+            &[you("go"), says("Working."), queued, says("Legend added.")],
+        )
+        .unwrap();
+        assert_eq!(
+            (u.asked.as_str(), u.reply.as_deref()),
+            ("add a legend", Some("Legend added."))
+        );
+        assert!(
+            !unseen_section(&unseen_in("chain", &chain).unwrap()).contains("Their last message")
+        );
 
         // As on 10-01: a session that reads this file or greps a transcript
         // mentions the ask; only the real one ends it. Answers to a question
@@ -1501,17 +1942,35 @@ mod tests {
             result(json!(format!("1152:const ASK: &str = \"{ASK}\";"))),
             result(json!([{"type": "text", "text": format!("1\t//! Handover\n2\t{ASK} 204k")}])),
             says("Fixed. Which follow-ups next?"),
-            result(json!("The user answered: \"Which fixes?\"=\"all\". Read the answers carefully and follow them.")),
+            result(json!(
+                "The user answered: \"Which fixes?\"=\"all\". Read the answers carefully and follow them."
+            )),
             says("All four are in."),
             json!({"type": "user", "isMeta": true, "message": {"content": format!("Stop hook feedback:\n{ASK} 204k tokens")}}),
             says("handover written"),
         ];
         let u = unseen_in("mention", &lines).unwrap();
-        assert_eq!((u.asked.as_str(), u.reply.as_deref()), ("The user answered: \"Which fixes?\"=\"all\".", Some("All four are in.")));
+        assert_eq!(
+            (u.asked.as_str(), u.reply.as_deref()),
+            (
+                "The user answered: \"Which fixes?\"=\"all\".",
+                Some("All four are in.")
+            )
+        );
         assert!(u.finished);
 
         // Nothing said or sent since the user's last message: nothing to pass on.
-        assert!(unseen_in("none", &[says("old"), you("new ask"), you(&format!("[toomux handover] {ASK} 210k"))]).is_none());
+        assert!(
+            unseen_in(
+                "none",
+                &[
+                    says("old"),
+                    you("new ask"),
+                    you(&format!("[toomux handover] {ASK} 210k"))
+                ]
+            )
+            .is_none()
+        );
     }
 
     fn cfg(limit: u64) -> Config {
@@ -1530,7 +1989,10 @@ mod tests {
             let raw = json!({"pid": std::process::id(), "sessionId": id, "cwd": "/", "kind": "interactive"});
             std::fs::write(acct.join(format!("sessions/{i}.json")), raw.to_string()).unwrap();
         }
-        c.accounts = vec![crate::config::Account { name: "t".into(), config_dir: acct.display().to_string() }];
+        c.accounts = vec![crate::config::Account {
+            name: "t".into(),
+            config_dir: acct.display().to_string(),
+        }];
         c
     }
 
@@ -1564,33 +2026,98 @@ mod tests {
             }
             gate(&cfg_with(400_000, &tmp, &["s1"]), &v)
         };
-        assert!(call(None, "Bash", None).is_none(), "the main session is under the limit");
+        assert!(
+            call(None, "Bash", None).is_none(),
+            "the main session is under the limit"
+        );
         let denied = call(Some("a1"), "Grep", None).expect("the subagent is over it");
-        assert!(denied.contains("\"deny\"") && denied.contains("HANDOVER: this Explore subagent"), "{denied}");
+        assert!(
+            denied.contains("\"deny\"") && denied.contains("HANDOVER: this Explore subagent"),
+            "{denied}"
+        );
         let brief = brief_path("s1", Some("a1"));
-        assert!(call(Some("a1"), "Write", Some(&brief.display().to_string())).unwrap().contains("\"allow\""), "writing its brief is allowed");
+        assert!(
+            call(Some("a1"), "Write", Some(&brief.display().to_string()))
+                .unwrap()
+                .contains("\"allow\""),
+            "writing its brief is allowed"
+        );
         std::fs::write(&brief, "x".repeat(400)).unwrap();
-        assert!(call(Some("a1"), "Grep", None).unwrap().contains("your brief is written"));
+        assert!(
+            call(Some("a1"), "Grep", None)
+                .unwrap()
+                .contains("your brief is written")
+        );
         // The main session crossing the limit drains every subagent.
         transcript(&tmp, "p/s1.jsonl", 450_000);
-        assert!(call(None, "Bash", None).unwrap().contains("continues in a fresh session"));
+        assert!(
+            call(None, "Bash", None)
+                .unwrap()
+                .contains("continues in a fresh session")
+        );
         transcript(&tmp, "p/s1/subagents/agent-a2.jsonl", 10_000);
-        assert!(call(Some("a2"), "Read", None).unwrap().contains("belongs to is handing over"), "a small subagent hands over with its parent");
-        assert!(call(None, "TaskOutput", None).is_none(), "the main session may wait on its subagents");
+        assert!(
+            call(Some("a2"), "Read", None)
+                .unwrap()
+                .contains("belongs to is handing over"),
+            "a small subagent hands over with its parent"
+        );
+        assert!(
+            call(None, "TaskOutput", None).is_none(),
+            "the main session may wait on its subagents"
+        );
         let own = brief_path("s1", None).display().to_string();
-        assert!(call(None, "Write", Some(&own)).unwrap().contains("\"allow\""), "its brief is written without a permission prompt");
+        assert!(
+            call(None, "Write", Some(&own))
+                .unwrap()
+                .contains("\"allow\""),
+            "its brief is written without a permission prompt"
+        );
         // Its workspace memory can be brought up to date meanwhile; nothing else.
         std::fs::create_dir_all(tmp.join("p/memory")).unwrap();
         std::fs::write(tmp.join("p/memory/MEMORY.md"), "- rule\n".repeat(160)).unwrap();
         let asked = call(None, "Bash", None).unwrap();
-        assert!(asked.contains("bring this workspace's memory up to date") && asked.contains("160 lines"), "{asked}");
+        assert!(
+            asked.contains("bring this workspace's memory up to date")
+                && asked.contains("160 lines"),
+            "{asked}"
+        );
         let note = tmp.join("p/memory/deploys.md").display().to_string();
-        assert!(call(None, "Write", Some(&note)).is_none(), "a new topic file");
-        assert!(call(None, "Read", Some(&tmp.join("p/memory/MEMORY.md").display().to_string())).is_none());
-        assert!(call(None, "Write", Some(&tmp.join("p/src.rs").display().to_string())).unwrap().contains("\"deny\""), "not the project");
+        assert!(
+            call(None, "Write", Some(&note)).is_none(),
+            "a new topic file"
+        );
+        assert!(
+            call(
+                None,
+                "Read",
+                Some(&tmp.join("p/memory/MEMORY.md").display().to_string())
+            )
+            .is_none()
+        );
+        assert!(
+            call(
+                None,
+                "Write",
+                Some(&tmp.join("p/src.rs").display().to_string())
+            )
+            .unwrap()
+            .contains("\"deny\""),
+            "not the project"
+        );
         let sneaky = tmp.join("p/memory/../s1.jsonl").display().to_string();
-        assert!(call(None, "Write", Some(&sneaky)).unwrap().contains("\"deny\""), "nor out of the folder");
-        assert!(call(Some("a2"), "Write", Some(&note)).unwrap().contains("\"deny\""), "a subagent leaves memory to its session");
+        assert!(
+            call(None, "Write", Some(&sneaky))
+                .unwrap()
+                .contains("\"deny\""),
+            "nor out of the folder"
+        );
+        assert!(
+            call(Some("a2"), "Write", Some(&note))
+                .unwrap()
+                .contains("\"deny\""),
+            "a subagent leaves memory to its session"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1615,10 +2142,16 @@ mod tests {
             gate(&c, &v)
         };
         grow(380_000);
-        assert!(call().is_none(), "born at 367k, a fork still has its own work to do");
+        assert!(
+            call().is_none(),
+            "born at 367k, a fork still has its own work to do"
+        );
         grow(495_000);
         let denied = call().expect("125k of its own work later, it hands over");
-        assert!(denied.contains("launch a new general-purpose subagent"), "{denied}");
+        assert!(
+            denied.contains("launch a new general-purpose subagent"),
+            "{denied}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1629,7 +2162,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         unsafe { std::env::set_var("XDG_STATE_HOME", tmp.join("state")) };
         let c = cfg_with(400_000, &tmp, &["live", "old"]);
-        let call = |id: &str, t: &Path| gate(&c, &json!({"session_id": id, "transcript_path": t.display().to_string(), "tool_name": "Bash", "tool_input": {}}));
+        let call = |id: &str, t: &Path| {
+            gate(
+                &c,
+                &json!({"session_id": id, "transcript_path": t.display().to_string(), "tool_name": "Bash", "tool_input": {}}),
+            )
+        };
         // `claude -p` and SDK runs aren't in the registry as interactive: toomux
         // couldn't restart them, so it doesn't hold them.
         let p = transcript(&tmp, "p/print.jsonl", 450_000);
@@ -1645,12 +2183,29 @@ mod tests {
         // Not while toomux is handing it over, though.
         transcript(&tmp, "p/live.jsonl", 450_000);
         assert!(call("live", &t).is_some());
-        write_marker(&Marker { pid: 77, id: "live".into(), pane: String::new(), state: "writing".into(), at_ms: registry::now_ms(), tokens: 1, retry_at_ms: 0, why: String::new(), owner: std::process::id() as i32 });
+        write_marker(&Marker {
+            pid: 77,
+            id: "live".into(),
+            pane: String::new(),
+            state: "writing".into(),
+            at_ms: registry::now_ms(),
+            tokens: 1,
+            retry_at_ms: 0,
+            why: String::new(),
+            owner: std::process::id() as i32,
+        });
         transcript(&tmp, "p/live.jsonl", 90_000);
         assert!(call("live", &t).is_some(), "held while its handover runs");
         // A conversation that already handed over and was reopened on purpose.
         let o = transcript(&tmp, "p/old.jsonl", 450_000);
-        remember(Lineage { old_id: "old".into(), pane: "%1".into(), at_ms: registry::now_ms(), name: None, carried: false, ..Default::default() });
+        remember(Lineage {
+            old_id: "old".into(),
+            pane: "%1".into(),
+            at_ms: registry::now_ms(),
+            name: None,
+            carried: false,
+            ..Default::default()
+        });
         assert!(call("old", &o).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1668,8 +2223,14 @@ mod tests {
         std::fs::write(&t, format!("{}\n{}\n", call(38_000), call(45_000))).unwrap();
         assert_eq!(context_tokens(&t), Some(45_000));
         let v = json!({"session_id": "b", "transcript_path": t.display().to_string(), "tool_name": "Bash", "tool_input": {}});
-        assert!(gate(&c, &v).is_none(), "a fresh session already that big would hand over for ever");
-        assert!(gate(&cfg_with(60_000, &tmp, &["b"]), &v).is_none(), "under the limit");
+        assert!(
+            gate(&c, &v).is_none(),
+            "a fresh session already that big would hand over for ever"
+        );
+        assert!(
+            gate(&cfg_with(60_000, &tmp, &["b"]), &v).is_none(),
+            "under the limit"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1689,42 +2250,104 @@ mod tests {
             }
             gate(&c, &v)
         };
-        let prompt = |id: &str, t: &Path, text: &str| prompt_hook(&c, &json!({"session_id": id, "transcript_path": t.display().to_string(), "prompt": text}));
-        assert!(tool(None).is_none(), "mid-turn, a conversation goes only at the hard limit");
+        let prompt = |id: &str, t: &Path, text: &str| {
+            prompt_hook(
+                &c,
+                &json!({"session_id": id, "transcript_path": t.display().to_string(), "prompt": text}),
+            )
+        };
+        assert!(
+            tool(None).is_none(),
+            "mid-turn, a conversation goes only at the hard limit"
+        );
         transcript(&tmp, "p/w/subagents/agent-a1.jsonl", 260_000);
-        assert!(tool(Some("a1")).unwrap().contains("the limit is 250k"), "a subagent has no turns: its own limit applies");
+        assert!(
+            tool(Some("a1")).unwrap().contains("the limit is 250k"),
+            "a subagent has no turns: its own limit applies"
+        );
         let _ = std::fs::remove_dir_all(tmp.join("state"));
         // Your next prompt is the break.
-        assert!(prompt("w", &t, "/model").is_none(), "commands aren't work to move");
+        assert!(
+            prompt("w", &t, "/model").is_none(),
+            "commands aren't work to move"
+        );
         let s = transcript(&tmp, "p/small.jsonl", 200_000);
-        assert!(prompt("small", &s, "go on").is_none(), "under the turn-end limit");
-        let out: Value = serde_json::from_str(&prompt("w", &t, "now add the export button").unwrap()).unwrap();
-        let said = out["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
-        assert_eq!(out["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
-        assert!(said.contains("past 250k") && said.contains("put the request first among the next steps"), "{said}");
+        assert!(
+            prompt("small", &s, "go on").is_none(),
+            "under the turn-end limit"
+        );
+        let out: Value =
+            serde_json::from_str(&prompt("w", &t, "now add the export button").unwrap()).unwrap();
+        let said = out["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            out["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        assert!(
+            said.contains("past 250k")
+                && said.contains("put the request first among the next steps"),
+            "{said}"
+        );
         assert!(requested("w") && drain_path("w").exists() && asked_at("w", None) == Some(300_000));
         assert!(prompt("w", &t, "and this").is_none(), "asked once");
         let held = tool(None).unwrap();
-        assert!(held.contains("\"deny\"") && held.contains("where it continues fresh at a turn's end"), "the gate holds it to the brief: {held}");
+        assert!(
+            held.contains("\"deny\"") && held.contains("where it continues fresh at a turn's end"),
+            "the gate holds it to the brief: {held}"
+        );
         // The dependable break is the turn's end: the stop is held with the
         // same instruction, once.
         let x = transcript(&tmp, "p/x.jsonl", 260_000);
-        let stop = |active: bool| stop_hook(&c, &json!({"session_id": "x", "transcript_path": x.display().to_string(), "stop_hook_active": active}));
-        assert!(stop(true).is_none(), "a stop after our own instruction is the brief being done");
+        let stop = |active: bool| {
+            stop_hook(
+                &c,
+                &json!({"session_id": "x", "transcript_path": x.display().to_string(), "stop_hook_active": active}),
+            )
+        };
+        assert!(
+            stop(true).is_none(),
+            "a stop after our own instruction is the brief being done"
+        );
         assert!(!requested("x"));
         let out: Value = serde_json::from_str(&stop(false).unwrap()).unwrap();
         assert_eq!(out["decision"], "block");
-        assert!(out["reason"].as_str().unwrap().contains("Write a complete, standalone handover brief"));
+        assert!(
+            out["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Write a complete, standalone handover brief")
+        );
         assert!(requested("x") && stop(false).is_none(), "asked once");
         // A voyage's loop keeps the Stop hook active every turn: it's asked
         // all the same, and the voyage waits while the brief is written.
         let q = transcript(&tmp, "p/q.jsonl", 260_000);
-        crate::voyage::start("q", "/", "the build is green".into(), None, None, crate::voyage::Persistence::Steady);
+        crate::voyage::start(
+            "q",
+            "/",
+            "the build is green".into(),
+            None,
+            None,
+            crate::voyage::Persistence::Steady,
+        );
         let qstop = json!({"session_id": "q", "transcript_path": q.display().to_string(), "stop_hook_active": true});
         let out: Value = serde_json::from_str(&stop_hook(&c, &qstop).unwrap()).unwrap();
-        assert!(out["reason"].as_str().unwrap().contains("Write a complete, standalone handover brief"));
-        assert!(requested("q") && crate::voyage::stop_hook(&c, &qstop).is_none(), "the voyage doesn't judge the brief");
-        assert!(crate::voyage::for_successor("q").unwrap().contains("the build is green"));
+        assert!(
+            out["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Write a complete, standalone handover brief")
+        );
+        assert!(
+            requested("q") && crate::voyage::stop_hook(&c, &qstop).is_none(),
+            "the voyage doesn't judge the brief"
+        );
+        assert!(
+            crate::voyage::for_successor("q")
+                .unwrap()
+                .contains("the build is green")
+        );
         // It isn't released as if it had compacted: it was asked at 300k, not 400k.
         assert!(!shrank("w", None, 300_000, c.handover_tokens));
         assert!(shrank("w", None, 100_000, c.handover_tokens));
@@ -1751,7 +2374,11 @@ mod tests {
         let t = transcript(&tmp, "acct/projects/-nonexistent/k.jsonl", 450_000);
         assert_eq!(context_tokens(&t), Some(450_000));
         let boundary = json!({"type": "system", "subtype": "compact_boundary", "compactMetadata": {"preTokens": 450_000, "postTokens": 12_000}});
-        std::fs::write(&t, format!("{}{boundary}\n", std::fs::read_to_string(&t).unwrap())).unwrap();
+        std::fs::write(
+            &t,
+            format!("{}{boundary}\n", std::fs::read_to_string(&t).unwrap()),
+        )
+        .unwrap();
         assert_eq!(context_tokens(&t), Some(12_000), "what the compaction left");
         // Asked before it compacted, and no brief: released, not handed over.
         touch(&requested_path("k", None), "450000");
@@ -1764,19 +2391,45 @@ mod tests {
 
     #[test]
     fn a_successor_is_named_for_its_work() {
-        for g in ["Handover continuation", "Handover from 0bf5026f-5546-4797-8d30-328b1358cd14", "Continue from previous session", "Resume the handover brief"] {
+        for g in [
+            "Handover continuation",
+            "Handover from 0bf5026f-5546-4797-8d30-328b1358cd14",
+            "Continue from previous session",
+            "Resume the handover brief",
+        ] {
             assert!(generic(g), "{g}");
         }
-        for t in ["Handover and auto-restart issues", "Claude-Northwind", "Engine", "Oli & Studio", "ComfyUI setup for Intel Arc Pro B70"] {
+        for t in [
+            "Handover and auto-restart issues",
+            "Claude-Northwind",
+            "Engine",
+            "Oli & Studio",
+            "ComfyUI setup for Intel Arc Pro B70",
+        ] {
             assert!(!generic(t), "{t}");
         }
         // Last night's briefs.
         let cases = [
-            ("# Handover — ComfyUI on Arc Pro B70 + Northwind brand image packs (session d19fe8da)", Some("ComfyUI on Arc Pro B70")),
-            ("# Handover: Northwind image packs, cut-outs, icons and explainers (session 14e562ec)", Some("Northwind image packs")),
-            ("# HANDOVER — Command Center TF lane, edge header-stripping, and Sam's auth lockout", Some("Command Center TF lane")),
-            ("# Handover: toomux review (\"nothing short of exceptional\") — session 9b506217", Some("toomux review")),
-            ("# HANDOVER — Command Center Terraform lane, 2026-09-29 (evening)", Some("Command Center Terraform lane")),
+            (
+                "# Handover — ComfyUI on Arc Pro B70 + Northwind brand image packs (session d19fe8da)",
+                Some("ComfyUI on Arc Pro B70"),
+            ),
+            (
+                "# Handover: Northwind image packs, cut-outs, icons and explainers (session 14e562ec)",
+                Some("Northwind image packs"),
+            ),
+            (
+                "# HANDOVER — Command Center TF lane, edge header-stripping, and Sam's auth lockout",
+                Some("Command Center TF lane"),
+            ),
+            (
+                "# Handover: toomux review (\"nothing short of exceptional\") — session 9b506217",
+                Some("toomux review"),
+            ),
+            (
+                "# HANDOVER — Command Center Terraform lane, 2026-09-29 (evening)",
+                Some("Command Center Terraform lane"),
+            ),
             ("# Handover Brief\n\n## Goal\nRead three files", None),
             ("no heading at all", None),
         ];
@@ -1787,22 +2440,76 @@ mod tests {
         s.cwd = "/home/x/northwind-packs".into();
         let brief = "# Handover: Northwind image packs, cut-outs, icons and explainers";
         s.title = "Oli & Studio".into();
-        assert_eq!(successor_name(&s, brief, Some("Studio polish"), &[], false), ("Oli & Studio".into(), false), "a name someone gave stays");
+        assert_eq!(
+            successor_name(&s, brief, Some("Studio polish"), &[], false),
+            ("Oli & Studio".into(), false),
+            "a name someone gave stays"
+        );
         s.title = "Handover continuation".into();
-        assert_eq!(successor_name(&s, brief, None, &[], false), ("Northwind image packs".into(), true), "a generic one gives way to the brief");
+        assert_eq!(
+            successor_name(&s, brief, None, &[], false),
+            ("Northwind image packs".into(), true),
+            "a generic one gives way to the brief"
+        );
         s.title = "ComfyUI setup for Intel Arc Pro B70".into();
-        assert_eq!(successor_name(&s, brief, Some("ComfyUI setup for Intel Arc Pro B70"), &[], false).0, "Northwind image packs", "so does Claude's stale summary");
+        assert_eq!(
+            successor_name(
+                &s,
+                brief,
+                Some("ComfyUI setup for Intel Arc Pro B70"),
+                &[],
+                false
+            )
+            .0,
+            "Northwind image packs",
+            "so does Claude's stale summary"
+        );
         let line = vec![
-            Lineage { old_id: "a".into(), new_id: "b".into(), title: "Claude-Northwind".into(), ..Default::default() },
-            Lineage { old_id: "b".into(), new_id: "new".into(), title: "Handover from b".into(), derived: true, ..Default::default() },
+            Lineage {
+                old_id: "a".into(),
+                new_id: "b".into(),
+                title: "Claude-Northwind".into(),
+                ..Default::default()
+            },
+            Lineage {
+                old_id: "b".into(),
+                new_id: "new".into(),
+                title: "Handover from b".into(),
+                derived: true,
+                ..Default::default()
+            },
         ];
         s.title = "Handover from b".into();
-        assert_eq!(successor_name(&s, "# Handover Brief", None, &line, false).0, "Claude-Northwind", "else the last real name in its line");
-        assert_eq!(successor_name(&s, "", None, &[], false).0, "northwind-packs", "else its folder");
+        assert_eq!(
+            successor_name(&s, "# Handover Brief", None, &line, false).0,
+            "Claude-Northwind",
+            "else the last real name in its line"
+        );
+        assert_eq!(
+            successor_name(&s, "", None, &[], false).0,
+            "northwind-packs",
+            "else its folder"
+        );
         // A name toomux chose last time is chosen again from the new brief.
-        let line = vec![Lineage { old_id: "a".into(), new_id: "new".into(), title: "Northwind image packs".into(), derived: true, ..Default::default() }];
+        let line = vec![Lineage {
+            old_id: "a".into(),
+            new_id: "new".into(),
+            title: "Northwind image packs".into(),
+            derived: true,
+            ..Default::default()
+        }];
         s.title = "Northwind image packs".into();
-        assert_eq!(successor_name(&s, "# Handover — Premium hand-drawn icons in ComfyUI", None, &line, false).0, "Premium hand-drawn icons in ComfyUI");
+        assert_eq!(
+            successor_name(
+                &s,
+                "# Handover — Premium hand-drawn icons in ComfyUI",
+                None,
+                &line,
+                false
+            )
+            .0,
+            "Premium hand-drawn icons in ComfyUI"
+        );
     }
 
     #[test]
@@ -1814,19 +2521,41 @@ mod tests {
         let mut s = session(1, "icons", 0, false);
         s.title = "Northwind hand-drawn icon set".into();
         let brief = "# Handover: Explainer refit + Cool-B65 coil";
-        assert_eq!(successor_name(&s, brief, None, &[], false).0, "Northwind hand-drawn icon set", "yours stays");
-        assert_eq!(successor_name(&s, brief, None, &[], true), ("Explainer refit + Cool-B65 coil".into(), true), "one chosen for you follows the work");
+        assert_eq!(
+            successor_name(&s, brief, None, &[], false).0,
+            "Northwind hand-drawn icon set",
+            "yours stays"
+        );
+        assert_eq!(
+            successor_name(&s, brief, None, &[], true),
+            ("Explainer refit + Cool-B65 coil".into(), true),
+            "one chosen for you follows the work"
+        );
         // Who chose it is recorded with the rename.
         crate::actions::rename(&cfg(0), &s, "Northwind hand-drawn icon set", true).unwrap();
         assert!(crate::state::State::load().chosen.contains("icons"));
         crate::actions::rename(&cfg(0), &s, "Icons", false).unwrap();
         let st = crate::state::State::load();
-        assert!(!st.chosen.contains("icons") && st.names["icons"] == "Icons", "renaming it yourself makes it yours");
+        assert!(
+            !st.chosen.contains("icons") && st.names["icons"] == "Icons",
+            "renaming it yourself makes it yours"
+        );
         // The topic is the latest brief's heading, whole.
-        write_atomic(&brief_path("old", None), "# Handover: Northwind image packs, cut-outs, icons and explainers (session old)\n\nbody");
-        remember(Lineage { old_id: "old".into(), new_id: "icons".into(), carried: true, ..Default::default() });
+        write_atomic(
+            &brief_path("old", None),
+            "# Handover: Northwind image packs, cut-outs, icons and explainers (session old)\n\nbody",
+        );
+        remember(Lineage {
+            old_id: "old".into(),
+            new_id: "icons".into(),
+            carried: true,
+            ..Default::default()
+        });
         let t = topics(&["icons", "other"]);
-        assert_eq!(t.get("icons").map(String::as_str), Some("Northwind image packs, cut-outs, icons and explainers"));
+        assert_eq!(
+            t.get("icons").map(String::as_str),
+            Some("Northwind image packs, cut-outs, icons and explainers")
+        );
         assert!(!t.contains_key("other"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1834,12 +2563,25 @@ mod tests {
     #[test]
     fn a_marker_counts_only_while_its_owner_lives() {
         let now = registry::now_ms();
-        let m = |owner: i32, age: i64| Marker { pid: 1, id: "x".into(), pane: String::new(), state: "writing".into(), at_ms: now - age, tokens: 0, retry_at_ms: 0, why: String::new(), owner };
+        let m = |owner: i32, age: i64| Marker {
+            pid: 1,
+            id: "x".into(),
+            pane: String::new(),
+            state: "writing".into(),
+            at_ms: now - age,
+            tokens: 0,
+            retry_at_ms: 0,
+            why: String::new(),
+            owner,
+        };
         assert!(live(&m(std::process::id() as i32, 1_000), now));
         assert!(!live(&m(i32::MAX - 1, 1_000), now), "its process is gone");
         assert!(live(&m(0, 30_000), now), "just claimed");
         assert!(!live(&m(0, 120_000), now), "claimed and never started");
-        assert!(!live(&m(std::process::id() as i32, 41 * 60_000), now), "past every timeout");
+        assert!(
+            !live(&m(std::process::id() as i32, 41 * 60_000), now),
+            "past every timeout"
+        );
     }
 
     #[test]
@@ -1854,20 +2596,41 @@ mod tests {
         assert!(!finished(&p), "waiting on a tool");
         std::fs::write(&p, format!("{tool}\n{result}\n")).unwrap();
         assert!(!finished(&p), "thinking about the result");
-        std::fs::write(&p, format!("{tool}\n{result}\n{answer}\n{{\"type\":\"system\"}}\n")).unwrap();
+        std::fs::write(
+            &p,
+            format!("{tool}\n{result}\n{answer}\n{{\"type\":\"system\"}}\n"),
+        )
+        .unwrap();
         assert!(finished(&p));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn what_is_carried_is_listed_once() {
-        let handed = vec![("Explore".to_string(), "find it".to_string(), PathBuf::from("/b/a1.md"))];
-        let job = crate::jobs::Job { id: "j1".into(), command: "make\nmore".into(), started_ms: registry::now_ms(), ..Default::default() };
+        let handed = vec![(
+            "Explore".to_string(),
+            "find it".to_string(),
+            PathBuf::from("/b/a1.md"),
+        )];
+        let job = crate::jobs::Job {
+            id: "j1".into(),
+            command: "make\nmore".into(),
+            started_ms: registry::now_ms(),
+            ..Default::default()
+        };
         let once = with_carried("# brief", &handed, std::slice::from_ref(&job));
-        assert!(once.contains("- Explore: find it · brief /b/a1.md") && once.contains("- job j1 ") && once.contains("`make`"));
+        assert!(
+            once.contains("- Explore: find it · brief /b/a1.md")
+                && once.contains("- job j1 ")
+                && once.contains("`make`")
+        );
         let twice = with_carried(&once, &handed, &[job]);
         assert_eq!(twice.matches(CARRIED.trim()).count(), 1);
-        assert_eq!(with_carried(&once, &[], &[]), "# brief", "nothing left to carry: the list goes");
+        assert_eq!(
+            with_carried(&once, &[], &[]),
+            "# brief",
+            "nothing left to carry: the list goes"
+        );
     }
 
     fn session(pid: i32, id: &str, since_ago: i64, pane: bool) -> Session {
@@ -1896,7 +2659,11 @@ mod tests {
             args: vec![],
             env: vec![],
             tty: None,
-            pane: pane.then(|| crate::tmux::Pane { id: format!("%{pid}"), session: "t".into(), window_index: "1".into() }),
+            pane: pane.then(|| crate::tmux::Pane {
+                id: format!("%{pid}"),
+                session: "t".into(),
+                window_index: "1".into(),
+            }),
         }
     }
 
@@ -1913,14 +2680,41 @@ mod tests {
         touch(&requested_path("r", None), "620000");
         let stale = session(1, "r", 86_400_000, true);
         let live = session(2, "r", 10_000, false);
-        assert!(due(&c, &[stale.clone(), live.clone()], now).is_empty(), "outside tmux, nothing goes before the brief is written");
+        assert!(
+            due(&c, &[stale.clone(), live.clone()], now).is_empty(),
+            "outside tmux, nothing goes before the brief is written"
+        );
         std::fs::write(brief_path("r", None), "x".repeat(400)).unwrap();
-        assert_eq!(due(&c, &[stale.clone(), live.clone()], now), vec![2], "only the live copy hands over, once its brief is written");
-        remember(Lineage { old_id: "r".into(), pane: "%9".into(), at_ms: now, name: None, carried: false, ..Default::default() });
-        assert!(due(&c, &[stale.clone()], now).is_empty(), "once handed over, the old copy left behind stays put");
+        assert_eq!(
+            due(&c, &[stale.clone(), live.clone()], now),
+            vec![2],
+            "only the live copy hands over, once its brief is written"
+        );
+        remember(Lineage {
+            old_id: "r".into(),
+            pane: "%9".into(),
+            at_ms: now,
+            name: None,
+            carried: false,
+            ..Default::default()
+        });
+        assert!(
+            due(&c, &[stale.clone()], now).is_empty(),
+            "once handed over, the old copy left behind stays put"
+        );
         // A handover that failed on a typed prompt is tried again a minute later...
         let failed = |at_ms: i64, retry_at_ms: i64| {
-            write_marker(&Marker { pid: 3, id: "t".into(), pane: "%3".into(), state: "failed".into(), at_ms, tokens: 1, retry_at_ms, why: String::new(), owner: 0 })
+            write_marker(&Marker {
+                pid: 3,
+                id: "t".into(),
+                pane: "%3".into(),
+                state: "failed".into(),
+                at_ms,
+                tokens: 1,
+                retry_at_ms,
+                why: String::new(),
+                owner: 0,
+            })
         };
         touch(&requested_path("t", None), "500000");
         let t = session(3, "t", 10_000, true);
@@ -1934,10 +2728,30 @@ mod tests {
         // A failure holds the conversation, not just the process: relaunched
         // under a new pid, it doesn't try again at once.
         touch(&requested_path("u", None), "500000");
-        write_marker(&Marker { pid: 5, id: "u".into(), pane: "%5".into(), state: "failed".into(), at_ms: now - 1_000, tokens: 1, retry_at_ms: now + 30 * 60_000, why: String::new(), owner: 0 });
+        write_marker(&Marker {
+            pid: 5,
+            id: "u".into(),
+            pane: "%5".into(),
+            state: "failed".into(),
+            at_ms: now - 1_000,
+            tokens: 1,
+            retry_at_ms: now + 30 * 60_000,
+            why: String::new(),
+            owner: 0,
+        });
         assert!(due(&c, &[session(6, "u", 10_000, true)], now).is_empty());
         // And a handover under way for it in another process blocks it too.
-        write_marker(&Marker { pid: 7, id: "v".into(), pane: "%7".into(), state: "writing".into(), at_ms: now, tokens: 1, retry_at_ms: 0, why: String::new(), owner: std::process::id() as i32 });
+        write_marker(&Marker {
+            pid: 7,
+            id: "v".into(),
+            pane: "%7".into(),
+            state: "writing".into(),
+            at_ms: now,
+            tokens: 1,
+            retry_at_ms: 0,
+            why: String::new(),
+            owner: std::process::id() as i32,
+        });
         touch(&requested_path("v", None), "500000");
         assert!(due(&c, &[session(8, "v", 10_000, true)], now).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1948,14 +2762,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let c = cfg(400_000);
         let ask = |t: &Path, kind: &str| {
-            gate(&c, &json!({"session_id": "s1", "transcript_path": t.display().to_string(), "tool_name": "Agent", "tool_input": {"subagent_type": kind, "prompt": "go"}}))
+            gate(
+                &c,
+                &json!({"session_id": "s1", "transcript_path": t.display().to_string(), "tool_name": "Agent", "tool_input": {"subagent_type": kind, "prompt": "go"}}),
+            )
         };
         let small = transcript(&tmp, "small.jsonl", 150_000);
-        assert!(ask(&small, "fork").is_none(), "below the limit a fork is worth its context");
+        assert!(
+            ask(&small, "fork").is_none(),
+            "below the limit a fork is worth its context"
+        );
         let big = transcript(&tmp, "big.jsonl", 230_000);
         let no = ask(&big, "fork").expect("past the limit a fork is refused");
-        assert!(no.contains("\"deny\"") && no.contains("230k") && no.contains("general-purpose"), "{no}");
-        assert!(ask(&big, "general-purpose").is_none(), "a fresh subagent goes ahead");
+        assert!(
+            no.contains("\"deny\"") && no.contains("230k") && no.contains("general-purpose"),
+            "{no}"
+        );
+        assert!(
+            ask(&big, "general-purpose").is_none(),
+            "a fresh subagent goes ahead"
+        );
         let mut off = cfg(400_000);
         off.fork_context_tokens = 0;
         assert!(gate(&off, &json!({"session_id": "s1", "transcript_path": big.display().to_string(), "tool_name": "Agent", "tool_input": {"subagent_type": "fork"}})).is_none());

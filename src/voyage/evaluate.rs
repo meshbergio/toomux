@@ -1,8 +1,8 @@
 //! Turn evidence, judge/reviewer calls and proof checks for a voyage.
 
-use super::{short, Verdict, Voyage, CHECK_TIMEOUT, JUDGE_ENV, JUDGE_TIMEOUT};
+use super::{CHECK_TIMEOUT, JUDGE_ENV, JUDGE_TIMEOUT, Verdict, Voyage, short};
 use crate::config::Config;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -19,7 +19,9 @@ pub(super) struct TurnInfo {
 /// The transcript's tail as entries, oldest first.
 fn tail_entries(transcript: &Path) -> Vec<Value> {
     const TAIL: u64 = 1024 * 1024;
-    let Ok(mut f) = std::fs::File::open(transcript) else { return Vec::new() };
+    let Ok(mut f) = std::fs::File::open(transcript) else {
+        return Vec::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let from = len.saturating_sub(TAIL);
     let mut bytes = Vec::new();
@@ -30,7 +32,12 @@ fn tail_entries(transcript: &Path) -> Vec<Value> {
     text.lines()
         .skip(usize::from(from > 0))
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| matches!(v.get("type").and_then(Value::as_str), Some("user" | "assistant")))
+        .filter(|v| {
+            matches!(
+                v.get("type").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+        })
         .filter(|v| v.get("isSidechain").and_then(Value::as_bool) != Some(true))
         .collect()
 }
@@ -43,7 +50,9 @@ fn starts_turn(v: &Value) -> bool {
     }
     match v.pointer("/message/content") {
         Some(Value::String(_)) => true,
-        Some(Value::Array(a)) => a.iter().all(|b| b.get("type").and_then(Value::as_str) != Some("tool_result")),
+        Some(Value::Array(a)) => a
+            .iter()
+            .all(|b| b.get("type").and_then(Value::as_str) != Some("tool_result")),
         _ => false,
     }
 }
@@ -73,7 +82,11 @@ fn clip(s: &str, head: usize, tail: usize) -> String {
 fn result_text(b: &Value) -> String {
     match b.get("content") {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => a.iter().filter_map(|x| x.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|x| x.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
         _ => String::new(),
     }
 }
@@ -82,13 +95,20 @@ fn result_text(b: &Value) -> String {
 /// before when there's room, newest kept when it must be cut.
 pub(super) fn evidence(transcript: &Path, turn_start: usize, max: usize) -> String {
     let e = tail_entries(transcript);
-    let from = e[..turn_start.min(e.len())].iter().rposition(starts_turn).unwrap_or(turn_start.min(e.len()));
+    let from = e[..turn_start.min(e.len())]
+        .iter()
+        .rposition(starts_turn)
+        .unwrap_or(turn_start.min(e.len()));
     let mut lines: Vec<String> = Vec::new();
     for v in &e[from..] {
         let user = v.get("type").and_then(Value::as_str) == Some("user");
         match v.pointer("/message/content") {
             Some(Value::String(s)) => {
-                let who = if s.starts_with("Stop hook feedback") { "toomux" } else { "user" };
+                let who = if s.starts_with("Stop hook feedback") {
+                    "toomux"
+                } else {
+                    "user"
+                };
                 lines.push(format!("[{who}] {}", clip(s.trim(), 1200, 300)));
             }
             Some(Value::Array(a)) => {
@@ -97,7 +117,11 @@ pub(super) fn evidence(transcript: &Path, turn_start: usize, max: usize) -> Stri
                         Some("text") => {
                             let t = b.get("text").and_then(Value::as_str).unwrap_or("").trim();
                             if !t.is_empty() {
-                                lines.push(format!("[{}] {}", if user { "user" } else { "claude" }, clip(t, 2500, 800)));
+                                lines.push(format!(
+                                    "[{}] {}",
+                                    if user { "user" } else { "claude" },
+                                    clip(t, 2500, 800)
+                                ));
                             }
                         }
                         Some("tool_use") => {
@@ -115,7 +139,11 @@ pub(super) fn evidence(transcript: &Path, turn_start: usize, max: usize) -> Stri
                         }
                         Some("tool_result") => {
                             let err = b.get("is_error").and_then(Value::as_bool) == Some(true);
-                            lines.push(format!("[result{}] {}", if err { ", error" } else { "" }, clip(result_text(b).trim(), 400, 600)));
+                            lines.push(format!(
+                                "[result{}] {}",
+                                if err { ", error" } else { "" },
+                                clip(result_text(b).trim(), 400, 600)
+                            ));
                         }
                         _ => {}
                     }
@@ -153,17 +181,38 @@ sentence. Write reasons plainly, to the agent.";
 
 pub(super) fn parse_verdict(text: &str) -> Result<(Verdict, String)> {
     let (a, b) = (text.find('{'), text.rfind('}'));
-    let (Some(a), Some(b)) = (a, b) else { bail!("the judge didn't answer in JSON") };
+    let (Some(a), Some(b)) = (a, b) else {
+        bail!("the judge didn't answer in JSON")
+    };
     let v: Value = serde_json::from_str(&text[a..=b]).context("the judge's JSON didn't parse")?;
-    let reason = v.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let verdict = match v.get("verdict").and_then(Value::as_str).unwrap_or("").to_lowercase().replace([' ', '-'], "_").as_str() {
+    let reason = v
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let verdict = match v
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_lowercase()
+        .replace([' ', '-'], "_")
+        .as_str()
+    {
         "met" | "done" => Verdict::Met,
         "not_yet" | "not_met" => Verdict::NotYet,
         "impossible" => Verdict::Impossible,
         "needs_you" | "needs_user" => Verdict::NeedsYou,
         other => bail!("the judge said {other:?}"),
     };
-    Ok((verdict, if reason.is_empty() { "no reason given".into() } else { reason }))
+    Ok((
+        verdict,
+        if reason.is_empty() {
+            "no reason given".into()
+        } else {
+            reason
+        },
+    ))
 }
 
 /// The judge's estimate of how much is done, in percent, if it gave one.
@@ -171,20 +220,31 @@ pub(super) fn parse_progress(text: &str) -> Option<u8> {
     let (a, b) = (text.find('{')?, text.rfind('}')?);
     let v: Value = serde_json::from_str(text.get(a..=b)?).ok()?;
     let p = v.get("progress")?;
-    let n = p.as_f64().or_else(|| p.as_str()?.trim().trim_end_matches('%').parse().ok())?;
+    let n = p
+        .as_f64()
+        .or_else(|| p.as_str()?.trim().trim_end_matches('%').parse().ok())?;
     Some(n.clamp(0.0, 100.0).round() as u8)
 }
 
 /// A small model's verdict on the turn, with its estimate of how much is
 /// done and what it cost.
-pub(super) fn judge(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(Verdict, String, Option<u8>, f64)> {
+pub(super) fn judge(
+    cfg: &Config,
+    q: &Voyage,
+    evidence: &str,
+) -> Result<(Verdict, String, Option<u8>, f64)> {
     let mut ask = format!("The outcome:\n{}\n", q.outcome);
     if let Some(c) = &q.check {
-        ask.push_str(&format!("(Once you say met, toomux also runs `{c}`, which must pass.)\n"));
+        ask.push_str(&format!(
+            "(Once you say met, toomux also runs `{c}`, which must pass.)\n"
+        ));
     }
     ask.push_str(&format!("\nThis is turn {} of the voyage", q.turns));
     if q.handovers() > 0 {
-        ask.push_str(&format!(", in its {} conversation (the earlier ones handed their work on)", ordinal(q.sessions.len())));
+        ask.push_str(&format!(
+            ", in its {} conversation (the earlier ones handed their work on)",
+            ordinal(q.sessions.len())
+        ));
     }
     ask.push_str(".\n");
     if let Some(l) = &q.last {
@@ -199,7 +259,13 @@ pub(super) fn judge(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(Verdict
         ));
     }
     ask.push_str(&format!("\nThe end of the conversation:\n{evidence}\n"));
-    let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), &format!("{JUDGE}{}", rules.judge_rules), &ask)?;
+    let (text, usd) = ask_model(
+        cfg,
+        q,
+        q.persistence.model(cfg),
+        &format!("{JUDGE}{}", rules.judge_rules),
+        &ask,
+    )?;
     let (verdict, reason) = parse_verdict(&text)?;
     Ok((verdict, reason, parse_progress(&text), usd))
 }
@@ -214,7 +280,10 @@ you find nothing that matters; otherwise not_yet, and the reason says plainly, t
 /// Relentless: a second model reads every change since the voyage began,
 /// looking for why it isn't done. (passed, reason, cost)
 pub(super) fn review(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(bool, String, f64)> {
-    let mut ask = format!("The outcome:\n{}\n\nThe end of the conversation:\n{evidence}\n\n", q.outcome);
+    let mut ask = format!(
+        "The outcome:\n{}\n\nThe end of the conversation:\n{evidence}\n\n",
+        q.outcome
+    );
     ask.push_str(&changes(&q.cwd, q.base.as_deref()));
     let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), REVIEW, &ask)?;
     let (verdict, reason) = parse_verdict(&text)?;
@@ -223,8 +292,14 @@ pub(super) fn review(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(bool, 
 
 /// The commit a folder is at, if it's a git repository.
 pub(super) fn head_commit(cwd: &str) -> Option<String> {
-    let out = std::process::Command::new("git").args(["-C", cwd, "rev-parse", "HEAD"]).stderr(std::process::Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let out = std::process::Command::new("git")
+        .args(["-C", cwd, "rev-parse", "HEAD"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Every change in the folder since `base`, committed or not, for the review.
@@ -244,27 +319,78 @@ fn changes(cwd: &str, base: Option<&str>) -> String {
         return "Changes: none to show (the folder isn't a git repository). Judge from the conversation.\n".into();
     };
     let diff = git(&["diff", base.unwrap_or("HEAD")]).unwrap_or_default();
-    let diff = if diff.chars().count() > MAX { format!("{}\n[… the rest of the diff, cut]", diff.chars().take(MAX).collect::<String>()) } else { diff };
-    format!("Files changed or new (git status):\n{status}\nThe diff since the voyage began:\n{diff}\n")
+    let diff = if diff.chars().count() > MAX {
+        format!(
+            "{}\n[… the rest of the diff, cut]",
+            diff.chars().take(MAX).collect::<String>()
+        )
+    } else {
+        diff
+    };
+    format!(
+        "Files changed or new (git status):\n{status}\nThe diff since the voyage began:\n{diff}\n"
+    )
 }
 
 /// One `claude -p` answer from a model with no tools: its text and cost.
-fn ask_model(cfg: &Config, q: &Voyage, model: &str, system: &str, ask: &str) -> Result<(String, f64)> {
+fn ask_model(
+    cfg: &Config,
+    q: &Voyage,
+    model: &str,
+    system: &str,
+    ask: &str,
+) -> Result<(String, f64)> {
     let mut cmd = std::process::Command::new(crate::config::expand(&cfg.claude_bin));
-    cmd.args(["-p", "--model", model, "--tools", "", "--setting-sources", "", "--strict-mcp-config"])
-        .args(["--no-session-persistence", "--output-format", "json", "--system-prompt", system])
-        .current_dir(if Path::new(&q.cwd).is_dir() { q.cwd.as_str() } else { "/" })
-        .env(JUDGE_ENV, "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+    cmd.args([
+        "-p",
+        "--model",
+        model,
+        "--tools",
+        "",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+    ])
+    .args([
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--system-prompt",
+        system,
+    ])
+    .current_dir(if Path::new(&q.cwd).is_dir() {
+        q.cwd.as_str()
+    } else {
+        "/"
+    })
+    .env(JUDGE_ENV, "1")
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
     let (out, _) = run_with_timeout(cmd, Some(ask.as_bytes()), JUDGE_TIMEOUT)?;
     let v: Value = serde_json::from_str(out.trim()).context("the judge's run gave no result")?;
     if v.get("is_error").and_then(Value::as_bool) == Some(true) {
-        bail!("{}", short(v.get("result").and_then(Value::as_str).unwrap_or("the judge's run failed"), 120));
+        bail!(
+            "{}",
+            short(
+                v.get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the judge's run failed"),
+                120
+            )
+        );
     }
-    let usd = v.get("total_cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
-    Ok((v.get("result").and_then(Value::as_str).unwrap_or("").to_string(), usd))
+    let usd = v
+        .get("total_cost_usd")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    Ok((
+        v.get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        usd,
+    ))
 }
 
 fn ordinal(n: usize) -> String {
@@ -278,7 +404,11 @@ fn ordinal(n: usize) -> String {
 }
 
 /// Run a command to its end or the timeout: stdout, and whether it exited 0.
-fn run_with_timeout(mut cmd: std::process::Command, input: Option<&[u8]>, limit: Duration) -> Result<(String, bool)> {
+fn run_with_timeout(
+    mut cmd: std::process::Command,
+    input: Option<&[u8]>,
+    limit: Duration,
+) -> Result<(String, bool)> {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
     let mut child = cmd.spawn().context("couldn't start it")?;
@@ -325,8 +455,17 @@ pub(super) fn run_check(check: &str, cwd: &str) -> std::result::Result<(), Strin
     match run_with_timeout(cmd, None, CHECK_TIMEOUT) {
         Ok((_, true)) => Ok(()),
         Ok((out, false)) => {
-            let tail: Vec<&str> = out.lines().rev().filter(|l| !l.trim().is_empty()).take(12).collect();
-            Err(clip(&tail.into_iter().rev().collect::<Vec<_>>().join("\n"), 0, 1200))
+            let tail: Vec<&str> = out
+                .lines()
+                .rev()
+                .filter(|l| !l.trim().is_empty())
+                .take(12)
+                .collect();
+            Err(clip(
+                &tail.into_iter().rev().collect::<Vec<_>>().join("\n"),
+                0,
+                1200,
+            ))
         }
         Err(e) => Err(e.to_string()),
     }

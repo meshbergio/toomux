@@ -16,8 +16,16 @@ use std::time::SystemTime;
 const QUIET_SECS: u64 = 24 * 3600;
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).stdin(std::process::Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// One repository's state, and what was tidied in it.
@@ -46,7 +54,9 @@ struct Tree {
 }
 
 fn worktrees(repo: &Path) -> Vec<Tree> {
-    let Some(out) = git(repo, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
+    let Some(out) = git(repo, &["worktree", "list", "--porcelain"]) else {
+        return Vec::new();
+    };
     let mut all = Vec::new();
     let mut t = Tree::default();
     for line in out.lines().chain(std::iter::once("")) {
@@ -69,10 +79,16 @@ fn worktrees(repo: &Path) -> Vec<Tree> {
 
 /// The branch everything lands on: origin's default, else main or master.
 fn default_branch(repo: &Path) -> Option<String> {
-    if let Some(r) = git(repo, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]) {
+    if let Some(r) = git(
+        repo,
+        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+    ) {
         return Some(r.trim().to_string());
     }
-    ["refs/heads/main", "refs/heads/master"].into_iter().find(|b| git(repo, &["rev-parse", "--verify", "--quiet", b]).is_some()).map(str::to_string)
+    ["refs/heads/main", "refs/heads/master"]
+        .into_iter()
+        .find(|b| git(repo, &["rev-parse", "--verify", "--quiet", b]).is_some())
+        .map(str::to_string)
 }
 
 /// Every process's current folder, so a worktree someone is in is left alone.
@@ -81,12 +97,19 @@ fn folders_in_use() -> Vec<PathBuf> {
 }
 
 fn quiet(path: &Path, now: SystemTime) -> bool {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|d| d.as_secs() >= QUIET_SECS)
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| now.duration_since(m).ok())
+        .is_some_and(|d| d.as_secs() >= QUIET_SECS)
 }
 
 /// Look after one repository; with `apply` false, only say what would go.
 pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Result<Repo> {
-    let mut r = Repo { path: repo.to_path_buf(), ..Repo::default() };
+    let mut r = Repo {
+        path: repo.to_path_buf(),
+        ..Repo::default()
+    };
     let base = default_branch(repo);
     let trees = worktrees(repo);
     // Git lists real paths; a folder reached through a symlink (macOS /var is
@@ -98,7 +121,9 @@ pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Re
             r.pruned += 1;
             continue;
         }
-        let merged = base.as_deref().is_some_and(|b| !t.head.is_empty() && git(repo, &["merge-base", "--is-ancestor", &t.head, b]).is_some());
+        let merged = base.as_deref().is_some_and(|b| {
+            !t.head.is_empty() && git(repo, &["merge-base", "--is-ancestor", &t.head, b]).is_some()
+        });
         let clean = git(&t.path, &["status", "--porcelain"]).is_some_and(|s| s.trim().is_empty());
         let here = real(&t.path);
         let used = in_use.iter().any(|u| u.starts_with(&here));
@@ -121,17 +146,30 @@ pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Re
         r.uncommitted = files.len();
         r.oldest_days = files
             .iter()
-            .filter_map(|f| std::fs::metadata(repo.join(f.trim_matches('"'))).and_then(|m| m.modified()).ok())
+            .filter_map(|f| {
+                std::fs::metadata(repo.join(f.trim_matches('"')))
+                    .and_then(|m| m.modified())
+                    .ok()
+            })
             .filter_map(|m| now.duration_since(m).ok())
             .map(|d| d.as_secs() / 86_400)
             .max()
             .unwrap_or(0);
     }
     if let Some(b) = &base {
-        let short = b.trim_start_matches("refs/remotes/").trim_start_matches("refs/heads/");
-        r.merged_branches = git(repo, &["branch", "--merged", short, "--format=%(refname:short)"])
-            .map(|o| o.lines().filter(|l| !matches!(*l, "main" | "master") && *l != short).count())
-            .unwrap_or(0);
+        let short = b
+            .trim_start_matches("refs/remotes/")
+            .trim_start_matches("refs/heads/");
+        r.merged_branches = git(
+            repo,
+            &["branch", "--merged", short, "--format=%(refname:short)"],
+        )
+        .map(|o| {
+            o.lines()
+                .filter(|l| !matches!(*l, "main" | "master") && *l != short)
+                .count()
+        })
+        .unwrap_or(0);
     }
     Ok(r)
 }
@@ -140,7 +178,11 @@ pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Re
 pub fn run(places: &crate::upkeep::Places, apply: bool) -> Vec<Repo> {
     let in_use = folders_in_use();
     let now = SystemTime::now();
-    places.repos().into_iter().filter_map(|p| tend(&p, apply, &in_use, now).ok()).collect()
+    places
+        .repos()
+        .into_iter()
+        .filter_map(|p| tend(&p, apply, &in_use, now).ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -152,11 +194,22 @@ mod tests {
         let ok = Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .unwrap();
-        assert!(ok.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&ok.stderr));
+        assert!(
+            ok.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
     }
 
     #[test]
@@ -173,7 +226,10 @@ mod tests {
         sh(&repo, &["commit", "-qm", "one"]);
         let wt = |name: &str, branch: &str| {
             let p = tmp.join(name);
-            sh(&repo, &["worktree", "add", "-q", "-b", branch, &p.to_string_lossy()]);
+            sh(
+                &repo,
+                &["worktree", "add", "-q", "-b", branch, &p.to_string_lossy()],
+            );
             p
         };
         let done = wt("done", "done");
@@ -189,17 +245,30 @@ mod tests {
         std::fs::write(repo.join("a"), "changed").unwrap();
         let later = SystemTime::now() + Duration::from_secs(QUIET_SECS + 60);
         let seen = tend(&repo, false, &[busy.clone()], later).unwrap();
-        assert_eq!(seen.removed, vec![done.clone()], "a dry run names only the merged, clean, unused one");
+        assert_eq!(
+            seen.removed,
+            vec![done.clone()],
+            "a dry run names only the merged, clean, unused one"
+        );
         assert!(done.exists(), "and changes nothing");
         let r = tend(&repo, true, &[busy.clone()], later).unwrap();
         assert_eq!(r.removed, vec![done.clone()]);
         assert!(!done.exists() && open.exists() && dirty.exists() && busy.exists());
         assert_eq!((r.pruned, r.kept), (1, 3));
-        assert_eq!(r.uncommitted, 1, "work in the main folder is listed, not touched");
+        assert_eq!(
+            r.uncommitted, 1,
+            "work in the main folder is listed, not touched"
+        );
         assert_eq!(std::fs::read_to_string(repo.join("a")).unwrap(), "changed");
         let branches = git(&repo, &["branch", "--format=%(refname:short)"]).unwrap();
         assert!(branches.contains("done"), "branches are never deleted");
-        assert!(tend(&repo, true, &[], SystemTime::now()).unwrap().removed.is_empty(), "nothing goes the day it was touched");
+        assert!(
+            tend(&repo, true, &[], SystemTime::now())
+                .unwrap()
+                .removed
+                .is_empty(),
+            "nothing goes the day it was touched"
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 }

@@ -38,7 +38,16 @@ impl Lineage {
         title: String,
         derived: bool,
     ) -> Self {
-        Self { old_id, pane, at_ms, name, carried: false, title, derived, new_id: String::new() }
+        Self {
+            old_id,
+            pane,
+            at_ms,
+            name,
+            carried: false,
+            title,
+            derived,
+            new_id: String::new(),
+        }
     }
 }
 
@@ -46,9 +55,47 @@ impl Lineage {
 
 /// Words that say only that a session continues another one.
 const HANDOVER_WORDS: &[&str] = &[
-    "handover", "handovers", "hand", "handed", "handing", "over", "continue", "continued", "continues", "continuing", "continuation",
-    "resume", "resumed", "resuming", "pick", "picking", "picked", "up", "previous", "prior", "earlier", "session", "sessions", "fresh", "new",
-    "brief", "from", "the", "a", "an", "of", "and", "to", "in", "with", "work", "context", "read", "id", "pane", "this",
+    "handover",
+    "handovers",
+    "hand",
+    "handed",
+    "handing",
+    "over",
+    "continue",
+    "continued",
+    "continues",
+    "continuing",
+    "continuation",
+    "resume",
+    "resumed",
+    "resuming",
+    "pick",
+    "picking",
+    "picked",
+    "up",
+    "previous",
+    "prior",
+    "earlier",
+    "session",
+    "sessions",
+    "fresh",
+    "new",
+    "brief",
+    "from",
+    "the",
+    "a",
+    "an",
+    "of",
+    "and",
+    "to",
+    "in",
+    "with",
+    "work",
+    "context",
+    "read",
+    "id",
+    "pane",
+    "this",
 ];
 
 /// A title that says nothing about the work: "Handover continuation",
@@ -58,7 +105,11 @@ pub fn generic(title: &str) -> bool {
     !title
         .split(|c: char| !c.is_alphanumeric() && c != '-')
         .map(|w| w.trim_matches('-').to_lowercase())
-        .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 2 && !HANDOVER_WORDS.contains(&w.as_str()) && !hexish(&w))
+        .any(|w| {
+            w.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                && !HANDOVER_WORDS.contains(&w.as_str())
+                && !hexish(&w)
+        })
 }
 
 /// The work a brief is about, from its heading: "# Handover: Northwind image
@@ -89,13 +140,18 @@ fn brief_heading(brief: &str) -> Option<String> {
     loop {
         let before = t.len();
         if t.ends_with(')')
-            && let Some(i) = t.rfind(" (") {
-                t.truncate(i);
-            }
+            && let Some(i) = t.rfind(" (")
+        {
+            t.truncate(i);
+        }
         for sep in [" — ", " – ", " - ", ", "] {
             if let Some(i) = t.rfind(sep) {
                 let tail = &t[i + sep.len()..];
-                if generic(tail) || tail.chars().all(|c| c.is_ascii_digit() || c == '-' || c == ' ') {
+                if generic(tail)
+                    || tail
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || c == '-' || c == ' ')
+                {
                     t.truncate(i);
                 }
             }
@@ -119,7 +175,9 @@ pub fn topics(ids: &[&str]) -> std::collections::HashMap<String, String> {
         if l.new_id.is_empty() || !ids.contains(&l.new_id.as_str()) || out.contains_key(&l.new_id) {
             continue;
         }
-        let Ok(f) = std::fs::File::open(brief_path(&l.old_id, None)) else { continue };
+        let Ok(f) = std::fs::File::open(brief_path(&l.old_id, None)) else {
+            continue;
+        };
         let mut head = String::new();
         let _ = f.take(4096).read_to_string(&mut head);
         if let Some(h) = brief_heading(&head) {
@@ -163,9 +221,18 @@ pub(super) fn short_name(t: &str) -> String {
 /// toomux chose last time, or a generic one) the brief says what the work is
 /// now; failing that, the last real name in its line of handovers, then its
 /// folder.
-pub(super) fn successor_name(s: &Session, brief: &str, ai_title: Option<&str>, lineage: &[Lineage], for_you: bool) -> (String, bool) {
+pub(super) fn successor_name(
+    s: &Session,
+    brief: &str,
+    ai_title: Option<&str>,
+    lineage: &[Lineage],
+    for_you: bool,
+) -> (String, bool) {
     let title = s.title.trim();
-    let chosen_before = for_you || lineage.iter().any(|l| l.new_id == s.id && l.derived && l.title == title);
+    let chosen_before = for_you
+        || lineage
+            .iter()
+            .any(|l| l.new_id == s.id && l.derived && l.title == title);
     let own = !title.is_empty() && !generic(title) && !chosen_before && ai_title != Some(title);
     if own {
         return (title.to_string(), false);
@@ -179,7 +246,9 @@ pub(super) fn successor_name(s: &Session, brief: &str, ai_title: Option<&str>, l
     // Back along the line: the session this one continued, and so on.
     let mut id = s.id.as_str();
     for _ in 0..lineage.len() {
-        let Some(l) = lineage.iter().find(|l| l.new_id == id) else { break };
+        let Some(l) = lineage.iter().find(|l| l.new_id == id) else {
+            break;
+        };
         if !l.title.is_empty() && !generic(&l.title) {
             return (l.title.clone(), true);
         }
@@ -189,7 +258,14 @@ pub(super) fn successor_name(s: &Session, brief: &str, ai_title: Option<&str>, l
         id = &l.old_id;
     }
     let root = crate::memory::project_root(&s.cwd);
-    (root.rsplit('/').next().filter(|f| !f.is_empty()).unwrap_or("session").to_string(), true)
+    (
+        root.rsplit('/')
+            .next()
+            .filter(|f| !f.is_empty())
+            .unwrap_or("session")
+            .to_string(),
+        true,
+    )
 }
 
 fn lineage_path() -> PathBuf {
@@ -197,14 +273,22 @@ fn lineage_path() -> PathBuf {
 }
 
 pub(super) fn load_lineage() -> Vec<Lineage> {
-    std::fs::read_to_string(lineage_path()).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+    std::fs::read_to_string(lineage_path())
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default()
 }
 
 /// Lineage is changed by handovers and ticks at once: one at a time.
 fn lineage_lock() -> Option<std::fs::File> {
     use std::os::fd::AsRawFd;
     let _ = std::fs::create_dir_all(dir());
-    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir().join("lineage.lock")).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir().join("lineage.lock"))
+        .ok()?;
     unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
     Some(f)
 }
@@ -215,7 +299,10 @@ pub(super) fn remember(l: Lineage) {
     all.push(l);
     let excess = all.len().saturating_sub(200);
     all.drain(..excess);
-    write_atomic(&lineage_path(), &serde_json::to_string(&all).unwrap_or_default());
+    write_atomic(
+        &lineage_path(),
+        &serde_json::to_string(&all).unwrap_or_default(),
+    );
 }
 
 /// Give a handed-over session's successor its name, pin and background
@@ -229,7 +316,10 @@ pub(super) fn carry(cfg: &Config, sessions: &[Session]) {
     let mut changed = false;
     for l in all.iter_mut().filter(|l| !l.carried) {
         let Some(new) = sessions.iter().find(|s| {
-            !s.dormant && s.id != l.old_id && s.pane.as_ref().is_some_and(|p| p.id == l.pane) && s.started_ms + 60_000 >= l.at_ms
+            !s.dormant
+                && s.id != l.old_id
+                && s.pane.as_ref().is_some_and(|p| p.id == l.pane)
+                && s.started_ms + 60_000 >= l.at_ms
         }) else {
             if registry::now_ms() - l.at_ms > 3_600_000 {
                 l.carried = true;
@@ -252,6 +342,9 @@ pub(super) fn carry(cfg: &Config, sessions: &[Session]) {
         changed = true;
     }
     if changed {
-        write_atomic(&lineage_path(), &serde_json::to_string(&all).unwrap_or_default());
+        write_atomic(
+            &lineage_path(),
+            &serde_json::to_string(&all).unwrap_or_default(),
+        );
     }
 }

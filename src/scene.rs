@@ -192,10 +192,17 @@ struct Canvas {
 
 impl Canvas {
     fn new(w: usize, h: usize) -> Canvas {
-        Canvas { w, h, px: vec![[0, 0, 0]; w * h] }
+        Canvas {
+            w,
+            h,
+            px: vec![[0, 0, 0]; w * h],
+        }
     }
     fn get(&self, x: i64, y: i64) -> Rgb {
-        let (x, y) = (x.clamp(0, self.w as i64 - 1) as usize, y.clamp(0, self.h as i64 - 1) as usize);
+        let (x, y) = (
+            x.clamp(0, self.w as i64 - 1) as usize,
+            y.clamp(0, self.h as i64 - 1) as usize,
+        );
         self.px[y * self.w + x]
     }
     fn set(&mut self, x: i64, y: i64, c: Rgb) {
@@ -261,7 +268,11 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
         }
         for y in HZ..PH as i64 {
             let depth = (y - HZ) as f64 / (PH as i64 - HZ - 1) as f64;
-            cv.set(x, y, mix(ramp(&SEA, depth), GLOW, near * 0.3 * (1.0 - depth).powi(2)));
+            cv.set(
+                x,
+                y,
+                mix(ramp(&SEA, depth), GLOW, near * 0.3 * (1.0 - depth).powi(2)),
+            );
         }
     }
     // Stars where the sky is dark enough, a few twinkling.
@@ -269,7 +280,11 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
         for y in 0..5 {
             let h = hash(x as u64, y as u64 + 11);
             if h.is_multiple_of(29) && (x as f64) < sun_x - 26.0 {
-                let bright = if (h / 29 + f).is_multiple_of(5) { 1.0 } else { 0.55 - 0.08 * y as f64 };
+                let bright = if (h / 29 + f).is_multiple_of(5) {
+                    1.0
+                } else {
+                    0.55 - 0.08 * y as f64
+                };
                 cv.tint(x, y, STAR, bright);
             }
         }
@@ -279,7 +294,9 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
     for y in 0..6i64 {
         for x in -5..=5i64 {
             let px = mx + x as f64;
-            let inside = |cx: f64, cy: f64, r: f64| (((px - cx) / ASPECT).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt() <= r;
+            let inside = |cx: f64, cy: f64, r: f64| {
+                (((px - cx) / ASPECT).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt() <= r
+            };
             let bite = inside(mx + 1.6, my - 0.6, 2.0);
             if inside(mx, my, 2.3) && !bite {
                 cv.set(px as i64, y, MOON);
@@ -304,7 +321,12 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
         }
     }
     // Thin clouds, one across the sun.
-    for (y, from, len) in [(6i64, sun_x as i64 - 14, 24i64), (4, sun_x as i64 - 40, 16), (7, sun_x as i64 - 64, 12), (5, sun_x as i64 + 8, 7)] {
+    for (y, from, len) in [
+        (6i64, sun_x as i64 - 14, 24i64),
+        (4, sun_x as i64 - 40, 16),
+        (7, sun_x as i64 - 64, 12),
+        (5, sun_x as i64 + 8, 7),
+    ] {
         for x in from..from + len {
             let edge = (x - from).min(from + len - 1 - x);
             cv.tint(x, y, CLOUD, [0.3, 0.55, 0.75][edge.min(2) as usize]);
@@ -369,7 +391,10 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
         }
     }
     // The island: a dome of sand, a palm, and the chest on the beach.
-    let (cx, half) = (island_x as f64 + island_w as f64 / 2.0, island_w as f64 / 2.0);
+    let (cx, half) = (
+        island_x as f64 + island_w as f64 / 2.0,
+        island_w as f64 / 2.0,
+    );
     let top_at = |x: i64| -> Option<i64> {
         let u = (x as f64 + 0.5 - cx) / half;
         (u.abs() < 1.0).then(|| (PH as f64 - 1.0 - 6.2 * (1.0 - u * u).powf(0.7)).round() as i64)
@@ -401,9 +426,16 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
     let chest_x = island_x + 27;
     let chest_base = top_at(chest_x + 5).unwrap_or(HZ) + 2;
     if scene.sea == Sea::Landed {
-        cv.sprite(&CHEST_OPEN, chest_x, chest_base - CHEST_OPEN.len() as i64 + 1);
+        cv.sprite(
+            &CHEST_OPEN,
+            chest_x,
+            chest_base - CHEST_OPEN.len() as i64 + 1,
+        );
         // Gold catches the light: sparkles that come and go.
-        for (i, (dx, dy)) in [(5i64, -10i64), (1, -8), (10, -9), (-2, -5), (13, -6)].into_iter().enumerate() {
+        for (i, (dx, dy)) in [(5i64, -10i64), (1, -8), (10, -9), (-2, -5), (13, -6)]
+            .into_iter()
+            .enumerate()
+        {
             if hash(i as u64, f).is_multiple_of(2) {
                 let (x, y) = (chest_x + dx, chest_base + dy);
                 cv.set(x, y, palette('l').unwrap_or(SUN));
@@ -416,7 +448,11 @@ fn draw(cells: usize, scene: &Scene) -> Canvas {
         cv.sprite(&CHEST, chest_x, chest_base - CHEST.len() as i64 + 1);
     }
 
-    let ship = if scene.sea == Sea::Anchored { &SHIP_ANCHORED } else { &SHIP };
+    let ship = if scene.sea == Sea::Anchored {
+        &SHIP_ANCHORED
+    } else {
+        &SHIP
+    };
     // Rigging, behind the sails: stays from the mastheads to the bowsprit.
     cv.line((ship_x + 14, sy), (ship_x + ship_w - 1, sy + 7), ROPE);
     cv.line((ship_x + 7, sy + 2), (ship_x + 14, sy), ROPE);
@@ -459,9 +495,21 @@ fn encode(cv: &Canvas) -> Vec<Vec<Cell>> {
                     }
                     let (mask, front, back) = split(&p);
                     match mask {
-                        0 => Cell { ch: ' ', fg: back, bg: back },
-                        63 => Cell { ch: ' ', fg: front, bg: front },
-                        m => Cell { ch: glyph(m), fg: front, bg: back },
+                        0 => Cell {
+                            ch: ' ',
+                            fg: back,
+                            bg: back,
+                        },
+                        63 => Cell {
+                            ch: ' ',
+                            fg: front,
+                            bg: front,
+                        },
+                        m => Cell {
+                            ch: glyph(m),
+                            fg: front,
+                            bg: back,
+                        },
                     }
                 })
                 .collect()
@@ -544,7 +592,11 @@ fn split(px: &[Rgb; 6]) -> (u8, Rgb, Rgb) {
     // Pixel 0 is always behind, so each split is tried once.
     for mask in (2u8..64).step_by(2) {
         let (a, b) = (mean(px, mask, true), mean(px, mask, false));
-        let err: u32 = px.iter().enumerate().map(|(i, p)| dist(*p, if (mask >> i) & 1 == 1 { a } else { b })).sum();
+        let err: u32 = px
+            .iter()
+            .enumerate()
+            .map(|(i, p)| dist(*p, if (mask >> i) & 1 == 1 { a } else { b }))
+            .sum();
         if err < best.0 {
             best = (err, mask, a, b);
         }
@@ -610,14 +662,35 @@ mod tests {
     fn the_scene_fills_its_width_and_the_ship_only_lands_when_met() {
         for w in [MIN_WIDTH, 60, 80, MAX_WIDTH] {
             for sea in [Sea::Sailing, Sea::Anchored, Sea::Landed] {
-                let lines = render(w, &Scene { progress: 0.5, sea, frame: 3 });
+                let lines = render(
+                    w,
+                    &Scene {
+                        progress: 0.5,
+                        sea,
+                        frame: 3,
+                    },
+                );
                 assert_eq!(lines.len(), ROWS);
                 assert!(lines.iter().all(|l| cells(l) == w), "{w} {sea:?}");
             }
         }
         // All the way there by the estimate, but not met: still at sea.
-        let near = render(80, &Scene { progress: 1.0, sea: Sea::Sailing, frame: 0 });
-        let landed = render(80, &Scene { progress: 1.0, sea: Sea::Landed, frame: 0 });
+        let near = render(
+            80,
+            &Scene {
+                progress: 1.0,
+                sea: Sea::Sailing,
+                frame: 0,
+            },
+        );
+        let landed = render(
+            80,
+            &Scene {
+                progress: 1.0,
+                sea: Sea::Landed,
+                frame: 0,
+            },
+        );
         assert_ne!(near, landed);
     }
 }

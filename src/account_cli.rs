@@ -2,7 +2,7 @@
 //! Filesystem sharing/migration invariants live in toomux::accounts; this
 //! module owns prompting, selection and user-facing account commands.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use toomux::config::Config;
 use toomux::{config, paths, registry};
@@ -88,19 +88,45 @@ pub(crate) fn run(what: AccountCmd) -> Result<()> {
             }
             Ok(())
         }
-        AccountCmd::Rename { name, new_name, dir, force } => {
+        AccountCmd::Rename {
+            name,
+            new_name,
+            dir,
+            force,
+        } => {
             let i = pick(&cfg, std::slice::from_ref(&name), false)?[0];
-            account_rename(&mut cfg, i, &new_name, dir.as_deref().map(config::expand), force)
+            account_rename(
+                &mut cfg,
+                i,
+                &new_name,
+                dir.as_deref().map(config::expand),
+                force,
+            )
         }
-        AccountCmd::Share { names, all, group, dry_run, force } => {
+        AccountCmd::Share {
+            names,
+            all,
+            group,
+            dry_run,
+            force,
+        } => {
             let idx = pick(&cfg, &names, all)?;
             account_share(&cfg, &idx, &group, dry_run, force)
         }
-        AccountCmd::Unshare { names, fresh, dry_run, force } => {
+        AccountCmd::Unshare {
+            names,
+            fresh,
+            dry_run,
+            force,
+        } => {
             let idx = pick(&cfg, &names, false)?;
             account_unshare(&cfg, &idx, fresh, dry_run, force)
         }
-        AccountCmd::Remove { name, delete, force } => {
+        AccountCmd::Remove {
+            name,
+            delete,
+            force,
+        } => {
             let i = pick(&cfg, std::slice::from_ref(&name), false)?[0];
             account_remove(&mut cfg, i, delete, force)
         }
@@ -132,13 +158,19 @@ fn pick(cfg: &Config, names: &[String], all: bool) -> Result<Vec<usize>> {
 
 /// Claude sessions running on an account right now.
 fn open_on(cfg: &Config, i: usize) -> usize {
-    registry::load(cfg).iter().filter(|s| s.account == Some(i)).count()
+    registry::load(cfg)
+        .iter()
+        .filter(|s| s.account == Some(i))
+        .count()
 }
 
 fn busy(cfg: &Config, i: usize, force: bool) -> Result<()> {
     let n = open_on(cfg, i);
     if n > 0 && !force {
-        bail!("{}: {n} Claude sessions are open on it; close them (or --force) and run it again", cfg.accounts[i].name);
+        bail!(
+            "{}: {n} Claude sessions are open on it; close them (or --force) and run it again",
+            cfg.accounts[i].name
+        );
     }
     Ok(())
 }
@@ -149,18 +181,33 @@ fn account_list(cfg: &Config) -> String {
     if cfg.accounts.is_empty() {
         return "no accounts yet: toomux account setup, or toomux account add <name>\n".into();
     }
-    let groups: Vec<Option<std::path::PathBuf>> = (0..cfg.accounts.len()).map(|i| accounts::group_of(&cfg.account_dir(i))).collect();
+    let groups: Vec<Option<std::path::PathBuf>> = (0..cfg.accounts.len())
+        .map(|i| accounts::group_of(&cfg.account_dir(i)))
+        .collect();
     let width = cfg.accounts.iter().map(|a| a.name.len()).max().unwrap_or(0);
-    let dirs: Vec<String> = (0..cfg.accounts.len()).map(|i| short(&cfg.account_dir(i))).collect();
+    let dirs: Vec<String> = (0..cfg.accounts.len())
+        .map(|i| short(&cfg.account_dir(i)))
+        .collect();
     let dw = dirs.iter().map(String::len).max().unwrap_or(0);
     for i in 0..cfg.accounts.len() {
         let dir = cfg.account_dir(i);
-        let login = if toomux::credentials::present(&dir) { "logged in" } else { "not logged in" };
+        let login = if toomux::credentials::present(&dir) {
+            "logged in"
+        } else {
+            "not logged in"
+        };
         let how = match &groups[i] {
             Some(g) => {
-                let with: Vec<&str> = (0..cfg.accounts.len()).filter(|&j| j != i && groups[j].as_ref() == Some(g)).map(|j| cfg.accounts[j].name.as_str()).collect();
+                let with: Vec<&str> = (0..cfg.accounts.len())
+                    .filter(|&j| j != i && groups[j].as_ref() == Some(g))
+                    .map(|j| cfg.accounts[j].name.as_str())
+                    .collect();
                 let own = accounts::describe(&dir, g).1;
-                let own = if own.is_empty() { String::new() } else { format!("; its own: {}", own.join(", ")) };
+                let own = if own.is_empty() {
+                    String::new()
+                } else {
+                    format!("; its own: {}", own.join(", "))
+                };
                 if with.is_empty() {
                     format!("in {}, with no other account yet{own}", short(g))
                 } else {
@@ -169,7 +216,10 @@ fn account_list(cfg: &Config) -> String {
             }
             None => "stands alone".into(),
         };
-        out.push_str(&format!("{:<width$}  {:<dw$}  {login:<13}  {how}\n", cfg.accounts[i].name, dirs[i]));
+        out.push_str(&format!(
+            "{:<width$}  {:<dw$}  {login:<13}  {how}\n",
+            cfg.accounts[i].name, dirs[i]
+        ));
     }
     out
 }
@@ -180,9 +230,17 @@ fn account_add(cfg: &mut Config, name: &str, dir: Option<std::path::PathBuf>) ->
         bail!("there's already an account called {name}");
     }
     let dir = dir.unwrap_or_else(|| config::home().join(format!(".claude-{name}")));
-    let protected = [paths::config(), paths::state(), paths::data(), paths::runtime()];
+    let protected = [
+        paths::config(),
+        paths::state(),
+        paths::data(),
+        paths::runtime(),
+    ];
     let dir = toomux::accounts::validate_root(&dir, &config::home(), &protected)?;
-    if (0..cfg.accounts.len()).any(|i| std::fs::canonicalize(cfg.account_dir(i)).ok() == std::fs::canonicalize(&dir).ok() && dir.exists()) {
+    if (0..cfg.accounts.len()).any(|i| {
+        std::fs::canonicalize(cfg.account_dir(i)).ok() == std::fs::canonicalize(&dir).ok()
+            && dir.exists()
+    }) {
         bail!("{} is already an account", short(&dir));
     }
     let brought = dir.is_dir();
@@ -191,24 +249,44 @@ fn account_add(cfg: &mut Config, name: &str, dir: Option<std::path::PathBuf>) ->
     }
     std::fs::create_dir_all(&dir)?;
     toomux::accounts::mark_account(&dir)?;
-    cfg.accounts.push(config::Account { name: name.to_string(), config_dir: short(&dir) });
+    cfg.accounts.push(config::Account {
+        name: name.to_string(),
+        config_dir: short(&dir),
+    });
     config::save_accounts(&cfg.accounts, None)?;
     let i = cfg.accounts.len() - 1;
-    println!("{name}: {} {}, standing alone", short(&dir), if brought { "brought in as it is" } else { "made" });
+    println!(
+        "{name}: {} {}, standing alone",
+        short(&dir),
+        if brought {
+            "brought in as it is"
+        } else {
+            "made"
+        }
+    );
     let bin = std::env::current_exe()?.display().to_string();
     println!("{name}: {}", install_statusline(&dir, &bin)?);
     println!("{name}: {}", install_hook(&dir, &bin)?);
     println!("{name}: {}", register_mcp(cfg, &dir, &bin));
     if !toomux::credentials::present(&dir) {
         match toomux::credentials::config_dir_var(&dir) {
-            Some(_) => println!("{name}: to log in, CLAUDE_CONFIG_DIR={} claude, then /login", short(&dir)),
+            Some(_) => println!(
+                "{name}: to log in, CLAUDE_CONFIG_DIR={} claude, then /login",
+                short(&dir)
+            ),
             None => println!("{name}: to log in, claude, then /login"),
         }
     }
     Ok(i)
 }
 
-fn account_rename(cfg: &mut Config, i: usize, new: &str, dir: Option<std::path::PathBuf>, force: bool) -> Result<()> {
+fn account_rename(
+    cfg: &mut Config,
+    i: usize,
+    new: &str,
+    dir: Option<std::path::PathBuf>,
+    force: bool,
+) -> Result<()> {
     toomux::accounts::valid_name(new)?;
     let old = cfg.accounts[i].name.clone();
     if cfg.account_by_name(new).is_some_and(|j| j != i) {
@@ -216,9 +294,17 @@ fn account_rename(cfg: &mut Config, i: usize, new: &str, dir: Option<std::path::
     }
     let here = cfg.account_dir(i);
     // The folder follows the name when it was named after it.
-    let to = dir.or_else(|| (here == config::home().join(format!(".claude-{old}"))).then(|| config::home().join(format!(".claude-{new}"))));
+    let to = dir.or_else(|| {
+        (here == config::home().join(format!(".claude-{old}")))
+            .then(|| config::home().join(format!(".claude-{new}")))
+    });
     if let Some(to) = to.as_ref().filter(|t| **t != here) {
-        let protected = [paths::config(), paths::state(), paths::data(), paths::runtime()];
+        let protected = [
+            paths::config(),
+            paths::state(),
+            paths::data(),
+            paths::runtime(),
+        ];
         let to = toomux::accounts::validate_root(to, &config::home(), &protected)?;
         if to.exists() {
             bail!("{} is already there", short(&to));
@@ -228,21 +314,34 @@ fn account_rename(cfg: &mut Config, i: usize, new: &str, dir: Option<std::path::
             std::fs::create_dir_all(p)?;
         }
         // Links inside point at the group by absolute path, so they move intact.
-        std::fs::rename(&here, &to).with_context(|| format!("moving {} to {} (it must stay on the same disk)", short(&here), short(&to)))?;
+        std::fs::rename(&here, &to).with_context(|| {
+            format!(
+                "moving {} to {} (it must stay on the same disk)",
+                short(&here),
+                short(&to)
+            )
+        })?;
         cfg.accounts[i].config_dir = short(&to);
         println!("{old}: {} moved to {}", short(&here), short(&to));
         if let Some(said) = toomux::credentials::carry(&here, &to) {
             println!("{old}: {said}");
         }
-        println!("{old}: anything of yours that sets CLAUDE_CONFIG_DIR={} (aliases, scripts) wants the new folder", short(&here));
+        println!(
+            "{old}: anything of yours that sets CLAUDE_CONFIG_DIR={} (aliases, scripts) wants the new folder",
+            short(&here)
+        );
     }
     cfg.accounts[i].name = new.to_string();
     config::save_accounts(&cfg.accounts, Some((&old, new)))?;
     // Pins and the restart record name accounts too.
     for f in ["state.json", "running.json", "restore.json"] {
         let path = paths::state().join(f);
-        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
-        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
         fn walk(v: &mut serde_json::Value, old: &str, new: &str) {
             match v {
                 serde_json::Value::Object(m) => {
@@ -264,7 +363,13 @@ fn account_rename(cfg: &mut Config, i: usize, new: &str, dir: Option<std::path::
     Ok(())
 }
 
-fn account_share(cfg: &Config, idx: &[usize], group: &str, dry_run: bool, force: bool) -> Result<()> {
+fn account_share(
+    cfg: &Config,
+    idx: &[usize],
+    group: &str,
+    dry_run: bool,
+    force: bool,
+) -> Result<()> {
     use toomux::accounts::{self, Step};
     if group != accounts::DEFAULT_GROUP {
         accounts::valid_name(group)?;
@@ -276,13 +381,20 @@ fn account_share(cfg: &Config, idx: &[usize], group: &str, dry_run: bool, force:
         let name = &cfg.accounts[i].name;
         let dir = cfg.account_dir(i);
         if let Some(g) = accounts::group_of(&dir)
-            && std::fs::canonicalize(&shared).ok().as_ref() != Some(&g) {
-                println!("{name}: shares {} already; toomux account unshare {name} first", short(&g));
-                continue;
-            }
+            && std::fs::canonicalize(&shared).ok().as_ref() != Some(&g)
+        {
+            println!(
+                "{name}: shares {} already; toomux account unshare {name} first",
+                short(&g)
+            );
+            continue;
+        }
         let steps = accounts::plan(&dir, &shared);
         if steps.is_empty() {
-            println!("{name}: already shares everything it can in {}", short(&shared));
+            println!(
+                "{name}: already shares everything it can in {}",
+                short(&shared)
+            );
             continue;
         }
         if !dry_run {
@@ -291,17 +403,29 @@ fn account_share(cfg: &Config, idx: &[usize], group: &str, dry_run: bool, force:
         let (mut linked, mut merged, mut clashed) = (0, 0, 0);
         for s in &steps {
             match s {
-                Step::Move { from, to } => println!("{name}: {} {will}moved to {}", short(from), short(to)),
+                Step::Move { from, to } => {
+                    println!("{name}: {} {will}moved to {}", short(from), short(to))
+                }
                 Step::Merge { clashes, .. } => {
                     merged += 1;
                     clashed += clashes;
                 }
-                Step::Append { from, to } => println!("{name}: {} {will}added to {}", short(from), short(to)),
-                Step::Combine { from, to } => println!("{name}: {} {will}combined with {} (no setting differs)", short(from), short(to)),
+                Step::Append { from, to } => {
+                    println!("{name}: {} {will}added to {}", short(from), short(to))
+                }
+                Step::Combine { from, to } => println!(
+                    "{name}: {} {will}combined with {} (no setting differs)",
+                    short(from),
+                    short(to)
+                ),
                 Step::Create { .. } | Step::Same { .. } => {}
                 Step::Link { .. } => linked += 1,
                 Step::Differs { at, shared } => {
-                    println!("{name}: {} differs from {}: left as {name}'s own; make them one and run it again", short(at), short(shared))
+                    println!(
+                        "{name}: {} differs from {}: left as {name}'s own; make them one and run it again",
+                        short(at),
+                        short(shared)
+                    )
                 }
             }
         }
@@ -310,15 +434,29 @@ fn account_share(cfg: &Config, idx: &[usize], group: &str, dry_run: bool, force:
             accounts::apply(&steps, name)?;
         }
         if merged > 0 {
-            let kept = if clashed > 0 { format!("; {clashed} files both had with other contents are kept as *.from-{name}") } else { String::new() };
+            let kept = if clashed > 0 {
+                format!("; {clashed} files both had with other contents are kept as *.from-{name}")
+            } else {
+                String::new()
+            };
             println!("{name}: {merged} folders {will}merged into the group's{kept}");
         }
-        println!("{name}: {linked} {} {will}linked to {}", if linked == 1 { "entry" } else { "entries" }, short(&shared));
+        println!(
+            "{name}: {linked} {} {will}linked to {}",
+            if linked == 1 { "entry" } else { "entries" },
+            short(&shared)
+        );
     }
     Ok(())
 }
 
-fn account_unshare(cfg: &Config, idx: &[usize], fresh: bool, dry_run: bool, force: bool) -> Result<()> {
+fn account_unshare(
+    cfg: &Config,
+    idx: &[usize],
+    fresh: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<()> {
     use toomux::accounts;
     let will = if dry_run { "would " } else { "" };
     for &i in idx {
@@ -333,14 +471,28 @@ fn account_unshare(cfg: &Config, idx: &[usize], fresh: bool, dry_run: bool, forc
             busy(cfg, i, force)?;
             accounts::apply_leave(&steps)?;
         }
-        let how = if fresh { "starting with no history (its settings come along)".to_string() } else { format!("with its own copy of what it saw ({})", human(accounts::leave_size(&steps))) };
-        println!("{name}: {will}{} {}, {how}", if dry_run { "leave" } else { "left" }, short(&group));
+        let how = if fresh {
+            "starting with no history (its settings come along)".to_string()
+        } else {
+            format!(
+                "with its own copy of what it saw ({})",
+                human(accounts::leave_size(&steps))
+            )
+        };
+        println!(
+            "{name}: {will}{} {}, {how}",
+            if dry_run { "leave" } else { "left" },
+            short(&group)
+        );
         let left: Vec<&str> = (0..cfg.accounts.len())
             .filter(|&j| j != i && accounts::group_of(&cfg.account_dir(j)).as_ref() == Some(&group))
             .map(|j| cfg.accounts[j].name.as_str())
             .collect();
         if left.is_empty() && !dry_run {
-            println!("{}: no account shares it now; it stays until you delete it", short(&group));
+            println!(
+                "{}: no account shares it now; it stays until you delete it",
+                short(&group)
+            );
         }
     }
     Ok(())
@@ -351,13 +503,25 @@ fn account_remove(cfg: &mut Config, i: usize, delete: bool, force: bool) -> Resu
     let dir = cfg.account_dir(i);
     busy(cfg, i, force)?;
     if delete && dir.exists() {
-        let protected = [paths::config(), paths::state(), paths::data(), paths::runtime()];
+        let protected = [
+            paths::config(),
+            paths::state(),
+            paths::data(),
+            paths::runtime(),
+        ];
         let dir = toomux::accounts::validate_delete(&dir, &config::home(), &protected)?;
         // Links into a group go as links: what the group holds stays.
         std::fs::remove_dir_all(&dir).with_context(|| format!("deleting {}", short(&dir)))?;
-        println!("{name}: {} deleted (its login and anything it didn't share)", short(&dir));
+        println!(
+            "{name}: {} deleted (its login and anything it didn't share)",
+            short(&dir)
+        );
     } else {
-        println!("{name}: {} stays as it is; toomux account add {name} --dir {} brings it back", short(&dir), short(&dir));
+        println!(
+            "{name}: {} stays as it is; toomux account add {name} --dir {} brings it back",
+            short(&dir),
+            short(&dir)
+        );
     }
     cfg.accounts.remove(i);
     config::save_accounts(&cfg.accounts, None)?;
@@ -378,7 +542,11 @@ fn ask(q: &str, default: &str) -> Result<String> {
         bail!("stopped");
     }
     let a = line.trim();
-    Ok(if a.is_empty() { default.to_string() } else { a.to_string() })
+    Ok(if a.is_empty() {
+        default.to_string()
+    } else {
+        a.to_string()
+    })
 }
 
 /// The walk-through: names and folders of the accounts there are, any new
@@ -387,7 +555,9 @@ fn account_setup(mut cfg: Config) -> Result<()> {
     use std::io::IsTerminal;
     use toomux::accounts;
     if !std::io::stdin().is_terminal() {
-        bail!("setup asks questions; without a terminal use toomux account add, rename, share and unshare");
+        bail!(
+            "setup asks questions; without a terminal use toomux account add, rename, share and unshare"
+        );
     }
     let home = config::home();
     if cfg.accounts.is_empty() {
@@ -399,12 +569,17 @@ fn account_setup(mut cfg: Config) -> Result<()> {
             let old = cfg.accounts[i].name.clone();
             let name = ask(&format!("\n{} is called", short(&cfg.account_dir(i))), &old)?;
             let here = cfg.account_dir(i);
-            let suggested = if here == home.join(format!(".claude-{old}")) { home.join(format!(".claude-{name}")) } else { here.clone() };
+            let suggested = if here == home.join(format!(".claude-{old}")) {
+                home.join(format!(".claude-{name}"))
+            } else {
+                here.clone()
+            };
             let dir = config::expand(&ask(&format!("{name}'s folder"), &short(&suggested))?);
             if (name != old || dir != here)
-                && let Err(e) = account_rename(&mut cfg, i, &name, Some(dir), false) {
-                    println!("{e}");
-                }
+                && let Err(e) = account_rename(&mut cfg, i, &name, Some(dir), false)
+            {
+                println!("{e}");
+            }
         }
     }
     loop {
@@ -412,7 +587,10 @@ fn account_setup(mut cfg: Config) -> Result<()> {
         if name.is_empty() {
             break;
         }
-        let dir = config::expand(&ask(&format!("{name}'s folder"), &format!("~/.claude-{name}"))?);
+        let dir = config::expand(&ask(
+            &format!("{name}'s folder"),
+            &format!("~/.claude-{name}"),
+        )?);
         if let Err(e) = account_add(&mut cfg, &name, Some(dir)) {
             println!("{e}");
         }
@@ -427,18 +605,56 @@ fn account_setup(mut cfg: Config) -> Result<()> {
         .filter(|&i| shared_c.is_some() && accounts::group_of(&cfg.account_dir(i)) == shared_c)
         .map(|i| cfg.accounts[i].name.clone())
         .collect();
-    println!("\naccounts that share see one history: every conversation and memory, resumable under any of them.");
-    let answer = ask("which share? names with spaces between, or none", &if now.is_empty() { "none".into() } else { now.join(" ") })?;
-    let want: Vec<String> = if answer == "none" { vec![] } else { answer.split_whitespace().map(str::to_string).collect() };
-    let join = pick(&cfg, &want.iter().filter(|n| !now.iter().any(|m| m.eq_ignore_ascii_case(n))).cloned().collect::<Vec<_>>(), false).unwrap_or_default();
-    let leave: Vec<String> = now.iter().filter(|m| !want.iter().any(|n| n.eq_ignore_ascii_case(m))).cloned().collect();
+    println!(
+        "\naccounts that share see one history: every conversation and memory, resumable under any of them."
+    );
+    let answer = ask(
+        "which share? names with spaces between, or none",
+        &if now.is_empty() {
+            "none".into()
+        } else {
+            now.join(" ")
+        },
+    )?;
+    let want: Vec<String> = if answer == "none" {
+        vec![]
+    } else {
+        answer.split_whitespace().map(str::to_string).collect()
+    };
+    let join = pick(
+        &cfg,
+        &want
+            .iter()
+            .filter(|n| !now.iter().any(|m| m.eq_ignore_ascii_case(n)))
+            .cloned()
+            .collect::<Vec<_>>(),
+        false,
+    )
+    .unwrap_or_default();
+    let leave: Vec<String> = now
+        .iter()
+        .filter(|m| !want.iter().any(|n| n.eq_ignore_ascii_case(m)))
+        .cloned()
+        .collect();
     if !join.is_empty() {
         account_share(&cfg, &join, accounts::DEFAULT_GROUP, false, false)?;
     }
     if !leave.is_empty() {
-        let copy = ask(&format!("{} leave: keep a copy of the history they saw? (y: a copy, n: start empty)", leave.join(", ")), "y")?;
+        let copy = ask(
+            &format!(
+                "{} leave: keep a copy of the history they saw? (y: a copy, n: start empty)",
+                leave.join(", ")
+            ),
+            "y",
+        )?;
         let idx = pick(&cfg, &leave, false)?;
-        account_unshare(&cfg, &idx, !copy.to_lowercase().starts_with('y'), false, false)?;
+        account_unshare(
+            &cfg,
+            &idx,
+            !copy.to_lowercase().starts_with('y'),
+            false,
+            false,
+        )?;
     }
     println!("\n{}", account_list(&cfg));
     Ok(())

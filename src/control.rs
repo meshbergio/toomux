@@ -12,7 +12,11 @@ pub enum Event {
     /// Bytes a pane wrote.
     Output { pane: String, data: Vec<u8> },
     /// The answer to command number `seq` (in the order they were sent).
-    Reply { seq: u64, ok: bool, lines: Vec<String> },
+    Reply {
+        seq: u64,
+        ok: bool,
+        lines: Vec<String>,
+    },
     /// Windows or panes changed shape (resize, split, close).
     Layout,
     /// The session our client is attached to changed.
@@ -33,7 +37,11 @@ impl Control {
     /// Attach in control mode to `server`: to its most recent session, or,
     /// on the default server only, a new one. Every event goes to `tx`,
     /// wrapped by `wrap`.
-    pub fn start<M: Send + 'static>(server: &str, tx: Sender<M>, wrap: impl Fn(Event) -> M + Send + 'static) -> Result<Self> {
+    pub fn start<M: Send + 'static>(
+        server: &str,
+        tx: Sender<M>,
+        wrap: impl Fn(Event) -> M + Send + 'static,
+    ) -> Result<Self> {
         let has_server = crate::tmux::command_on(server)
             .args(["has-session"])
             .env_remove("TMUX")
@@ -58,7 +66,12 @@ impl Control {
         let stdin = child.stdin.take().context("tmux stdin")?;
         let stdout = child.stdout.take().context("tmux stdout")?;
         std::thread::spawn(move || read(BufReader::new(stdout), tx, wrap));
-        Ok(Self { server: server.to_string(), stdin, child, next: 0 })
+        Ok(Self {
+            server: server.to_string(),
+            stdin,
+            child,
+            next: 0,
+        })
     }
 
     /// Send commands as one line: tmux runs them back to back, with nothing
@@ -125,12 +138,22 @@ fn read<M>(mut r: impl BufRead, tx: Sender<M>, wrap: impl Fn(Event) -> M) {
             let mine = rest.split(|b| *b == b' ').nth(2) == Some(b"1");
             block = Some((mine, Vec::new()));
         } else if let Some(rest) = line.strip_prefix(b"%output ") {
-            let Some(sp) = rest.iter().position(|b| *b == b' ') else { continue };
+            let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+                continue;
+            };
             let pane = String::from_utf8_lossy(&rest[..sp]).into_owned();
-            let _ = tx.send(wrap(Event::Output { pane, data: unescape(&rest[sp + 1..]) }));
-        } else if line.starts_with(b"%layout-change") || line.starts_with(b"%window-") || line.starts_with(b"%unlinked-window") {
+            let _ = tx.send(wrap(Event::Output {
+                pane,
+                data: unescape(&rest[sp + 1..]),
+            }));
+        } else if line.starts_with(b"%layout-change")
+            || line.starts_with(b"%window-")
+            || line.starts_with(b"%unlinked-window")
+        {
             let _ = tx.send(wrap(Event::Layout));
-        } else if line.starts_with(b"%session-changed") || line.starts_with(b"%client-session-changed") {
+        } else if line.starts_with(b"%session-changed")
+            || line.starts_with(b"%client-session-changed")
+        {
             let _ = tx.send(wrap(Event::Session));
         } else if line.starts_with(b"%exit") {
             let _ = tx.send(wrap(Event::Exit));
@@ -143,7 +166,10 @@ fn unescape(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if s[i] == b'\\' && i + 3 < s.len() && s[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+        if s[i] == b'\\'
+            && i + 3 < s.len()
+            && s[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+        {
             out.push((s[i + 1] - b'0') * 64 + (s[i + 2] - b'0') * 8 + (s[i + 3] - b'0'));
             i += 4;
         } else {

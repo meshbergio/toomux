@@ -107,13 +107,17 @@ impl Session {
     }
 
     pub fn account_name<'a>(&self, cfg: &'a Config) -> &'a str {
-        self.account.map(|i| cfg.accounts[i].name.as_str()).unwrap_or("unknown")
+        self.account
+            .map(|i| cfg.accounts[i].name.as_str())
+            .unwrap_or("unknown")
     }
 
     /// Short project label: path under ~/storage/projects or ~.
     pub fn place(&self) -> String {
         let t = crate::config::tilde(&self.cwd);
-        t.strip_prefix("~/storage/projects/").map(str::to_string).unwrap_or(t)
+        t.strip_prefix("~/storage/projects/")
+            .map(str::to_string)
+            .unwrap_or(t)
     }
 
     pub fn pin_record(&self, cfg: &Config) -> crate::state::Pin {
@@ -140,19 +144,40 @@ impl Session {
         use crate::handover::Phase;
         match &self.handover {
             Some(Phase::Running) => return ("handing over".into(), None, since),
-            Some(Phase::Asked { written: false }) => return ("handing over".into(), Some("writing its brief".into()), since),
+            Some(Phase::Asked { written: false }) => {
+                return (
+                    "handing over".into(),
+                    Some("writing its brief".into()),
+                    since,
+                );
+            }
             Some(Phase::Asked { written: true }) => {
-                return ("handing over".into(), Some("brief written · goes when its turn ends".into()), since)
+                return (
+                    "handing over".into(),
+                    Some("brief written · goes when its turn ends".into()),
+                    since,
+                );
             }
             // Limited, it can't hand over until the reset, and is tried then:
             // the limit is the news.
-            Some(Phase::Failed(why)) if self.limit.is_none() => return ("handover failed".into(), Some(why.clone()), since),
+            Some(Phase::Failed(why)) if self.limit.is_none() => {
+                return ("handover failed".into(), Some(why.clone()), since);
+            }
             _ => {}
         }
         if let Some(l) = &self.limit {
             let back = crate::transcript::reset_at(l).map(|t| back_at(t.timestamp_millis(), now));
-            let then = if matches!(self.handover, Some(Phase::Failed(_))) { " · hands over then" } else { "" };
-            return ("limit".into(), back.map(|b| format!("{b}{then}")).or_else(|| Some(l.clone())), since);
+            let then = if matches!(self.handover, Some(Phase::Failed(_))) {
+                " · hands over then"
+            } else {
+                ""
+            };
+            return (
+                "limit".into(),
+                back.map(|b| format!("{b}{then}"))
+                    .or_else(|| Some(l.clone())),
+                since,
+            );
         }
         let word = match self.state {
             State::NeedsYou => "needs you",
@@ -170,7 +195,10 @@ impl Session {
 
     pub fn status_text(&self, now: i64) -> String {
         if self.restore.is_some() {
-            return format!("was running {} ago, before the restart", ago(now - self.since_ms));
+            return format!(
+                "was running {} ago, before the restart",
+                ago(now - self.since_ms)
+            );
         }
         if self.dormant {
             return match self.since_ms {
@@ -198,11 +226,22 @@ impl Session {
     }
 
     pub fn transcript(&self, cfg: &Config) -> Option<PathBuf> {
-        let dir: String = self.cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        let dir: String = self
+            .cwd
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
         let file = format!("{}.jsonl", self.id);
-        let mut roots: Vec<PathBuf> = self.config_dir.iter().map(|d| crate::config::expand(d)).collect();
+        let mut roots: Vec<PathBuf> = self
+            .config_dir
+            .iter()
+            .map(|d| crate::config::expand(d))
+            .collect();
         roots.extend((0..cfg.accounts.len()).map(|i| cfg.account_dir(i)));
-        roots.into_iter().map(|r| r.join("projects").join(&dir).join(&file)).find(|p| p.is_file())
+        roots
+            .into_iter()
+            .map(|r| r.join("projects").join(&dir).join(&file))
+            .find(|p| p.is_file())
     }
 }
 
@@ -212,8 +251,15 @@ pub fn back_at(at_ms: i64, now: i64) -> String {
     use chrono::TimeZone;
     // Resets land a hair either side of the hour: read it to the nearest minute.
     let at_ms = (at_ms + 30_000) / 60_000 * 60_000;
-    let Some(t) = chrono::Local.timestamp_millis_opt(at_ms).single() else { return String::new() };
-    let clock = if t.format("%M").to_string() == "00" { t.format("%-I%P") } else { t.format("%-I:%M%P") }.to_string();
+    let Some(t) = chrono::Local.timestamp_millis_opt(at_ms).single() else {
+        return String::new();
+    };
+    let clock = if t.format("%M").to_string() == "00" {
+        t.format("%-I%P")
+    } else {
+        t.format("%-I:%M%P")
+    }
+    .to_string();
     if at_ms - now < 20 * 3_600_000 {
         format!("back {clock}")
     } else {
@@ -222,7 +268,10 @@ pub fn back_at(at_ms: i64, now: i64) -> String {
 }
 
 pub fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub fn ago(ms: i64) -> String {
@@ -273,14 +322,20 @@ pub fn load(cfg: &Config) -> Vec<Session> {
     let mut out: Vec<Session> = Vec::new();
 
     for dir in cfg.session_dirs() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.extension().and_then(|x| x.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(raw) = std::fs::read_to_string(&p) else { continue };
-            let Ok(r) = serde_json::from_str::<Raw>(&raw) else { continue };
+            let Ok(raw) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(r) = serde_json::from_str::<Raw>(&raw) else {
+                continue;
+            };
             if r.kind.as_deref().is_some_and(|k| k != "interactive") {
                 continue;
             }
@@ -289,7 +344,10 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             }
 
             let environ = crate::platform::environ(r.pid);
-            let config_dir = environ.iter().find_map(|v| v.strip_prefix("CLAUDE_CONFIG_DIR=")).map(str::to_string);
+            let config_dir = environ
+                .iter()
+                .find_map(|v| v.strip_prefix("CLAUDE_CONFIG_DIR="))
+                .map(str::to_string);
             let env = environ
                 .iter()
                 .filter_map(|v| v.split_once('='))
@@ -300,8 +358,13 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 .map(|t| t.display().to_string())
                 .filter(|t| t.starts_with("/dev/pts/") || t.starts_with("/dev/tty"));
             if let Some(t) = &tty {
-                let server = environ.iter().find_map(|v| v.strip_prefix("TMUX=")).and_then(tmux::server_in);
-                if let Some(server) = server.filter(|sv| !panes.contains_key(t) && !asked.contains(sv)) {
+                let server = environ
+                    .iter()
+                    .find_map(|v| v.strip_prefix("TMUX="))
+                    .and_then(tmux::server_in);
+                if let Some(server) =
+                    server.filter(|sv| !panes.contains_key(t) && !asked.contains(sv))
+                {
                     // A new session, or a server of someone else's. At most
                     // every 2s: a process can carry a TMUX it has left.
                     panes.extend(tmux::panes_on(&server, 2_000));
@@ -310,7 +373,11 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             }
             let pane = tty.as_ref().and_then(|t| panes.get(t)).cloned();
 
-            let since = if r.status_updated_at > 0 { r.status_updated_at } else { r.updated_at };
+            let since = if r.status_updated_at > 0 {
+                r.status_updated_at
+            } else {
+                r.updated_at
+            };
             let state = match r.status.as_deref() {
                 Some("waiting") => State::NeedsYou,
                 Some("busy") => State::Working,
@@ -318,7 +385,8 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 _ if now - since < finished_window => State::Finished,
                 _ => State::Idle,
             };
-            let named = r.name_source.as_deref() == Some("user") && r.name.as_deref().is_some_and(|n| !n.is_empty());
+            let named = r.name_source.as_deref() == Some("user")
+                && r.name.as_deref().is_some_and(|n| !n.is_empty());
             let name = match &r.name {
                 Some(n) if !n.is_empty() => n.clone(),
                 _ => r.cwd.rsplit('/').next().unwrap_or("session").to_string(),
@@ -350,14 +418,21 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 tty,
                 pane,
             };
-            let meta = s.transcript(cfg).map(|p| crate::transcript::meta(&p)).unwrap_or_default();
+            let meta = s
+                .transcript(cfg)
+                .map(|p| crate::transcript::meta(&p))
+                .unwrap_or_default();
             // A name chosen for you gives way to one you've since given it in Claude.
-            let yours_since = |n: &String| st.chosen.contains(&s.id) && named && !s.name.eq_ignore_ascii_case(n);
+            let yours_since =
+                |n: &String| st.chosen.contains(&s.id) && named && !s.name.eq_ignore_ascii_case(n);
             if let Some(n) = st.names.get(&s.id).filter(|n| !yours_since(n)) {
                 s.title = n.clone();
                 s.topic = meta.title.clone().filter(|t| !t.eq_ignore_ascii_case(n));
             } else if named {
-                s.topic = meta.title.clone().filter(|t| !t.eq_ignore_ascii_case(&s.name));
+                s.topic = meta
+                    .title
+                    .clone()
+                    .filter(|t| !t.eq_ignore_ascii_case(&s.name));
             } else if let Some(t) = meta.custom.clone().or(meta.title.clone()) {
                 s.title = t;
             } else if let Some(p) = &meta.last_prompt {
@@ -384,7 +459,10 @@ pub fn load(cfg: &Config) -> Vec<Session> {
         if let Some(t) = topics.get(&s.id) {
             s.topic = Some(t.clone());
         }
-        if s.topic.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(&s.title) || crate::handover::generic(t)) {
+        if s.topic
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case(&s.title) || crate::handover::generic(t))
+        {
             s.topic = None;
         }
     }
@@ -426,7 +504,11 @@ pub fn dormant(cfg: &Config, live: &[Session]) -> Vec<Session> {
                 id: p.id.clone(),
                 cwd: p.cwd.clone(),
                 name: p.title.clone(),
-                title: st.names.get(&p.id).cloned().unwrap_or_else(|| p.title.clone()),
+                title: st
+                    .names
+                    .get(&p.id)
+                    .cloned()
+                    .unwrap_or_else(|| p.title.clone()),
                 topic: None,
                 pr: None,
                 queued: None,
@@ -441,7 +523,9 @@ pub fn dormant(cfg: &Config, live: &[Session]) -> Vec<Session> {
                 started_ms: 0,
                 account: cfg.account_by_name(&p.account),
                 config_dir: None,
-                args: std::iter::once("claude".to_string()).chain(p.args.iter().cloned()).collect(),
+                args: std::iter::once("claude".to_string())
+                    .chain(p.args.iter().cloned())
+                    .collect(),
                 env: vec![],
                 tty: None,
                 pane: None,
@@ -482,7 +566,12 @@ pub fn reopenable(cfg: &Config, live: &[Session]) -> Vec<Session> {
     out
 }
 
-fn placeholders(cfg: &Config, listed: &[Session], entries: Vec<crate::snapshot::Entry>, at_ms: i64) -> Vec<Session> {
+fn placeholders(
+    cfg: &Config,
+    listed: &[Session],
+    entries: Vec<crate::snapshot::Entry>,
+    at_ms: i64,
+) -> Vec<Session> {
     entries
         .into_iter()
         .filter(|e| !listed.iter().any(|s| s.id == e.id))
@@ -509,7 +598,9 @@ fn placeholders(cfg: &Config, listed: &[Session], entries: Vec<crate::snapshot::
                 started_ms: at_ms,
                 account: cfg.account_by_name(&e.account),
                 config_dir: None,
-                args: std::iter::once("claude".to_string()).chain(e.args.iter().cloned()).collect(),
+                args: std::iter::once("claude".to_string())
+                    .chain(e.args.iter().cloned())
+                    .collect(),
                 env: vec![],
                 tty: None,
                 pane: None,
@@ -526,7 +617,11 @@ fn placeholders(cfg: &Config, listed: &[Session], entries: Vec<crate::snapshot::
 /// boundary. It's a hint for sessions Claude hasn't titled yet, not a label
 /// anyone needs to read in full (the preview shows the whole prompt).
 pub fn prompt_title(p: &str) -> String {
-    let first = p.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let first = p
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
     let first: String = first.split_whitespace().collect::<Vec<_>>().join(" ");
     if first.chars().count() <= 64 {
         return first;
@@ -569,15 +664,27 @@ pub const RUNTIME_VARS: &[&str] = &[
 /// survive a relaunch. Credentials stay behind: the target account's own
 /// login is what should apply.
 pub fn carry_env(k: &str) -> bool {
-    let secret = k.ends_with("_KEY") || k.ends_with("_TOKEN") || k.contains("SECRET") || k.contains("PASSWORD");
-    let relevant = k.starts_with("ANTHROPIC_") || k.starts_with("CLAUDE_CODE_") || k.starts_with("OHI_");
+    let secret = k.ends_with("_KEY")
+        || k.ends_with("_TOKEN")
+        || k.contains("SECRET")
+        || k.contains("PASSWORD");
+    let relevant =
+        k.starts_with("ANTHROPIC_") || k.starts_with("CLAUDE_CODE_") || k.starts_with("OHI_");
     relevant && !secret && k != "CLAUDE_CONFIG_DIR" && !RUNTIME_VARS.contains(&k)
 }
 
 /// A process's whole environment, less what belongs to that one process (its
 /// Claude runtime markers, its tmux pane, its config dir, which launches set).
 pub fn full_env(pid: i32) -> Vec<(String, String)> {
-    const OWN: &[&str] = &["TMUX", "TMUX_PANE", "CLAUDE_CONFIG_DIR", "_", "SHLVL", "PWD", "OLDPWD"];
+    const OWN: &[&str] = &[
+        "TMUX",
+        "TMUX_PANE",
+        "CLAUDE_CONFIG_DIR",
+        "_",
+        "SHLVL",
+        "PWD",
+        "OLDPWD",
+    ];
     crate::platform::environ(pid)
         .iter()
         .filter_map(|v| v.split_once('='))
@@ -590,20 +697,31 @@ pub fn full_env(pid: i32) -> Vec<(String, String)> {
 /// or an SDK run, which toomux can't restart).
 pub fn is_interactive(cfg: &Config, session: &str) -> bool {
     cfg.session_dirs().iter().any(|dir| {
-        std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
-            let Ok(raw) = std::fs::read_to_string(e.path()) else { return false };
-            let Ok(r) = serde_json::from_str::<Raw>(&raw) else { return false };
-            r.session_id == session && r.kind.as_deref().is_none_or(|k| k == "interactive") && alive(r.pid, r.proc_start.as_deref())
-        })
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                let Ok(raw) = std::fs::read_to_string(e.path()) else {
+                    return false;
+                };
+                let Ok(r) = serde_json::from_str::<Raw>(&raw) else {
+                    return false;
+                };
+                r.session_id == session
+                    && r.kind.as_deref().is_none_or(|k| k == "interactive")
+                    && alive(r.pid, r.proc_start.as_deref())
+            })
     })
 }
 
 /// Resolve a user-supplied target: pid, session-id prefix, or name.
 pub fn find<'a>(sessions: &'a [Session], target: &str) -> anyhow::Result<&'a Session> {
     if let Ok(pid) = target.parse::<i32>()
-        && let Some(s) = sessions.iter().find(|s| s.pid == pid) {
-            return Ok(s);
-        }
+        && let Some(s) = sessions.iter().find(|s| s.pid == pid)
+    {
+        return Ok(s);
+    }
     if let Some(s) = sessions.iter().find(|s| s.id.starts_with(target)) {
         return Ok(s);
     }
@@ -613,7 +731,10 @@ pub fn find<'a>(sessions: &'a [Session], target: &str) -> anyhow::Result<&'a Ses
         .filter(|s| s.name.to_lowercase() == t || s.title.to_lowercase() == t)
         .collect();
     let hits = if hits.is_empty() {
-        sessions.iter().filter(|s| s.name.to_lowercase().contains(&t) || s.title.to_lowercase().contains(&t)).collect()
+        sessions
+            .iter()
+            .filter(|s| s.name.to_lowercase().contains(&t) || s.title.to_lowercase().contains(&t))
+            .collect()
     } else {
         hits
     };
@@ -623,7 +744,10 @@ pub fn find<'a>(sessions: &'a [Session], target: &str) -> anyhow::Result<&'a Ses
         many => anyhow::bail!(
             "'{target}' matches {} sessions: {}",
             many.len(),
-            many.iter().map(|s| format!("{} ({})", s.title, s.pid)).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|s| format!("{} ({})", s.title, s.pid))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }

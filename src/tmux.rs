@@ -6,7 +6,7 @@
 //! `%2@/tmp/rig/sock`. `run` sends a command to the server its qualified
 //! targets name, bare.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,7 +26,10 @@ pub const OWN: &str = "toomux-";
 /// resolved, as tmux does, so on macOS `/tmp` is `/private/tmp` and matches
 /// the path tmux puts in `$TMUX`.
 pub fn socket_dir() -> PathBuf {
-    let base = std::env::var_os("TMUX_TMPDIR").map(PathBuf::from).filter(|d| d.is_dir()).unwrap_or_else(|| "/tmp".into());
+    let base = std::env::var_os("TMUX_TMPDIR")
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| "/tmp".into());
     let base = std::fs::canonicalize(&base).unwrap_or(base);
     base.join(format!("tmux-{}", unsafe { libc::getuid() }))
 }
@@ -44,13 +47,21 @@ pub fn server_at(path: &std::path::Path) -> Option<String> {
     if path.parent() == Some(socket_dir().as_path()) {
         return path.file_name()?.to_str().map(str::to_string);
     }
-    path.is_absolute().then(|| path.to_str().map(str::to_string)).flatten()
+    path.is_absolute()
+        .then(|| path.to_str().map(str::to_string))
+        .flatten()
 }
 
 /// Split a qualified target into its server and the bare target.
 pub fn split(target: &str) -> (Option<&str>, &str) {
     match target.rsplit_once('@') {
-        Some((bare, server)) if bare.starts_with('%') && !server.is_empty() && (server.starts_with('/') || !server.contains('/')) => (Some(server), bare),
+        Some((bare, server))
+            if bare.starts_with('%')
+                && !server.is_empty()
+                && (server.starts_with('/') || !server.contains('/')) =>
+        {
+            (Some(server), bare)
+        }
         _ => (None, target),
     }
 }
@@ -98,7 +109,11 @@ pub fn run_on(server: &str, args: &[&str]) -> Result<String> {
 fn output(c: &mut Command, args: &[&str]) -> Result<String> {
     let out = c.output()?;
     if !out.status.success() {
-        bail!("tmux {}: {}", args.first().unwrap_or(&""), String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "tmux {}: {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -118,15 +133,21 @@ pub fn inside() -> bool {
 /// server is gone (it crashed) is cleared away; others' are left alone.
 pub fn servers() -> Vec<String> {
     let mut out = Vec::new();
-    let Ok(dir) = std::fs::read_dir(socket_dir()) else { return out };
+    let Ok(dir) = std::fs::read_dir(socket_dir()) else {
+        return out;
+    };
     for e in dir.flatten() {
-        let Some(name) = e.file_name().to_str().map(str::to_string) else { continue };
+        let Some(name) = e.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
         if name != "default" && !name.starts_with(OWN) {
             continue;
         }
         match std::os::unix::net::UnixStream::connect(e.path()) {
             Ok(_) => out.push(name),
-            Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused && name.starts_with(OWN) => {
+            Err(err)
+                if err.kind() == std::io::ErrorKind::ConnectionRefused && name.starts_with(OWN) =>
+            {
                 let _ = std::fs::remove_file(e.path());
             }
             Err(_) => {}
@@ -150,8 +171,19 @@ fn stale(server: &str) -> bool {
 /// there is one.
 pub fn new_server_name(id: Option<&str>) -> String {
     let key: String = match id {
-        Some(id) => id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect(),
-        None => format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros()).unwrap_or(0) & 0xffff_ffff),
+        Some(id) => id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(8)
+            .collect(),
+        None => format!(
+            "{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros())
+                .unwrap_or(0)
+                & 0xffff_ffff
+        ),
     };
     let mut name = format!("{OWN}{key}");
     let mut n = 2;
@@ -164,8 +196,26 @@ pub fn new_server_name(id: Option<&str>) -> String {
 
 /// Start a new server holding one session (`name`) that runs `cmd` in `cwd`.
 /// Returns the qualified pane id.
-pub fn new_server(server: &str, name: &str, cwd: &str, env: &[String], cmd: &str) -> Result<String> {
-    let mut args: Vec<&str> = vec!["new-session", "-d", "-s", name, "-n", name, "-c", cwd, "-P", "-F", "#{pane_id}"];
+pub fn new_server(
+    server: &str,
+    name: &str,
+    cwd: &str,
+    env: &[String],
+    cmd: &str,
+) -> Result<String> {
+    let mut args: Vec<&str> = vec![
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-n",
+        name,
+        "-c",
+        cwd,
+        "-P",
+        "-F",
+        "#{pane_id}",
+    ];
     for e in env {
         args.extend(["-e", e.as_str()]);
     }
@@ -180,7 +230,10 @@ pub fn new_server(server: &str, name: &str, cwd: &str, env: &[String], cmd: &str
     // (/tmp cleared) it may not be there yet.
     if let Some(dir) = socket(server).parent() {
         use std::os::unix::fs::DirBuilderExt;
-        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+        let _ = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir);
     }
     let pane = output(&mut c, &args)?;
     // tmux can fail to start a server and still exit 0.
@@ -202,9 +255,13 @@ pub fn new_server(server: &str, name: &str, cwd: &str, env: &[String], cmd: &str
 /// as tpm would run them.
 fn server_conf() -> Option<PathBuf> {
     let home = crate::config::home();
-    let user = [home.join(".tmux.conf"), home.join(".config/tmux/tmux.conf")].into_iter().find(|p| p.is_file())?;
+    let user = [home.join(".tmux.conf"), home.join(".config/tmux/tmux.conf")]
+        .into_iter()
+        .find(|p| p.is_file())?;
     let text = std::fs::read_to_string(&user).ok()?;
-    let plugins = std::env::var_os("TMUX_PLUGIN_MANAGER_PATH").map(PathBuf::from).unwrap_or_else(|| home.join(".tmux/plugins"));
+    let plugins = std::env::var_os("TMUX_PLUGIN_MANAGER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".tmux/plugins"));
     let out = crate::paths::state().join("server.tmux.conf");
     let _ = std::fs::create_dir_all(out.parent()?);
     std::fs::write(&out, filter_conf(&text, &user, &plugins)).ok()?;
@@ -212,8 +269,15 @@ fn server_conf() -> Option<PathBuf> {
 }
 
 fn filter_conf(text: &str, from: &std::path::Path, plugins: &std::path::Path) -> String {
-    let skip = |l: &str| ["resurrect", "continuum", "tpm/tpm"].iter().any(|w| l.contains(w));
-    let mut out = format!("# Written by toomux for its tmux servers: {} without tmux-resurrect,\n# tmux-continuum and tpm. Edit that file, not this one.\n", from.display());
+    let skip = |l: &str| {
+        ["resurrect", "continuum", "tpm/tpm"]
+            .iter()
+            .any(|w| l.contains(w))
+    };
+    let mut out = format!(
+        "# Written by toomux for its tmux servers: {} without tmux-resurrect,\n# tmux-continuum and tpm. Edit that file, not this one.\n",
+        from.display()
+    );
     let mut run = Vec::new();
     for l in text.lines() {
         let t = l.trim_start();
@@ -223,24 +287,40 @@ fn filter_conf(text: &str, from: &std::path::Path, plugins: &std::path::Path) ->
         out.push_str(l);
         out.push('\n');
         if t.starts_with("set -g @plugin ") || t.starts_with("set-option -g @plugin ") {
-            let name = t.split(['\'', '"']).nth(1).unwrap_or("").rsplit('/').next().unwrap_or("");
+            let name = t
+                .split(['\'', '"'])
+                .nth(1)
+                .unwrap_or("")
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
             if !name.is_empty() && name != "tpm" {
                 run.push(plugins.join(name));
             }
         }
     }
     for dir in run {
-        let Ok(files) = std::fs::read_dir(&dir) else { continue };
-        let mut files: Vec<PathBuf> = files.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tmux")).collect();
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = files
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "tmux"))
+            .collect();
         files.sort();
         for f in files {
-            out.push_str(&format!("run-shell {}\n", shell_words::quote(&f.display().to_string())));
+            out.push_str(&format!(
+                "run-shell {}\n",
+                shell_words::quote(&f.display().to_string())
+            ));
         }
     }
     out
 }
 
-pub const PANES_FORMAT: &str = "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_dead}";
+pub const PANES_FORMAT: &str =
+    "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_dead}";
 
 thread_local! {
     /// A pane listing of one server that arrived another way (the shell's
@@ -271,13 +351,18 @@ fn listings_path() -> PathBuf {
 }
 
 fn load_listings() -> Listings {
-    std::fs::read(listings_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    std::fs::read(listings_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
 }
 
 fn save_listings(l: &Listings) {
     let path = listings_path();
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::create_dir_all(crate::watch::dir()).is_ok() && std::fs::write(&tmp, serde_json::to_vec(l).unwrap_or_default()).is_ok() {
+    if std::fs::create_dir_all(crate::watch::dir()).is_ok()
+        && std::fs::write(&tmp, serde_json::to_vec(l).unwrap_or_default()).is_ok()
+    {
         let _ = std::fs::rename(&tmp, &path);
     }
 }
@@ -318,7 +403,11 @@ pub fn panes_by_tty() -> HashMap<String, Pane> {
 pub fn panes_on(server: &str, within_ms: i64) -> HashMap<String, Pane> {
     let now = crate::registry::now_ms();
     let mut kept = load_listings();
-    if let Some((_, text)) = kept.0.get(server).filter(|(at, _)| now - at < within_ms && *at <= now) {
+    if let Some((_, text)) = kept
+        .0
+        .get(server)
+        .filter(|(at, _)| now - at < within_ms && *at <= now)
+    {
         return parse_panes(server, text);
     }
     let text = list(server);
@@ -333,7 +422,14 @@ fn parse_panes(server: &str, out: &str) -> HashMap<String, Pane> {
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
             (f.len() == 5 && f[4] != "1").then(|| {
-                (f[0].to_string(), Pane { id: qualify(server, f[1]), session: f[2].into(), window_index: f[3].into() })
+                (
+                    f[0].to_string(),
+                    Pane {
+                        id: qualify(server, f[1]),
+                        session: f[2].into(),
+                        window_index: f[3].into(),
+                    },
+                )
             })
         })
         .collect()
@@ -341,12 +437,16 @@ fn parse_panes(server: &str, out: &str) -> HashMap<String, Pane> {
 
 pub fn capture(pane: &str, lines: u16) -> Option<Vec<u8>> {
     let start = format!("-{}", lines.max(1));
-    run(&["capture-pane", "-p", "-e", "-t", pane, "-S", &start]).ok().map(String::into_bytes)
+    run(&["capture-pane", "-p", "-e", "-t", pane, "-S", &start])
+        .ok()
+        .map(String::into_bytes)
 }
 
 /// None when the pane no longer exists.
 pub fn pane_dead(pane: &str) -> Option<bool> {
-    run(&["display-message", "-p", "-t", pane, "#{pane_dead}"]).ok().map(|s| s.trim() == "1")
+    run(&["display-message", "-p", "-t", pane, "#{pane_dead}"])
+        .ok()
+        .map(|s| s.trim() == "1")
 }
 
 /// Show `pane` in this terminal: switch to it within the server we're in,
@@ -360,15 +460,26 @@ pub fn attach_here(pane: &str, client: Option<&str>) -> Result<()> {
         run(&[&["switch-client"], to_client.as_slice(), &["-t", pane]].concat())?;
         return Ok(());
     }
-    let attach = format!("{} -S {} attach-session -t {}", "tmux", shell_words::quote(&socket(server).display().to_string()), bare(pane));
+    let attach = format!(
+        "{} -S {} attach-session -t {}",
+        "tmux",
+        shell_words::quote(&socket(server).display().to_string()),
+        bare(pane)
+    );
     if inside() {
         // The terminal leaves this server and attaches to the pane's.
         let target: Vec<&str> = client.map(|c| vec!["-t", c]).unwrap_or_default();
-        Command::new("tmux").arg("detach-client").args(target).args(["-E", &attach]).output()?;
+        Command::new("tmux")
+            .arg("detach-client")
+            .args(target)
+            .args(["-E", &attach])
+            .output()?;
         return Ok(());
     }
     use std::os::unix::process::CommandExt;
-    let err = command_on(server).args(["attach-session", "-t", bare(pane)]).exec();
+    let err = command_on(server)
+        .args(["attach-session", "-t", bare(pane)])
+        .exec();
     Err(err.into())
 }
 
@@ -379,9 +490,17 @@ mod tests {
     #[test]
     fn our_servers_leave_out_layout_restoring_plugins() {
         let conf = "set -g mouse on\nset -g @plugin 'tmux-plugins/tpm'\nset -g @plugin 'tmux-plugins/tmux-resurrect'\nset -g @continuum-restore 'on'\n# resurrect notes stay\nrun '~/.tmux/plugins/tpm/tpm'\n";
-        let out = filter_conf(conf, std::path::Path::new("/x/.tmux.conf"), std::path::Path::new("/nonexistent"));
+        let out = filter_conf(
+            conf,
+            std::path::Path::new("/x/.tmux.conf"),
+            std::path::Path::new("/nonexistent"),
+        );
         assert!(out.contains("set -g mouse on") && out.contains("# resurrect notes stay"));
-        assert!(!out.contains("@plugin 'tmux-plugins/tmux-resurrect'") && !out.contains("@continuum-restore") && !out.contains("tpm/tpm'"));
+        assert!(
+            !out.contains("@plugin 'tmux-plugins/tmux-resurrect'")
+                && !out.contains("@continuum-restore")
+                && !out.contains("tpm/tpm'")
+        );
     }
 
     #[test]
@@ -398,9 +517,17 @@ mod tests {
             save_listings(&l);
         };
         keep(now - 1_000);
-        assert_eq!(panes_on(server, 2_000).get("/dev/pts/9").map(|p| p.id.as_str()), Some("%4@/nonexistent/toomux-test.sock"));
+        assert_eq!(
+            panes_on(server, 2_000)
+                .get("/dev/pts/9")
+                .map(|p| p.id.as_str()),
+            Some("%4@/nonexistent/toomux-test.sock")
+        );
         keep(now - 3_000);
-        assert!(panes_on(server, 2_000).is_empty(), "older than asked for: listed again");
+        assert!(
+            panes_on(server, 2_000).is_empty(),
+            "older than asked for: listed again"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

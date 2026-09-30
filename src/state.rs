@@ -41,8 +41,10 @@ fn path() -> PathBuf {
 
 impl State {
     pub fn load() -> Self {
-        let mut s: State =
-            std::fs::read_to_string(path()).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
+        let mut s: State = std::fs::read_to_string(path())
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
         s.pins.resize(SLOTS, None);
         s
     }
@@ -73,7 +75,9 @@ impl State {
     }
 
     pub fn slot_of(&self, id: &str) -> Option<usize> {
-        self.pins.iter().position(|p| p.as_ref().is_some_and(|p| p.id == id))
+        self.pins
+            .iter()
+            .position(|p| p.as_ref().is_some_and(|p| p.id == id))
     }
 
     /// Pin into the first free slot; None when all nine are taken.
@@ -110,7 +114,13 @@ mod tests {
     use super::*;
 
     fn pin(id: &str) -> Pin {
-        Pin { id: id.into(), cwd: "/x".into(), account: "a".into(), title: id.into(), args: vec![] }
+        Pin {
+            id: id.into(),
+            cwd: "/x".into(),
+            account: "a".into(),
+            title: id.into(),
+            args: vec![],
+        }
     }
 
     #[test]
@@ -121,7 +131,11 @@ mod tests {
         assert_eq!(s.pin(pin("b")), Some(1));
         assert_eq!(s.pin(pin("c")), Some(2));
         assert_eq!(s.unpin("b"), Some(1));
-        assert_eq!(s.slot_of("c"), Some(2), "unpinning must not renumber the others");
+        assert_eq!(
+            s.slot_of("c"),
+            Some(2),
+            "unpinning must not renumber the others"
+        );
         assert_eq!(s.pin(pin("d")), Some(1), "the gap is reused");
         assert_eq!(s.pin(pin("a")), Some(0), "pinning twice keeps the slot");
         for i in 0..9 {
@@ -152,7 +166,10 @@ mod tests {
         let s = State::load();
         assert_eq!(s.names.len(), 24);
         for i in 0..24 {
-            assert_eq!(s.names.get(&format!("session-{i}")), Some(&format!("name-{i}")));
+            assert_eq!(
+                s.names.get(&format!("session-{i}")),
+                Some(&format!("name-{i}"))
+            );
         }
         let _ = std::fs::remove_dir_all(tmp);
     }
@@ -170,7 +187,10 @@ mod tests {
             s.names.insert("recovered".into(), "yes".into());
         })
         .unwrap();
-        assert_eq!(State::load().names.get("recovered").map(String::as_str), Some("yes"));
+        assert_eq!(
+            State::load().names.get("recovered").map(String::as_str),
+            Some("yes")
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 }

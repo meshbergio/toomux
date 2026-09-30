@@ -221,7 +221,11 @@ fn find_claude() -> String {
         return USUAL.into();
     }
     std::env::var_os("PATH")
-        .and_then(|p| std::env::split_paths(&p).map(|d| d.join("claude")).find(|c| c.is_file()))
+        .and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("claude"))
+                .find(|c| c.is_file())
+        })
         .map(|c| tilde(&c.display().to_string()))
         .unwrap_or_else(|| USUAL.into())
 }
@@ -229,12 +233,16 @@ fn find_claude() -> String {
 /// Every `~/.claude` / `~/.claude-*` dir that holds its own login is an account.
 fn discover_accounts() -> Vec<Account> {
     let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(home()) else { return out };
+    let Ok(rd) = std::fs::read_dir(home()) else {
+        return out;
+    };
     let mut names: Vec<String> = rd
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| n == ".claude" || n.starts_with(".claude-"))
-        .filter(|n| !n.contains(".bak") && !n.contains("backup") && !crate::accounts::is_group_dir(n))
+        .filter(|n| {
+            !n.contains(".bak") && !n.contains("backup") && !crate::accounts::is_group_dir(n)
+        })
         .collect();
     names.sort();
     for n in names {
@@ -243,7 +251,10 @@ fn discover_accounts() -> Vec<Account> {
             continue;
         }
         let name = n.strip_prefix(".claude-").unwrap_or("default").to_string();
-        out.push(Account { name, config_dir: format!("~/{n}") });
+        out.push(Account {
+            name,
+            config_dir: format!("~/{n}"),
+        });
     }
     out
 }
@@ -261,9 +272,13 @@ impl Config {
         if !p.exists() {
             return Ok(Self::default());
         }
-        let raw = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-        let table: toml::Table = toml::from_str(&raw).with_context(|| format!("parsing {}", p.display()))?;
-        let mut cfg: Config = lift_settings(table).try_into().with_context(|| format!("parsing {}", p.display()))?;
+        let raw =
+            std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+        let table: toml::Table =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", p.display()))?;
+        let mut cfg: Config = lift_settings(table)
+            .try_into()
+            .with_context(|| format!("parsing {}", p.display()))?;
         if cfg.accounts.is_empty() {
             cfg.accounts = discover_accounts();
         }
@@ -300,18 +315,28 @@ impl Config {
 
     /// Which account a CLAUDE_CONFIG_DIR value (None = unset) belongs to.
     pub fn account_for(&self, config_dir: Option<&str>) -> Option<usize> {
-        let target = canon(&config_dir.map(expand).unwrap_or_else(|| home().join(".claude")));
-        self.accounts.iter().position(|a| canon(&expand(&a.config_dir)) == target)
+        let target = canon(
+            &config_dir
+                .map(expand)
+                .unwrap_or_else(|| home().join(".claude")),
+        );
+        self.accounts
+            .iter()
+            .position(|a| canon(&expand(&a.config_dir)) == target)
     }
 
     pub fn account_by_name(&self, name: &str) -> Option<usize> {
-        self.accounts.iter().position(|a| a.name.eq_ignore_ascii_case(name))
+        self.accounts
+            .iter()
+            .position(|a| a.name.eq_ignore_ascii_case(name))
     }
 
     /// Distinct session registries across accounts (usually one shared dir).
     pub fn session_dirs(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> = Vec::new();
-        let mut dirs: Vec<PathBuf> = (0..self.accounts.len()).map(|i| self.account_dir(i)).collect();
+        let mut dirs: Vec<PathBuf> = (0..self.accounts.len())
+            .map(|i| self.account_dir(i))
+            .collect();
         dirs.push(home().join(".claude"));
         for d in dirs {
             let s = d.join("sessions");
@@ -328,7 +353,12 @@ impl Config {
     pub fn render_default() -> String {
         let accounts = discover_accounts()
             .iter()
-            .map(|a| format!("[[accounts]]\nname = \"{}\"\nconfig_dir = \"{}\"\n", a.name, a.config_dir))
+            .map(|a| {
+                format!(
+                    "[[accounts]]\nname = \"{}\"\nconfig_dir = \"{}\"\n",
+                    a.name, a.config_dir
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let claude = find_claude();
@@ -457,7 +487,9 @@ overlay   = "#18202e"
 pub fn save_accounts(accounts: &[Account], renamed: Option<(&str, &str)>) -> Result<()> {
     let path = Config::path();
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| Config::render_default());
-    let mut doc: toml_edit::DocumentMut = raw.parse().with_context(|| format!("parsing {}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
     let mut list = toml_edit::ArrayOfTables::new();
     for a in accounts {
         let mut t = toml_edit::Table::new();
@@ -466,7 +498,10 @@ pub fn save_accounts(accounts: &[Account], renamed: Option<(&str, &str)>) -> Res
         list.push(t);
     }
     // In place when there were accounts already, so they stay where they were.
-    match doc.get_mut("accounts").and_then(|i| i.as_array_of_tables_mut()) {
+    match doc
+        .get_mut("accounts")
+        .and_then(|i| i.as_array_of_tables_mut())
+    {
         Some(old) => {
             old.clear();
             for t in list.iter() {
@@ -476,13 +511,16 @@ pub fn save_accounts(accounts: &[Account], renamed: Option<(&str, &str)>) -> Res
         None => doc["accounts"] = toml_edit::Item::ArrayOfTables(list),
     }
     if let Some((from, to)) = renamed
-        && let Some(rules) = doc.get_mut("rules").and_then(|i| i.as_array_of_tables_mut()) {
-            for r in rules.iter_mut() {
-                if r.get("account").and_then(|v| v.as_str()) == Some(from) {
-                    r["account"] = toml_edit::value(to);
-                }
+        && let Some(rules) = doc
+            .get_mut("rules")
+            .and_then(|i| i.as_array_of_tables_mut())
+    {
+        for r in rules.iter_mut() {
+            if r.get("account").and_then(|v| v.as_str()) == Some(from) {
+                r["account"] = toml_edit::value(to);
             }
         }
+    }
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
     }
@@ -557,9 +595,13 @@ mod tests {
 
     #[test]
     fn a_quest_setting_still_sets_its_voyage() {
-        let t: toml::Table = toml::from_str("quest_judge_model = \"sonnet\"\nquest_voyage = false\n").unwrap();
+        let t: toml::Table =
+            toml::from_str("quest_judge_model = \"sonnet\"\nquest_voyage = false\n").unwrap();
         let cfg: Config = lift_settings(t).try_into().unwrap();
-        assert_eq!((cfg.voyage_judge_model.as_str(), cfg.voyage_scene), ("sonnet", false));
+        assert_eq!(
+            (cfg.voyage_judge_model.as_str(), cfg.voyage_scene),
+            ("sonnet", false)
+        );
     }
 
     #[test]

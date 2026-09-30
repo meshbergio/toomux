@@ -1,7 +1,7 @@
-use crate::config::{expand, Config};
+use crate::config::{Config, expand};
 use crate::registry::{self, Session, State};
 use crate::tmux;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread::sleep;
@@ -9,18 +9,53 @@ use std::time::{Duration, Instant};
 
 /// Flags that take a value, so the value is kept alongside the flag.
 const VALUE_FLAGS: &[&str] = &[
-    "--model", "--permission-mode", "--add-dir", "--append-system-prompt", "--system-prompt",
-    "--settings", "--mcp-config", "--agent", "--agents", "--allowedTools", "--allowed-tools",
-    "--disallowedTools", "--disallowed-tools", "--fallback-model", "--plugin-dir", "--setting-sources",
-    "--effort", "--name", "-n", "--autocompact", "--betas", "--tools", "--file", "--permission-prompts",
-    "--plugin-url", "--debug-file", "--max-budget-usd", "--json-schema", "--input-format", "--output-format",
-    "--client-data-url", "--environment", "--system-prompt-snapshot", "--remote-control-session-name-prefix",
+    "--model",
+    "--permission-mode",
+    "--add-dir",
+    "--append-system-prompt",
+    "--system-prompt",
+    "--settings",
+    "--mcp-config",
+    "--agent",
+    "--agents",
+    "--allowedTools",
+    "--allowed-tools",
+    "--disallowedTools",
+    "--disallowed-tools",
+    "--fallback-model",
+    "--plugin-dir",
+    "--setting-sources",
+    "--effort",
+    "--name",
+    "-n",
+    "--autocompact",
+    "--betas",
+    "--tools",
+    "--file",
+    "--permission-prompts",
+    "--plugin-url",
+    "--debug-file",
+    "--max-budget-usd",
+    "--json-schema",
+    "--input-format",
+    "--output-format",
+    "--client-data-url",
+    "--environment",
+    "--system-prompt-snapshot",
+    "--remote-control-session-name-prefix",
 ];
 /// Value flags that take every following word (`--add-dir a b`), as Claude's
 /// own parser does. A prompt placed after one would be swallowed too.
 const VARIADIC_FLAGS: &[&str] = &[
-    "--add-dir", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools",
-    "--mcp-config", "--betas", "--tools", "--file",
+    "--add-dir",
+    "--allowedTools",
+    "--allowed-tools",
+    "--disallowedTools",
+    "--disallowed-tools",
+    "--mcp-config",
+    "--betas",
+    "--tools",
+    "--file",
 ];
 /// Flags that pick which conversation to open; replaced by our own --resume.
 const SESSION_FLAGS_WITH_VALUE: &[&str] = &["--resume", "-r", "--session-id", "--from-pr"];
@@ -116,7 +151,10 @@ pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str
         argv.push("--resume".into());
         argv.push(s.id.clone());
     }
-    Launch { env, cmd: shell_words::join(&argv) }
+    Launch {
+        env,
+        cmd: shell_words::join(&argv),
+    }
 }
 
 fn without_name(args: Vec<String>) -> Vec<String> {
@@ -139,7 +177,9 @@ pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<()> {
     let pane = s.pane.clone().context("it isn't in tmux")?;
     // Claude started from a shell in the pane: keep the shell, start the
     // fresh session from it (respawning would replace the shell).
-    let pane_pid = tmux::run(&["display-message", "-p", "-t", &pane.id, "#{pane_pid}"]).ok().and_then(|p| p.trim().parse::<i32>().ok());
+    let pane_pid = tmux::run(&["display-message", "-p", "-t", &pane.id, "#{pane_pid}"])
+        .ok()
+        .and_then(|p| p.trim().parse::<i32>().ok());
     if pane_pid.is_some_and(|p| p != s.pid) {
         return relaunch_from_shell(cfg, s, &pane.id, account, prompt);
     }
@@ -159,7 +199,9 @@ pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<()> {
             sleep(Duration::from_millis(250));
             if tmux::pane_dead(&pane.id) == Some(true) {
                 respawn(&pane.id, &s.cwd, &launch_for(cfg, s, account))?;
-                bail!("the fresh session wouldn't start, so the old conversation is back in its pane");
+                bail!(
+                    "the fresh session wouldn't start, so the old conversation is back in its pane"
+                );
             }
         }
         Ok(())
@@ -168,29 +210,66 @@ pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<()> {
     result
 }
 
-fn relaunch_from_shell(cfg: &Config, s: &Session, pane: &str, account: usize, prompt: &str) -> Result<()> {
+fn relaunch_from_shell(
+    cfg: &Config,
+    s: &Session,
+    pane: &str,
+    account: usize,
+    prompt: &str,
+) -> Result<()> {
     // The shell has its own environment; only the account and Claude's own
     // settings need saying.
     let mut plain = s.clone();
-    plain.env = s.env.iter().filter(|(k, _)| registry::carry_env(k)).cloned().collect();
+    plain.env = s
+        .env
+        .iter()
+        .filter(|(k, _)| registry::carry_env(k))
+        .cloned()
+        .collect();
     let launch = launch_with(cfg, &plain, account, Some(prompt));
     stop(s)?;
     let shell = |c: &str| matches!(c, "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh");
     let t = Instant::now();
-    while !tmux::run(&["display-message", "-p", "-t", pane, "#{pane_current_command}"]).is_ok_and(|c| shell(c.trim())) {
+    while !tmux::run(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane,
+        "#{pane_current_command}",
+    ])
+    .is_ok_and(|c| shell(c.trim()))
+    {
         if t.elapsed() > Duration::from_secs(5) {
             bail!("the pane's shell didn't come back after the old session stopped");
         }
         sleep(Duration::from_millis(100));
     }
     // A leading space keeps it out of the shell's history (ignorespace).
-    let line = format!(" cd {} && env {} {}", shell_words::quote(&s.cwd), launch.env.iter().map(|e| shell_words::quote(e).into_owned()).collect::<Vec<_>>().join(" "), launch.cmd);
+    let line = format!(
+        " cd {} && env {} {}",
+        shell_words::quote(&s.cwd),
+        launch
+            .env
+            .iter()
+            .map(|e| shell_words::quote(e).into_owned())
+            .collect::<Vec<_>>()
+            .join(" "),
+        launch.cmd
+    );
     tmux::run(&["send-keys", "-t", pane, "-l", &line])?;
     tmux::run(&["send-keys", "-t", pane, "Enter"])?;
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(8) {
         sleep(Duration::from_millis(250));
-        if tmux::run(&["display-message", "-p", "-t", pane, "#{pane_current_command}"]).is_ok_and(|c| !shell(c.trim())) {
+        if tmux::run(&[
+            "display-message",
+            "-p",
+            "-t",
+            pane,
+            "#{pane_current_command}",
+        ])
+        .is_ok_and(|c| !shell(c.trim()))
+        {
             return Ok(());
         }
     }
@@ -210,7 +289,9 @@ pub fn relaunch_fresh_in_tmux(cfg: &Config, s: &Session, prompt: &str) -> Result
         if tmux::pane_dead(&pane) != Some(false) {
             // It died at once: bring the old conversation back beside it.
             let back = place_in_tmux(cfg, s, &launch_for(cfg, s, account))?;
-            bail!("the fresh session wouldn't start, so the old conversation is back in tmux ({back})");
+            bail!(
+                "the fresh session wouldn't start, so the old conversation is back in tmux ({back})"
+            );
         }
     }
     Ok(pane)
@@ -226,7 +307,9 @@ fn respawn(pane: &str, cwd: &str, launch: &Launch) -> Result<()> {
 }
 
 pub fn jump(s: &Session) -> Result<()> {
-    let Some(p) = &s.pane else { bail!("{} runs outside tmux · ctrl-o brings it in", s.title) };
+    let Some(p) = &s.pane else {
+        bail!("{} runs outside tmux · ctrl-o brings it in", s.title)
+    };
     jump_pane(&p.id)
 }
 
@@ -245,11 +328,25 @@ pub fn jump_client(pane: &str, client: Option<&str>) -> Result<()> {
 /// window (left edge, full height, same width), then jump.
 pub fn follow(pane: &str) -> Result<()> {
     let me = std::env::var("TMUX_PANE").context("the sidebar isn't running in tmux")?;
-    let get = |p: &str, f: &str| tmux::run(&["display-message", "-p", "-t", p, f]).map(|s| s.trim().to_string());
+    let get = |p: &str, f: &str| {
+        tmux::run(&["display-message", "-p", "-t", p, f]).map(|s| s.trim().to_string())
+    };
     let same_server = tmux::current_server().as_deref() == tmux::server_of(pane);
     if same_server && get(&me, "#{window_id}")? != get(pane, "#{window_id}")? {
         let width = get(&me, "#{pane_width}")?;
-        tmux::run(&["join-pane", "-d", "-h", "-b", "-f", "-l", &width, "-s", &me, "-t", pane])?;
+        tmux::run(&[
+            "join-pane",
+            "-d",
+            "-h",
+            "-b",
+            "-f",
+            "-l",
+            &width,
+            "-s",
+            &me,
+            "-t",
+            pane,
+        ])?;
     }
     jump_pane(pane)
 }
@@ -260,8 +357,16 @@ pub const SIDEBAR_WIDTH: &str = "36";
 /// There is only ever one; showing it elsewhere moves it.
 pub fn toggle_sidebar() -> Result<()> {
     let here = tmux::run(&["display-message", "-p", "#{window_id}\t#{pane_id}"])?;
-    let (window, pane) = here.trim().split_once('\t').context("no current tmux pane")?;
-    let panes = tmux::run(&["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{@toomux_sidebar}"])?;
+    let (window, pane) = here
+        .trim()
+        .split_once('\t')
+        .context("no current tmux pane")?;
+    let panes = tmux::run(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_id}\t#{window_id}\t#{@toomux_sidebar}",
+    ])?;
     let existing = panes.lines().filter_map(|l| {
         let f: Vec<&str> = l.split('\t').collect();
         (f.len() == 3 && f[2] == "1").then(|| (f[0].to_string(), f[1].to_string()))
@@ -272,14 +377,38 @@ pub fn toggle_sidebar() -> Result<()> {
         if win == window {
             tmux::run(&["kill-pane", "-t", &id])?;
         } else {
-            tmux::run(&["join-pane", "-d", "-h", "-b", "-f", "-l", SIDEBAR_WIDTH, "-s", &id, "-t", pane])?;
+            tmux::run(&[
+                "join-pane",
+                "-d",
+                "-h",
+                "-b",
+                "-f",
+                "-l",
+                SIDEBAR_WIDTH,
+                "-s",
+                &id,
+                "-t",
+                pane,
+            ])?;
         }
     }
     if !found {
         let exe = std::env::current_exe()?.display().to_string();
         let cmd = shell_words::join([exe.as_str(), "sidebar"]);
         let id = tmux::run(&[
-            "split-window", "-d", "-h", "-b", "-f", "-l", SIDEBAR_WIDTH, "-t", pane, "-P", "-F", "#{pane_id}", &cmd,
+            "split-window",
+            "-d",
+            "-h",
+            "-b",
+            "-f",
+            "-l",
+            SIDEBAR_WIDTH,
+            "-t",
+            pane,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            &cmd,
         ])?;
         tmux::run(&["set-option", "-p", "-t", id.trim(), "@toomux_sidebar", "1"])?;
     }
@@ -306,13 +435,19 @@ pub fn window_name(title: &str) -> String {
 /// current tmux session, else the adopt session.
 /// Returns the new pane id.
 pub fn revive(cfg: &Config, s: &Session) -> Result<String> {
-    let account = s.account.context("the account it last ran on isn't configured")?;
+    let account = s
+        .account
+        .context("the account it last ran on isn't configured")?;
     if !std::path::Path::new(&s.cwd).is_dir() {
         bail!("its folder {} no longer exists", s.cwd);
     }
     let launch = launch_for(cfg, s, account);
     // Under the name it had before a restart, if someone chose one.
-    let name = s.restore.clone().and_then(|(_, named)| named).unwrap_or_else(|| window_name(&s.title));
+    let name = s
+        .restore
+        .clone()
+        .and_then(|(_, named)| named)
+        .unwrap_or_else(|| window_name(&s.title));
     in_own_server(Some(&s.id), &name, &s.cwd, &launch)
 }
 
@@ -339,7 +474,11 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     argv.push(expand(&cfg.claude_bin).display().to_string());
     argv.extend(args.iter().cloned());
     let cmd = shell_words::join(&argv);
-    let name = folder.rsplit('/').find(|p| !p.is_empty()).unwrap_or("claude").to_string();
+    let name = folder
+        .rsplit('/')
+        .find(|p| !p.is_empty())
+        .unwrap_or("claude")
+        .to_string();
     in_own_server(None, &name, folder, &Launch { env, cmd })
 }
 
@@ -348,12 +487,22 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
 pub fn prompt_empty(pane: &str) -> bool {
     // Scrolled back (copy mode): what's typed can't be seen, and keys would go
     // to copy mode rather than the prompt.
-    if tmux::run(&["display-message", "-p", "-t", pane, "#{pane_in_mode}"]).is_ok_and(|m| m.trim() != "0") {
+    if tmux::run(&["display-message", "-p", "-t", pane, "#{pane_in_mode}"])
+        .is_ok_and(|m| m.trim() != "0")
+    {
         return false;
     }
-    let Some(raw) = tmux::capture(pane, 40) else { return false };
+    let Some(raw) = tmux::capture(pane, 40) else {
+        return false;
+    };
     let screen = String::from_utf8_lossy(&raw);
-    let Some(line) = screen.lines().rev().find(|l| strip_ansi(l).trim_start().starts_with('❯')) else { return false };
+    let Some(line) = screen
+        .lines()
+        .rev()
+        .find(|l| strip_ansi(l).trim_start().starts_with('❯'))
+    else {
+        return false;
+    };
     let typed = typed_text(line);
     typed.is_empty() || typed.starts_with("Try \"")
 }
@@ -467,17 +616,25 @@ pub fn rename(cfg: &Config, s: &Session, name: &str, for_you: bool) -> Result<St
             st.chosen.remove(&s.id);
         }
         if let Some(n) = st.slot_of(&s.id)
-            && let Some(p) = st.pins[n].as_mut() {
-                p.title = if name.is_empty() { s.title.clone() } else { name.clone() };
-            }
+            && let Some(p) = st.pins[n].as_mut()
+        {
+            p.title = if name.is_empty() {
+                s.title.clone()
+            } else {
+                name.clone()
+            };
+        }
     })?;
     if name.is_empty() {
         return Ok(format!("{} goes back to its own title", s.title));
     }
     let mut also = Vec::new();
     if let Some(p) = &s.pane {
-        let panes = tmux::run(&["display-message", "-p", "-t", &p.id, "#{window_panes}"]).unwrap_or_default();
-        if panes.trim() == "1" && tmux::run(&["rename-window", "-t", &p.id, &window_name(&name)]).is_ok() {
+        let panes = tmux::run(&["display-message", "-p", "-t", &p.id, "#{window_panes}"])
+            .unwrap_or_default();
+        if panes.trim() == "1"
+            && tmux::run(&["rename-window", "-t", &p.id, &window_name(&name)]).is_ok()
+        {
             also.push("tmux window");
         }
         let at_prompt = s.is_idle() || s.state == registry::State::Background;
@@ -533,7 +690,10 @@ pub fn stop(s: &Session) -> Result<()> {
 }
 
 fn refresh(cfg: &Config, s: &Session) -> Result<Session> {
-    registry::load(cfg).into_iter().find(|x| x.pid == s.pid).context("session has already ended")
+    registry::load(cfg)
+        .into_iter()
+        .find(|x| x.pid == s.pid)
+        .context("session has already ended")
 }
 
 pub fn wait_idle(cfg: &Config, s: &Session, limit: Duration) -> Result<Session> {
@@ -544,7 +704,11 @@ pub fn wait_idle(cfg: &Config, s: &Session, limit: Duration) -> Result<Session> 
             return Ok(cur);
         }
         if t.elapsed() > limit {
-            bail!("{} was still working after {}m", s.title, limit.as_secs() / 60);
+            bail!(
+                "{} was still working after {}m",
+                s.title,
+                limit.as_secs() / 60
+            );
         }
         sleep(Duration::from_secs(2));
     }
@@ -557,12 +721,16 @@ fn trusted(claude_json: &serde_json::Value, cwd: &str, exact: bool) -> bool {
     let home = crate::config::home();
     let mut p = Some(std::path::Path::new(cwd));
     while let Some(dir) = p {
-        if dir != std::path::Path::new(cwd) && (exact || dir == std::path::Path::new("/") || dir == home) {
+        if dir != std::path::Path::new(cwd)
+            && (exact || dir == std::path::Path::new("/") || dir == home)
+        {
             break;
         }
         let key = dir.display().to_string();
-        if claude_json.pointer(&format!("/projects/{}/hasTrustDialogAccepted", key.replace('~', "~0").replace('/', "~1")))
-            == Some(&serde_json::Value::Bool(true))
+        if claude_json.pointer(&format!(
+            "/projects/{}/hasTrustDialogAccepted",
+            key.replace('~', "~0").replace('/', "~1")
+        )) == Some(&serde_json::Value::Bool(true))
         {
             return true;
         }
@@ -584,7 +752,9 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
     let read = |path: &std::path::Path| -> Option<serde_json::Value> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     };
-    let Some(src) = read(&from) else { return Ok(()) };
+    let Some(src) = read(&from) else {
+        return Ok(());
+    };
     if !trusted(&src, &s.cwd, false) {
         return Ok(());
     }
@@ -592,10 +762,16 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
     // Live sessions on the target account rewrite this file too, and nothing
     // coordinates writers. So: write only if the file is unchanged since we
     // read it, and check afterwards that the entry survived.
-    let stamp = |p: &std::path::Path| std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
+    let stamp = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    };
     for _ in 0..6 {
         let before = stamp(&path);
-        let Some(mut dst) = read(&path) else { return Ok(()) };
+        let Some(mut dst) = read(&path) else {
+            return Ok(());
+        };
         if trusted(&dst, &s.cwd, true) {
             return Ok(());
         }
@@ -610,7 +786,10 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
             .entry(s.cwd.clone())
             .or_insert_with(|| serde_json::json!({}));
         if let Some(o) = entry.as_object_mut() {
-            o.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
+            o.insert(
+                "hasTrustDialogAccepted".into(),
+                serde_json::Value::Bool(true),
+            );
         }
         let tmp = path.with_file_name(format!(".claude.json.toomux-{}", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(&dst)?)?;
@@ -650,7 +829,13 @@ fn settle(pane: &str) -> Option<String> {
 
 /// Relaunch the same conversation under another account, in place.
 /// `force` accepts a session whose background tasks will be stopped.
-pub fn switch(cfg: &Config, s: &Session, account: usize, wait: bool, force: bool) -> Result<String> {
+pub fn switch(
+    cfg: &Config,
+    s: &Session,
+    account: usize,
+    wait: bool,
+    force: bool,
+) -> Result<String> {
     if s.account == Some(account) {
         bail!("{} is already on {}", s.title, cfg.accounts[account].name);
     }
@@ -659,7 +844,11 @@ pub fn switch(cfg: &Config, s: &Session, account: usize, wait: bool, force: bool
     } else {
         let cur = refresh(cfg, s)?;
         if !cur.can_move() && !(force && cur.state == State::Background) {
-            bail!("{} is {} · switch once it's idle", cur.title, cur.state.section());
+            bail!(
+                "{} is {} · switch once it's idle",
+                cur.title,
+                cur.state.section()
+            );
         }
         cur
     };
@@ -702,9 +891,15 @@ pub fn adopt(cfg: &Config, s: &Session) -> Result<String> {
     }
     let cur = refresh(cfg, s)?;
     if !cur.can_move() && cur.state != State::Background {
-        bail!("{} is {} · bring it in once it's idle", cur.title, cur.state.section());
+        bail!(
+            "{} is {} · bring it in once it's idle",
+            cur.title,
+            cur.state.section()
+        );
     }
-    let account = cur.account.context("can't tell which account this session uses")?;
+    let account = cur
+        .account
+        .context("can't tell which account this session uses")?;
     let launch = launch_for(cfg, &cur, account);
     let id = place_in_tmux(cfg, &cur, &launch)?;
     Ok(format!("{} is now in tmux ({id})", cur.title))
@@ -725,10 +920,17 @@ pub fn close(cfg: &Config, s: &Session) -> Result<String> {
 pub fn switch_later(s: &Session, account_name: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
     let mut cmd = Command::new(exe);
-    cmd.args(["switch", &s.pid.to_string(), "--to", account_name, "--wait", "--notify"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args([
+        "switch",
+        &s.pid.to_string(),
+        "--to",
+        account_name,
+        "--wait",
+        "--notify",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
@@ -755,40 +957,115 @@ mod tests {
 
     #[test]
     fn a_fresh_conversation_keeps_the_name() {
-        let a = v(&["claude", "--remote-control", "--name", "old", "--model", "opus"]);
-        assert_eq!(super::without_name(carried_args(&a)), v(&["--remote-control", "--model", "opus"]));
+        let a = v(&[
+            "claude",
+            "--remote-control",
+            "--name",
+            "old",
+            "--model",
+            "opus",
+        ]);
+        assert_eq!(
+            super::without_name(carried_args(&a)),
+            v(&["--remote-control", "--model", "opus"])
+        );
     }
 
     #[test]
     fn suggestions_and_placeholders_are_not_typed() {
         use super::typed_text;
         // As captured from real panes (capture-pane -e).
-        assert_eq!(typed_text("\u{1b}[39m❯\u{a0}\u{1b}[2mkeep going, proceed autonomously\u{1b}[0m"), "");
-        assert_eq!(typed_text("\u{1b}[38;5;246m❯\u{a0}\u{1b}[2m\u{1b}[39mPress up to edit queued messages\u{1b}[0m"), "");
-        assert_eq!(typed_text("\u{1b}[39m❯\u{a0}fix the bug\u{1b}[0m"), "fix the bug");
-        assert_eq!(typed_text("\u{1b}[39m❯\u{a0}fix \u{1b}[2mthe bug\u{1b}[22m now"), "fix  now");
-        assert_eq!(typed_text("❯ \u{1b}[38;5;2mgreen text\u{1b}[0m"), "green text", "a colour index of 2 isn't dim");
+        assert_eq!(
+            typed_text("\u{1b}[39m❯\u{a0}\u{1b}[2mkeep going, proceed autonomously\u{1b}[0m"),
+            ""
+        );
+        assert_eq!(
+            typed_text(
+                "\u{1b}[38;5;246m❯\u{a0}\u{1b}[2m\u{1b}[39mPress up to edit queued messages\u{1b}[0m"
+            ),
+            ""
+        );
+        assert_eq!(
+            typed_text("\u{1b}[39m❯\u{a0}fix the bug\u{1b}[0m"),
+            "fix the bug"
+        );
+        assert_eq!(
+            typed_text("\u{1b}[39m❯\u{a0}fix \u{1b}[2mthe bug\u{1b}[22m now"),
+            "fix  now"
+        );
+        assert_eq!(
+            typed_text("❯ \u{1b}[38;5;2mgreen text\u{1b}[0m"),
+            "green text",
+            "a colour index of 2 isn't dim"
+        );
         assert_eq!(typed_text("❯ \u{1b}[38;2;2;2;2mrgb\u{1b}[0m"), "rgb");
     }
 
     #[test]
     fn keeps_flags_drops_session_selectors_and_prompts() {
-        let a = v(&["claude", "--dangerously-skip-permissions", "--resume", "abc", "--model", "opus", "fix the bug", "--remote-control", "-c"]);
-        assert_eq!(carried_args(&a), v(&["--dangerously-skip-permissions", "--model", "opus", "--remote-control"]));
+        let a = v(&[
+            "claude",
+            "--dangerously-skip-permissions",
+            "--resume",
+            "abc",
+            "--model",
+            "opus",
+            "fix the bug",
+            "--remote-control",
+            "-c",
+        ]);
+        assert_eq!(
+            carried_args(&a),
+            v(&[
+                "--dangerously-skip-permissions",
+                "--model",
+                "opus",
+                "--remote-control"
+            ])
+        );
     }
 
     #[test]
     fn variadic_flags_keep_all_values_and_prompts_go_first() {
-        let args: Vec<String> = ["claude", "--add-dir", "a", "b", "--model", "haiku", "--mcp-config", "x.json", "y.json", "-c"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(carried_args(&args), ["--add-dir", "a", "b", "--model", "haiku", "--mcp-config", "x.json", "y.json"]);
+        let args: Vec<String> = [
+            "claude",
+            "--add-dir",
+            "a",
+            "b",
+            "--model",
+            "haiku",
+            "--mcp-config",
+            "x.json",
+            "y.json",
+            "-c",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            carried_args(&args),
+            [
+                "--add-dir",
+                "a",
+                "b",
+                "--model",
+                "haiku",
+                "--mcp-config",
+                "x.json",
+                "y.json"
+            ]
+        );
     }
 
     #[test]
     fn handles_equals_forms() {
-        let a = v(&["claude", "--resume=abc", "--model=sonnet", "--session-id", "x"]);
+        let a = v(&[
+            "claude",
+            "--resume=abc",
+            "--model=sonnet",
+            "--session-id",
+            "x",
+        ]);
         assert_eq!(carried_args(&a), v(&["--model=sonnet"]));
     }
 }

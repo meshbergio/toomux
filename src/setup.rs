@@ -42,7 +42,9 @@ pub fn strip_tmux(conf: &str) -> Option<String> {
             continue;
         }
         let t = l.trim_start();
-        if (t.starts_with("set -g status-right ") || t.starts_with("set-option -g status-right ")) && l.contains("toomux status") {
+        if (t.starts_with("set -g status-right ") || t.starts_with("set-option -g status-right "))
+            && l.contains("toomux status")
+        {
             out.push(strip_segment(l));
             changed = true;
             continue;
@@ -60,8 +62,12 @@ pub fn strip_tmux(conf: &str) -> Option<String> {
 /// A status-right value without `#(<anything>toomux status)` and the two
 /// spaces init put after it.
 pub fn strip_segment(s: &str) -> String {
-    let Some(at) = s.find("toomux status)") else { return s.to_string() };
-    let Some(open) = s[..at].rfind("#(") else { return s.to_string() };
+    let Some(at) = s.find("toomux status)") else {
+        return s.to_string();
+    };
+    let Some(open) = s[..at].rfind("#(") else {
+        return s.to_string();
+    };
     let tail = &s[at + "toomux status)".len()..];
     let spaces = tail.len() - tail.trim_start_matches(' ').len();
     format!("{}{}", &s[..open], &tail[spaces.min(2)..])
@@ -76,8 +82,15 @@ pub const TRUECOLOR_ENV: &str = "CLAUDE_CODE_TMUX_TRUECOLOR";
 /// with no hooks, and a `hooks` left empty, go too. Whether anything changed.
 pub fn strip_settings(v: &mut Value) -> bool {
     let mut changed = false;
-    let Some(obj) = v.as_object_mut() else { return false };
-    if obj.get("statusLine").and_then(|s| s.get("command")).and_then(Value::as_str).is_some_and(|c| c.contains("toomux statusline")) {
+    let Some(obj) = v.as_object_mut() else {
+        return false;
+    };
+    if obj
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(|c| c.contains("toomux statusline"))
+    {
         obj.remove("statusLine");
         changed = true;
     }
@@ -113,7 +126,10 @@ mod tests {
     #[test]
     fn the_tmux_block_and_segment_go_and_nothing_else() {
         let conf = "set -g mouse on\nset -g status-right \"#(/b/toomux status)  %H:%M \"\n\n# >>> toomux >>>\nbind -n M-s x\n# <<< toomux <<<\n\nset -g @plugin 'tpm'\n";
-        assert_eq!(strip_tmux(conf).unwrap(), "set -g mouse on\nset -g status-right \"%H:%M \"\n\nset -g @plugin 'tpm'\n");
+        assert_eq!(
+            strip_tmux(conf).unwrap(),
+            "set -g mouse on\nset -g status-right \"%H:%M \"\n\nset -g @plugin 'tpm'\n"
+        );
         assert_eq!(strip_tmux("set -g mouse on\n"), None, "nothing of toomux's");
     }
 
@@ -137,10 +153,14 @@ mod tests {
         assert!(strip_settings(&mut v));
         assert_eq!(v.pointer("/hooks/PreToolUse/0/matcher").unwrap(), "Bash");
         assert!(v.get("statusLine").is_none() && v.pointer("/hooks/Stop").is_none());
-        assert!(v.get("env").is_none(), "the truecolour switch goes, and its empty env");
+        assert!(
+            v.get("env").is_none(),
+            "the truecolour switch goes, and its empty env"
+        );
         assert_eq!(v["model"], "x");
         assert!(!strip_settings(&mut v), "twice is a no-op");
-        let mut own: Value = serde_json::from_str(r#"{"statusLine":{"command":"my-line"}}"#).unwrap();
+        let mut own: Value =
+            serde_json::from_str(r#"{"statusLine":{"command":"my-line"}}"#).unwrap();
         assert!(!strip_settings(&mut own), "a status line of your own stays");
     }
 }

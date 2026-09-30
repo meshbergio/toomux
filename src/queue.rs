@@ -34,7 +34,8 @@ fn get_unlocked(pid: i32, proc_start: Option<&str>) -> Option<Queued> {
     let path = file(pid);
     let raw = std::fs::read_to_string(&path).ok()?;
     let q: Queued = serde_json::from_str(&raw).ok()?;
-    let valid = q.proc_start.as_deref() == proc_start && registry::alive(q.waiter, q.waiter_start.as_deref());
+    let valid = q.proc_start.as_deref() == proc_start
+        && registry::alive(q.waiter, q.waiter_start.as_deref());
     if !valid {
         let _ = std::fs::remove_file(&path);
         return None;
@@ -92,7 +93,9 @@ pub fn cancel(pid: i32, proc_start: Option<&str>) -> bool {
     let Ok(_guard) = crate::lock::exclusive(&lock_file(pid)) else {
         return false;
     };
-    let Some(q) = get_unlocked(pid, proc_start) else { return false };
+    let Some(q) = get_unlocked(pid, proc_start) else {
+        return false;
+    };
     unsafe { libc::kill(q.waiter, libc::SIGTERM) };
     let _ = std::fs::remove_file(file(pid));
     true
