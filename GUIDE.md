@@ -567,6 +567,8 @@ toomux account setup     # optional: name your accounts, choose which share hist
 The installer puts a binary for your machine (Linux or macOS, x86_64 or arm64) in
 `~/.local/bin`, checked against its published checksum, and changes nothing else.
 On Linux it's static, so any distro will do.
+With npm instead: `npm install -g toomux` installs the same binary for your machine
+(from `@toomux/<os>-<cpu>`); it doesn't bring tmux.
 From source instead: `cargo install --git https://github.com/meshbergio/toomux`
 (Rust 1.88 or later), or `cargo install --path .` in a clone.
 
