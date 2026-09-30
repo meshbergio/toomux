@@ -128,7 +128,7 @@ pub fn all() -> Vec<Job> {
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| std::fs::read_to_string(e.path()).ok().and_then(|r| serde_json::from_str(&r).ok()))
         .collect();
-    out.sort_by(|a: &Job, b: &Job| b.started_ms.cmp(&a.started_ms));
+    out.sort_by_key(|j: &Job| std::cmp::Reverse(j.started_ms));
     out
 }
 

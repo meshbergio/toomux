@@ -192,7 +192,7 @@ pub fn run(cfg: &Config) -> Result<usize> {
         }
     }
     // Newest first, so today's work is searchable before the backfill ends.
-    files.sort_by(|a, b| b.modified.cmp(&a.modified));
+    files.sort_by_key(|f| std::cmp::Reverse(f.modified));
     let mut budget = PASS_BYTES;
     let mut added = 0;
     for f in files {

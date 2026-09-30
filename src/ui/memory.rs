@@ -1371,7 +1371,7 @@ impl App {
         // Each group: its name and count, then its latest few, one a line.
         let room = (r.height as usize).saturating_sub(lines.len() + 3);
         let heads = groups.len().min(8);
-        let per = if heads == 0 { 0 } else { (room.saturating_sub(heads * 2) / heads).clamp(1, 3) };
+        let per = room.saturating_sub(heads * 2).checked_div(heads).map_or(0, |p| p.clamp(1, 3));
         for (_, name, members, _) in groups.iter().take(8) {
             let mut members = members.clone();
             members.sort_by_key(|&m| std::cmp::Reverse(g.nodes[m].last));
