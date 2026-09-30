@@ -1,0 +1,36 @@
+name: npm
+
+# Publishes an existing release's binaries to npm, for a release made before
+# NPM_TOKEN was saved or one whose npm step failed. release.yml does this
+# itself for every new tag.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: the release's binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mkdir rel && gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --dir rel --pattern 'toomux-*.tar.gz'
+      - name: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_PROVENANCE: 1
+        run: |
+          tag="${{ inputs.tag }}"
+          sh packaging/npm/publish.sh "${tag#v}" rel

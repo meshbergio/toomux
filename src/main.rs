@@ -1509,7 +1509,14 @@ fn uninstall(dry_run: bool, purge: bool) -> Result<()> {
     if toomux::accounts::shared_dir(&config::home()).is_dir() {
         println!("accounts stay sharing {}: Claude Code works the same through the links.", t(&toomux::accounts::shared_dir(&config::home())));
     }
-    println!("the binary stays at {}: delete it when you like (or cargo uninstall toomux, if cargo put it there)", t(&std::env::current_exe()?));
+    let exe = std::env::current_exe()?;
+    let how = match exe.to_string_lossy() {
+        p if p.contains("/node_modules/") => "npm uninstall -g toomux",
+        p if p.contains("/Cellar/toomux/") => "brew uninstall toomux",
+        p if p.contains("/.cargo/bin/") => "cargo uninstall toomux",
+        _ => "delete it when you like",
+    };
+    println!("the binary stays at {}: {how}", t(&exe));
     Ok(())
 }
 

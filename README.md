@@ -245,6 +245,14 @@ curl -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh
 toomux init --apply
 ```
 
+On a Mac, Homebrew is easier. It brings tmux too, and `brew upgrade` keeps
+toomux current:
+
+```sh
+brew install meshbergio/tap/toomux
+toomux init --apply
+```
+
 Then press `alt-s` in tmux. You'll need Linux or macOS (Windows through WSL 2),
 tmux 3.2 or later, and Claude Code. Everything is on by default, each part turns
 off with one line, and `toomux uninstall` removes it all. It also tidies

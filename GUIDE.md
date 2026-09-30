@@ -554,7 +554,9 @@ same from the command line, for these, pins, and anything last recorded running.
 ## Setup
 
 Needs Linux or macOS (on Windows, inside WSL 2), tmux 3.2 or later, and Claude Code.
-On macOS, `brew install tmux` if you haven't got it.
+On macOS, `brew install meshbergio/tap/toomux` installs toomux and tmux together,
+and `brew upgrade` keeps it current. Or use the installer below, with
+`brew install tmux` if you haven't got it.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
