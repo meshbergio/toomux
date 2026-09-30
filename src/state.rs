@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const SLOTS: usize = 9;
 
@@ -40,8 +40,8 @@ fn path() -> PathBuf {
 }
 
 impl State {
-    pub fn load() -> Self {
-        let mut s: State = std::fs::read_to_string(path())
+    fn load_from(p: &Path) -> Self {
+        let mut s: State = std::fs::read_to_string(p)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
@@ -49,8 +49,11 @@ impl State {
         s
     }
 
-    fn save_unlocked(&self) -> std::io::Result<()> {
-        let p = path();
+    pub fn load() -> Self {
+        Self::load_from(&path())
+    }
+
+    fn save_unlocked_to(&self, p: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(p.parent().unwrap())?;
         let tmp = p.with_extension(format!("json.{}", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
@@ -60,18 +63,21 @@ impl State {
     pub fn save(&self) -> std::io::Result<()> {
         let p = path();
         let _guard = crate::lock::exclusive(&p.with_extension("lock"))?;
-        self.save_unlocked()
+        self.save_unlocked_to(&p)
     }
 
     /// Change the state on disk under one lock, so concurrent status lines,
     /// hooks and UI actions cannot overwrite one another's changes.
-    pub fn update<R>(f: impl FnOnce(&mut State) -> R) -> std::io::Result<R> {
-        let p = path();
+    fn update_at<R>(p: &Path, f: impl FnOnce(&mut State) -> R) -> std::io::Result<R> {
         let _guard = crate::lock::exclusive(&p.with_extension("lock"))?;
-        let mut s = State::load();
+        let mut s = State::load_from(p);
         let r = f(&mut s);
-        s.save_unlocked()?;
+        s.save_unlocked_to(p)?;
         Ok(r)
+    }
+
+    pub fn update<R>(f: impl FnOnce(&mut State) -> R) -> std::io::Result<R> {
+        Self::update_at(&path(), f)
     }
 
     pub fn slot_of(&self, id: &str) -> Option<usize> {
@@ -146,15 +152,15 @@ mod tests {
 
     #[test]
     fn concurrent_updates_do_not_lose_each_other() {
-        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("toomux-state-race-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        let state_file = tmp.join("state.json");
 
         let mut threads = Vec::new();
         for i in 0..24 {
+            let state_file = state_file.clone();
             threads.push(std::thread::spawn(move || {
-                State::update(|s| {
+                State::update_at(&state_file, |s| {
                     s.names.insert(format!("session-{i}"), format!("name-{i}"));
                 })
                 .unwrap();
@@ -163,7 +169,7 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
-        let s = State::load();
+        let s = State::load_from(&state_file);
         assert_eq!(s.names.len(), 24);
         for i in 0..24 {
             assert_eq!(
@@ -176,19 +182,21 @@ mod tests {
 
     #[test]
     fn corrupt_state_falls_back_without_destroying_future_writes() {
-        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("toomux-state-corrupt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
-        std::fs::create_dir_all(crate::paths::state()).unwrap();
-        std::fs::write(path(), "{broken").unwrap();
-        assert!(State::load().names.is_empty());
-        State::update(|s| {
+        let state_file = tmp.join("state.json");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(&state_file, "{broken").unwrap();
+        assert!(State::load_from(&state_file).names.is_empty());
+        State::update_at(&state_file, |s| {
             s.names.insert("recovered".into(), "yes".into());
         })
         .unwrap();
         assert_eq!(
-            State::load().names.get("recovered").map(String::as_str),
+            State::load_from(&state_file)
+                .names
+                .get("recovered")
+                .map(String::as_str),
             Some("yes")
         );
         let _ = std::fs::remove_dir_all(tmp);

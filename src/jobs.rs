@@ -23,7 +23,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub fn dir() -> PathBuf {
@@ -79,6 +79,9 @@ pub fn keep_warm() -> Duration {
 fn path(id: &str) -> PathBuf {
     dir().join(format!("{id}.json"))
 }
+fn path_in(base: &Path, id: &str) -> PathBuf {
+    base.join(format!("{id}.json"))
+}
 pub fn log_path(id: &str) -> PathBuf {
     dir().join(format!("{id}.log"))
 }
@@ -90,25 +93,37 @@ fn lock_path(id: &str) -> PathBuf {
 }
 
 pub fn load(id: &str) -> Option<Job> {
-    std::fs::read_to_string(path(id))
+    load_from(&dir(), id)
+}
+
+fn load_from(base: &Path, id: &str) -> Option<Job> {
+    std::fs::read_to_string(path_in(base, id))
         .ok()
         .and_then(|r| serde_json::from_str(&r).ok())
 }
 
 fn save(j: &Job) -> Result<()> {
-    std::fs::create_dir_all(dir())?;
-    let tmp = dir().join(format!(".{}.{}", j.id, std::process::id()));
+    save_in(&dir(), j)
+}
+
+fn save_in(base: &Path, j: &Job) -> Result<()> {
+    std::fs::create_dir_all(base)?;
+    let tmp = base.join(format!(".{}.{}", j.id, std::process::id()));
     std::fs::write(&tmp, serde_json::to_string(j)?)?;
-    std::fs::rename(tmp, path(&j.id))?;
+    std::fs::rename(tmp, path_in(base, &j.id))?;
     Ok(())
 }
 
 /// Change a job on disk (re-reading first; the host and followers share it).
 fn update(id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
-    let _guard = crate::lock::exclusive(&lock_path(id))?;
-    let mut j = load(id).with_context(|| format!("no job {id}"))?;
+    update_in(&dir(), id, f)
+}
+
+fn update_in(base: &Path, id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
+    let _guard = crate::lock::exclusive(&base.join(format!("{id}.lock")))?;
+    let mut j = load_from(base, id).with_context(|| format!("no job {id}"))?;
     f(&mut j);
-    save(&j)?;
+    save_in(base, &j)?;
     Ok(j)
 }
 
@@ -130,7 +145,11 @@ pub fn create(id: &str, command: &str, cwd: &str, session: &str, timeout_ms: i64
 
 /// Every job, newest first.
 pub fn all() -> Vec<Job> {
-    let mut out: Vec<Job> = std::fs::read_dir(dir())
+    all_in(&dir())
+}
+
+fn all_in(base: &Path) -> Vec<Job> {
+    let mut out: Vec<Job> = std::fs::read_dir(base)
         .into_iter()
         .flatten()
         .flatten()
@@ -539,37 +558,54 @@ mod tests {
 
     #[test]
     fn concurrent_job_updates_are_serialised() {
-        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("toomux-jobs-race-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
-        create("race", "true", "/tmp", "session", 0).unwrap();
+        let jobs_dir = tmp.join("jobs");
+        let job = Job {
+            id: "race".into(),
+            command: "true".into(),
+            cwd: "/tmp".into(),
+            session: "session".into(),
+            started_ms: crate::registry::now_ms(),
+            status: "starting".into(),
+            ..Default::default()
+        };
+        save_in(&jobs_dir, &job).unwrap();
 
         let mut threads = Vec::new();
         for _ in 0..12 {
-            threads.push(std::thread::spawn(|| {
+            let jobs_dir = jobs_dir.clone();
+            threads.push(std::thread::spawn(move || {
                 for _ in 0..25 {
-                    update("race", |j| j.shown += 1).unwrap();
+                    update_in(&jobs_dir, "race", |j| j.shown += 1).unwrap();
                 }
             }));
         }
         for t in threads {
             t.join().unwrap();
         }
-        assert_eq!(load("race").unwrap().shown, 300);
+        assert_eq!(load_from(&jobs_dir, "race").unwrap().shown, 300);
         let _ = std::fs::remove_dir_all(tmp);
     }
 
     #[test]
     fn malformed_job_records_are_ignored_by_listing() {
-        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("toomux-jobs-corrupt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
-        std::fs::create_dir_all(dir()).unwrap();
-        std::fs::write(path("bad"), "{bad").unwrap();
-        create("good", "true", "/tmp", "session", 0).unwrap();
-        let jobs = all();
+        let jobs_dir = tmp.join("jobs");
+        std::fs::create_dir_all(&jobs_dir).unwrap();
+        std::fs::write(path_in(&jobs_dir, "bad"), "{bad").unwrap();
+        let good = Job {
+            id: "good".into(),
+            command: "true".into(),
+            cwd: "/tmp".into(),
+            session: "session".into(),
+            started_ms: crate::registry::now_ms(),
+            status: "starting".into(),
+            ..Default::default()
+        };
+        save_in(&jobs_dir, &good).unwrap();
+        let jobs = all_in(&jobs_dir);
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].id, "good");
         let _ = std::fs::remove_dir_all(tmp);

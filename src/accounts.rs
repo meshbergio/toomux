@@ -203,7 +203,9 @@ pub fn validate_root(path: &Path, home: &Path, protected: &[PathBuf]) -> Result<
     let protected: Vec<PathBuf> = protected.iter().map(|p| real_or_self(p)).collect();
 
     let root = Path::new("/");
-    if real == root
+    if path == root
+        || path.parent() == Some(root)
+        || real == root
         || real.parent() == Some(root)
         || home == real
         || home.starts_with(&real)
