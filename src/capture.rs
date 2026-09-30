@@ -16,8 +16,8 @@
 //! exports, `exit`, `exec` and background jobs behave as they would without
 //! toomux); only its stdout and stderr go through a pipe to `toomux cap`.
 
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -56,11 +56,19 @@ pub fn store_dir() -> PathBuf {
 
 /// Outputs can hold anything a command printed: readable by you only.
 fn private_dir(p: &Path) -> std::io::Result<()> {
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(p)
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(p)
 }
 
 fn private_file(p: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().create(true).truncate(true).write(true).mode(0o600).open(p)
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(p)
 }
 
 // ---- which commands ------------------------------------------------------------
@@ -92,9 +100,17 @@ fn segments(cmd: &str) -> Vec<String> {
     out.push(cur);
     out.into_iter()
         .map(|s| {
-            let mut words: Vec<&str> = s.trim().trim_start_matches(['(', '{', ' ']).split_whitespace().collect();
+            let mut words: Vec<&str> = s
+                .trim()
+                .trim_start_matches(['(', '{', ' '])
+                .split_whitespace()
+                .collect();
             while let Some(w) = words.first() {
-                let assign = w.contains('=') && !w.starts_with('-') && w.split('=').next().is_some_and(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+                let assign = w.contains('=')
+                    && !w.starts_with('-')
+                    && w.split('=').next().is_some_and(|k| {
+                        !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    });
                 if assign || matches!(*w, "sudo" | "time" | "command" | "nice" | "env") {
                     words.remove(0);
                 } else {
@@ -111,13 +127,16 @@ fn segments(cmd: &str) -> Vec<String> {
 pub fn is_view(cmd: &str) -> bool {
     let segs = segments(cmd);
     // The first thing it does, past any `cd`.
-    let Some(first) = segs.iter().find(|s| !s.starts_with("cd ") && *s != "cd") else { return false };
+    let Some(first) = segs.iter().find(|s| !s.starts_with("cd ") && *s != "cd") else {
+        return false;
+    };
     let stage = first.split('|').next().unwrap_or("").trim();
     let words: Vec<&str> = stage.split_whitespace().collect();
     let word = words.first().copied().unwrap_or("");
     let base = word.rsplit('/').next().unwrap_or(word);
     match base {
-        "cat" | "head" | "tail" | "nl" | "bat" | "batcat" | "less" | "more" | "diff" | "xxd" | "hexdump" | "od" => true,
+        "cat" | "head" | "tail" | "nl" | "bat" | "batcat" | "less" | "more" | "diff" | "xxd"
+        | "hexdump" | "od" => true,
         "sed" => stage.contains(" -n"),
         "awk" | "gawk" => stage.contains("NR"),
         "jq" => words.len() >= 3 && !words.last().is_some_and(|w| w.starts_with('-')),
@@ -138,7 +157,11 @@ pub fn is_view(cmd: &str) -> bool {
                 }
             }
             let tail: Vec<&str> = rest.collect();
-            matches!(sub, "diff" | "show") || (sub == "log" && tail.iter().any(|w| *w == "-p" || *w == "--patch" || w.starts_with("-p")))
+            matches!(sub, "diff" | "show")
+                || (sub == "log"
+                    && tail
+                        .iter()
+                        .any(|w| *w == "-p" || *w == "--patch" || w.starts_with("-p")))
         }
         _ => false,
     }
@@ -147,7 +170,11 @@ pub fn is_view(cmd: &str) -> bool {
 /// toomux's own commands (and jobs) are left alone.
 fn is_ours(cmd: &str) -> bool {
     let first = segments(cmd).into_iter().next().unwrap_or_default();
-    let word = first.split_whitespace().next().unwrap_or("").trim_matches(['\'', '"']);
+    let word = first
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(['\'', '"']);
     word.rsplit('/').next() == Some("toomux")
 }
 
@@ -192,7 +219,10 @@ fn rewrite(v: &Value) -> Option<String> {
     let input = v.get("tool_input")?;
     let cmd = input.get("command").and_then(Value::as_str)?;
     let background = input.get("run_in_background").and_then(Value::as_bool) == Some(true);
-    let subagent = v.get("agent_id").and_then(Value::as_str).is_some_and(|a| !a.is_empty());
+    let subagent = v
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|a| !a.is_empty());
     // toomux's own commands print what they mean to; a subagent's `job
     // follow --more` is the rest of a command's output, so it's kept like
     // any other.
@@ -208,9 +238,14 @@ fn rewrite(v: &Value) -> Option<String> {
         crate::jobs::create(&id, cmd, cwd, session, 0).ok()?;
         let mut input = input.clone();
         input["command"] = Value::String(format!("{} job run {id}", shell_words::quote(&bin)));
-        return Some(json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": input}}).to_string());
+        return Some(
+            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": input}})
+                .to_string(),
+        );
     }
-    let blank = cmd.lines().all(|l| l.trim().is_empty() || l.trim_start().starts_with('#'));
+    let blank = cmd
+        .lines()
+        .all(|l| l.trim().is_empty() || l.trim_start().starts_with('#'));
     if blank || is_view(cmd) {
         return None;
     }
@@ -223,7 +258,11 @@ fn rewrite(v: &Value) -> Option<String> {
     if subagent && !is_ours(&cmd) && timeout > warm + SPELL_SLACK_MS {
         let id = new_id();
         crate::jobs::create(&id, &cmd, cwd, session, timeout.min(MAX_TIMEOUT_MS) as i64).ok()?;
-        cmd = format!("{} job run {id} --until {}", shell_words::quote(&bin), warm / 1000);
+        cmd = format!(
+            "{} job run {id} --until {}",
+            shell_words::quote(&bin),
+            warm / 1000
+        );
         input["timeout"] = json!(warm + SPELL_SLACK_MS);
     }
     let cmd = cmd.as_str();
@@ -232,7 +271,14 @@ fn rewrite(v: &Value) -> Option<String> {
     private_dir(&dir).ok()?;
     // What the capture needs to label it, kept beside the output.
     let meta = dir.join(format!("{id}.json"));
-    private_file(&meta).ok()?.write_all(json!({"command": cmd, "cwd": cwd, "session": session}).to_string().as_bytes()).ok()?;
+    private_file(&meta)
+        .ok()?
+        .write_all(
+            json!({"command": cmd, "cwd": cwd, "session": session})
+                .to_string()
+                .as_bytes(),
+        )
+        .ok()?;
     // Absolute paths, fixed now: the command runs in the same shell, and an
     // `export XDG_RUNTIME_DIR=...` in it must not move anything.
     let cap = format!(
@@ -245,30 +291,45 @@ fn rewrite(v: &Value) -> Option<String> {
     // of its own that is closed again inside the group, so background jobs
     // the command starts don't hold the pipe open. The blank line ends a
     // trailing backslash; the exit status comes back unchanged.
-    let wrapped = format!("exec {{__toomux}}> >(exec {cap}); {{ exec {{__toomux}}>&-; {cmd}\n\n}} >&$__toomux 2>&1; __toomux=$?; (exit $__toomux)");
+    let wrapped = format!(
+        "exec {{__toomux}}> >(exec {cap}); {{ exec {{__toomux}}>&-; {cmd}\n\n}} >&$__toomux 2>&1; __toomux=$?; (exit $__toomux)"
+    );
     if !parses(&wrapped) {
         let _ = std::fs::remove_file(&meta);
         return None;
     }
     input["command"] = Value::String(wrapped);
-    Some(json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": input}}).to_string())
+    Some(
+        json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": input}})
+            .to_string(),
+    )
 }
 
 /// `toomux job follow <id> --more`, alone.
 fn is_follow_more(cmd: &str) -> bool {
     let segs = segments(cmd);
-    let words: Vec<&str> = segs.first().map(|s| s.split_whitespace().collect()).unwrap_or_default();
+    let words: Vec<&str> = segs
+        .first()
+        .map(|s| s.split_whitespace().collect())
+        .unwrap_or_default();
     segs.len() == 1 && words.get(1..3) == Some(&["job", "follow"][..]) && words.contains(&"--more")
 }
 
 fn new_id() -> String {
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let n = (t ^ (std::process::id() as u128) << 40) % 36u128.pow(7);
     let mut s = String::new();
     let mut x = n;
     for _ in 0..7 {
         let d = (x % 36) as u8;
-        s.push(if d < 10 { (b'0' + d) as char } else { (b'a' + d - 10) as char });
+        s.push(if d < 10 {
+            (b'0' + d) as char
+        } else {
+            (b'a' + d - 10) as char
+        });
         x /= 36;
     }
     s
@@ -362,13 +423,37 @@ fn strip_ansi(s: &str) -> String {
 
 fn is_error(l: &str) -> bool {
     let l = l.to_lowercase();
-    let clean = [" 0 failed", "0 errors", "no errors", "0 error(s)", "error: 0", "errors: 0", "failed: 0", "0 failures"];
+    let clean = [
+        " 0 failed",
+        "0 errors",
+        "no errors",
+        "0 error(s)",
+        "error: 0",
+        "errors: 0",
+        "failed: 0",
+        "0 failures",
+    ];
     if clean.iter().any(|c| l.contains(c)) {
         return false;
     }
-    ["error", "panicked", "panic:", "fatal", "traceback", "exception", "failed", "failure", "denied", "not found", "segmentation fault", "abort", "cannot ", "unable to"]
-        .iter()
-        .any(|k| l.contains(k))
+    [
+        "error",
+        "panicked",
+        "panic:",
+        "fatal",
+        "traceback",
+        "exception",
+        "failed",
+        "failure",
+        "denied",
+        "not found",
+        "segmentation fault",
+        "abort",
+        "cannot ",
+        "unable to",
+    ]
+    .iter()
+    .any(|k| l.contains(k))
 }
 
 fn is_warning(l: &str) -> bool {
@@ -421,13 +506,21 @@ impl Scan {
             self.open.clear();
             self.n_errors += 1;
             if self.errors.len() < ERRORS {
-                self.errors.push(Mark { no, text: line.clone(), context: Vec::new() });
+                self.errors.push(Mark {
+                    no,
+                    text: line.clone(),
+                    context: Vec::new(),
+                });
                 self.open.push((self.errors.len() - 1, CONTEXT));
             }
         } else if is_warning(&text) {
             self.n_warnings += 1;
             if self.warnings.len() < WARNINGS {
-                self.warnings.push(Mark { no, text: line.clone(), context: Vec::new() });
+                self.warnings.push(Mark {
+                    no,
+                    text: line.clone(),
+                    context: Vec::new(),
+                });
             }
         }
         self.tail.push_back((no, line));
@@ -490,7 +583,11 @@ pub fn cap(id: &str, dir: Option<PathBuf>, store: Option<PathBuf>) -> Result<()>
             let upto = first.len().min(LIVE);
             if let Some(nl) = first[streamed..upto].iter().rposition(|b| *b == b'\n') {
                 let end = streamed + nl + 1;
-                if out.write_all(&first[streamed..end]).and_then(|_| out.flush()).is_err() {
+                if out
+                    .write_all(&first[streamed..end])
+                    .and_then(|_| out.flush())
+                    .is_err()
+                {
                     return Ok(());
                 }
                 streamed = end;
@@ -508,11 +605,13 @@ pub fn cap(id: &str, dir: Option<PathBuf>, store: Option<PathBuf>) -> Result<()>
                 }
                 None => {
                     let path = store.join(format!("{id}.txt"));
-                    let opened = private_dir(&store).and_then(|_| private_file(&path)).and_then(|mut f| {
-                        f.write_all(&first)?;
-                        f.write_all(&chunk[take..])?;
-                        Ok(f)
-                    });
+                    let opened = private_dir(&store)
+                        .and_then(|_| private_file(&path))
+                        .and_then(|mut f| {
+                            f.write_all(&first)?;
+                            f.write_all(&chunk[take..])?;
+                            Ok(f)
+                        });
                     match opened {
                         Ok(f) => kept = Some((path, f)),
                         Err(_) => {
@@ -544,10 +643,13 @@ pub fn cap(id: &str, dir: Option<PathBuf>, store: Option<PathBuf>) -> Result<()>
     // One line longer than LIVE: nothing streamed, so show its start.
     let mut head = String::new();
     if streamed == 0 {
-        let cut = String::from_utf8_lossy(&first[..LIVE.min(first.len())]).trim_end_matches('\u{fffd}').to_string();
+        let cut = String::from_utf8_lossy(&first[..LIVE.min(first.len())])
+            .trim_end_matches('\u{fffd}')
+            .to_string();
         head = format!("{cut}…\n");
     }
-    let shown = String::from_utf8_lossy(&first[..streamed]).lines().count() + usize::from(streamed == 0);
+    let shown =
+        String::from_utf8_lossy(&first[..streamed]).lines().count() + usize::from(streamed == 0);
     let rest = view(id, &path, &scan, shown, stopped);
     let _ = out.write_all(head.as_bytes());
     let _ = out.write_all(rest.as_bytes());
@@ -560,10 +662,23 @@ pub fn cap(id: &str, dir: Option<PathBuf>, store: Option<PathBuf>) -> Result<()>
     let cwd = meta.get("cwd").and_then(Value::as_str).unwrap_or("");
     let session = meta.get("session").and_then(Value::as_str).unwrap_or("");
     if let Ok(m) = crate::memory::Memory::open() {
-        let scope = if cwd.is_empty() { "global".to_string() } else { crate::memory::project_scope(cwd) };
-        let label: String = command.lines().next().unwrap_or("").chars().take(160).collect();
+        let scope = if cwd.is_empty() {
+            "global".to_string()
+        } else {
+            crate::memory::project_scope(cwd)
+        };
+        let label: String = command
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(160)
+            .collect();
         let source = format!("output:{id} session:{session} $ {label}");
-        let text = crate::redact::redact(&format!("{}{head}{rest}", String::from_utf8_lossy(&first[..streamed])));
+        let text = crate::redact::redact(&format!(
+            "{}{head}{rest}",
+            String::from_utf8_lossy(&first[..streamed])
+        ));
         let _ = m.index(&scope, &source, &text, crate::registry::now_ms());
     }
     prune(&store, &dir);
@@ -588,20 +703,53 @@ fn view(id: &str, path: &Path, scan: &Scan, shown: usize, stopped: bool) -> Stri
     };
     let tail: Vec<&(usize, String)> = scan.tail.iter().skip(tail_from).collect();
     let first_tail = tail.first().map(|(n, _)| *n).unwrap_or(usize::MAX);
-    let marks: Vec<&Mark> = scan.errors.iter().chain(scan.warnings.iter()).filter(|m| m.no < first_tail).collect();
+    let marks: Vec<&Mark> = scan
+        .errors
+        .iter()
+        .chain(scan.warnings.iter())
+        .filter(|m| m.no < first_tail)
+        .collect();
     let mut marks = marks;
     marks.sort_by_key(|m| m.no);
 
-    let size = if scan.chars >= 10_000 { format!("{}k chars", scan.chars / 1000) } else { format!("{} chars", scan.chars) };
-    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    let size = if scan.chars >= 10_000 {
+        format!("{}k chars", scan.chars / 1000)
+    } else {
+        format!("{} chars", scan.chars)
+    };
+    let plural = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
     let mut found = Vec::new();
     if scan.n_errors > 0 {
-        let more = if scan.n_errors > ERRORS { format!(" (the first {ERRORS} shown)") } else { String::new() };
-        found.push(format!("{}{more}", plural(scan.n_errors, "line reporting an error", "lines reporting errors")));
+        let more = if scan.n_errors > ERRORS {
+            format!(" (the first {ERRORS} shown)")
+        } else {
+            String::new()
+        };
+        found.push(format!(
+            "{}{more}",
+            plural(
+                scan.n_errors,
+                "line reporting an error",
+                "lines reporting errors"
+            )
+        ));
     }
     if scan.n_warnings > 0 {
-        let more = if scan.n_warnings > WARNINGS { format!(" (the first {WARNINGS} shown)") } else { String::new() };
-        found.push(format!("{}{more}", plural(scan.n_warnings, "warning", "warnings")));
+        let more = if scan.n_warnings > WARNINGS {
+            format!(" (the first {WARNINGS} shown)")
+        } else {
+            String::new()
+        };
+        found.push(format!(
+            "{}{more}",
+            plural(scan.n_warnings, "warning", "warnings")
+        ));
     }
     let mut out = String::new();
     out.push_str(&format!(
@@ -643,9 +791,15 @@ fn kept_path(id: &str) -> Result<PathBuf> {
 }
 
 /// `toomux out <id> [--lines a-b] [--grep regex] [--chars a-b]`.
-pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str>) -> Result<String> {
+pub fn out(
+    id: &str,
+    lines: Option<&str>,
+    grep: Option<&str>,
+    chars: Option<&str>,
+) -> Result<String> {
     let path = kept_path(id)?;
-    let bytes = std::fs::read(&path).with_context(|| format!("no kept output {id} (outputs are kept for {KEEP_DAYS} days)"))?;
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("no kept output {id} (outputs are kept for {KEEP_DAYS} days)"))?;
     let text = String::from_utf8_lossy(&bytes);
     let range = |s: &str, max: usize| -> (usize, usize) {
         let (a, b) = s.split_once('-').unwrap_or((s, ""));
@@ -657,9 +811,16 @@ pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str
         let all: Vec<char> = text.chars().collect();
         let (a, b) = range(c, all.len());
         let b = b.min(a - 1 + OUT_CHARS);
-        let mut s: String = all[(a - 1).min(all.len())..b.min(all.len())].iter().collect();
+        let mut s: String = all[(a - 1).min(all.len())..b.min(all.len())]
+            .iter()
+            .collect();
         if b < all.len() {
-            s.push_str(&format!("\n[toomux · chars {a}-{b} of {}; `--chars {}-{}` continues]\n", all.len(), b + 1, (b + OUT_CHARS).min(all.len())));
+            s.push_str(&format!(
+                "\n[toomux · chars {a}-{b} of {}; `--chars {}-{}` continues]\n",
+                all.len(),
+                b + 1,
+                (b + OUT_CHARS).min(all.len())
+            ));
         }
         return Ok(s);
     }
@@ -670,7 +831,11 @@ pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str
         let re = regex::RegexBuilder::new(pat)
             .case_insensitive(true)
             .build()
-            .or_else(|_| regex::RegexBuilder::new(&regex::escape(pat)).case_insensitive(true).build())?;
+            .or_else(|_| {
+                regex::RegexBuilder::new(&regex::escape(pat))
+                    .case_insensitive(true)
+                    .build()
+            })?;
         let hits: Vec<usize> = (0..all.len()).filter(|&i| re.is_match(all[i])).collect();
         for &i in hits.iter().take(OUT_MATCHES) {
             out.push_str(&line(i, all[i]));
@@ -678,7 +843,10 @@ pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str
         if hits.is_empty() {
             out = format!("no line of {id} matches {pat:?}\n");
         } else if hits.len() > OUT_MATCHES {
-            out.push_str(&format!("[toomux · {} more matching lines: narrow the pattern, or use --lines]\n", hits.len() - OUT_MATCHES));
+            out.push_str(&format!(
+                "[toomux · {} more matching lines: narrow the pattern, or use --lines]\n",
+                hits.len() - OUT_MATCHES
+            ));
         }
         return Ok(out);
     }
@@ -688,7 +856,12 @@ pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str
         out.push_str(&line(i, l));
     }
     if b < all.len() {
-        out.push_str(&format!("[toomux · lines {a}-{b} of {}; `--lines {}-{}` continues]\n", all.len(), b + 1, (b + OUT_LINES).min(all.len())));
+        out.push_str(&format!(
+            "[toomux · lines {a}-{b} of {}; `--lines {}-{}` continues]\n",
+            all.len(),
+            b + 1,
+            (b + OUT_LINES).min(all.len())
+        ));
     }
     Ok(out)
 }
@@ -697,14 +870,20 @@ pub fn out(id: &str, lines: Option<&str>, grep: Option<&str>, chars: Option<&str
 /// never finished (a killed shell) after a day.
 fn prune(store: &Path, run: &Path) {
     let now = std::time::SystemTime::now();
-    let old = |p: &Path, secs: u64| std::fs::metadata(p).and_then(|m| m.modified()).is_ok_and(|t| now.duration_since(t).is_ok_and(|d| d.as_secs() > secs));
+    let old = |p: &Path, secs: u64| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| now.duration_since(t).is_ok_and(|d| d.as_secs() > secs))
+    };
     let mut gone = Vec::new();
     for e in std::fs::read_dir(store).into_iter().flatten().flatten() {
         let p = e.path();
-        if old(&p, KEEP_DAYS * 86_400) && std::fs::remove_file(&p).is_ok()
-            && let Some(id) = p.file_stem().and_then(|s| s.to_str()) {
-                gone.push(id.to_string());
-            }
+        if old(&p, KEEP_DAYS * 86_400)
+            && std::fs::remove_file(&p).is_ok()
+            && let Some(id) = p.file_stem().and_then(|s| s.to_str())
+        {
+            gone.push(id.to_string());
+        }
     }
     for e in std::fs::read_dir(run).into_iter().flatten().flatten() {
         if old(&e.path(), 86_400) {
@@ -712,11 +891,12 @@ fn prune(store: &Path, run: &Path) {
         }
     }
     if !gone.is_empty()
-        && let Ok(m) = crate::memory::Memory::open() {
-            for id in gone {
-                let _ = m.delete_source_prefix(&format!("output:{id} "));
-            }
+        && let Ok(m) = crate::memory::Memory::open()
+    {
+        for id in gone {
+            let _ = m.delete_source_prefix(&format!("output:{id} "));
         }
+    }
 }
 
 #[cfg(test)]
@@ -742,7 +922,14 @@ mod tests {
         ] {
             assert!(is_view(c), "{c}");
         }
-        for c in ["cargo test 2>&1 | tail -5", "find . -name '*.rs'", "grep -rn foo src", "ls -la", "git log --oneline", "curl -s x | jq ."] {
+        for c in [
+            "cargo test 2>&1 | tail -5",
+            "find . -name '*.rs'",
+            "grep -rn foo src",
+            "ls -la",
+            "git log --oneline",
+            "curl -s x | jq .",
+        ] {
             assert!(!is_view(c), "{c}");
         }
     }
@@ -766,14 +953,37 @@ mod tests {
         let v = |cmd: &str, bg: bool| json!({"tool_name": "Bash", "cwd": "/tmp", "session_id": "s", "tool_input": {"command": cmd, "run_in_background": bg}});
         assert!(rewrite(&v("cat x", false)).is_none());
         let bg: Value = serde_json::from_str(&rewrite(&v("npm run dev", true)).unwrap()).unwrap();
-        assert!(bg["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap().contains(" job run "), "background commands run as toomux jobs");
-        assert!(rewrite(&v("toomux job follow abc", true)).is_none(), "our own commands are left alone");
+        assert!(
+            bg["hookSpecificOutput"]["updatedInput"]["command"]
+                .as_str()
+                .unwrap()
+                .contains(" job run "),
+            "background commands run as toomux jobs"
+        );
+        assert!(
+            rewrite(&v("toomux job follow abc", true)).is_none(),
+            "our own commands are left alone"
+        );
         let out: Value = serde_json::from_str(&rewrite(&v("npm test", false)).unwrap()).unwrap();
-        let cmd = out["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap();
-        assert!(cmd.contains("exec {__toomux}>&-; npm test\n\n}") && cmd.contains("(exit $__toomux)"), "{cmd}");
-        assert_eq!(out["hookSpecificOutput"]["updatedInput"]["run_in_background"], false, "the rest of the input is kept");
-        assert!(rewrite(&v("", false)).is_none() && rewrite(&v("# just a note", false)).is_none(), "nothing to run: left alone");
-        assert!(rewrite(&v("python3 - <<EOF\nprint(1)", false)).is_none(), "a command bash can't parse wrapped is left alone");
+        let cmd = out["hookSpecificOutput"]["updatedInput"]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            cmd.contains("exec {__toomux}>&-; npm test\n\n}") && cmd.contains("(exit $__toomux)"),
+            "{cmd}"
+        );
+        assert_eq!(
+            out["hookSpecificOutput"]["updatedInput"]["run_in_background"], false,
+            "the rest of the input is kept"
+        );
+        assert!(
+            rewrite(&v("", false)).is_none() && rewrite(&v("# just a note", false)).is_none(),
+            "nothing to run: left alone"
+        );
+        assert!(
+            rewrite(&v("python3 - <<EOF\nprint(1)", false)).is_none(),
+            "a command bash can't parse wrapped is left alone"
+        );
         assert!(rewrite(&json!({"tool_name": "Read", "tool_input": {}})).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -786,31 +996,63 @@ mod tests {
             std::env::set_var("XDG_STATE_HOME", &tmp);
             std::env::set_var("XDG_RUNTIME_DIR", &tmp);
         }
-        let v = |cmd: &str, agent: Option<&str>, timeout: u64| {
-            json!({"tool_name": "Bash", "cwd": "/tmp", "session_id": "s", "agent_id": agent, "tool_input": {"command": cmd, "timeout": timeout}})
+        let v = |cmd: &str, agent: Option<&str>, timeout: u64| json!({"tool_name": "Bash", "cwd": "/tmp", "session_id": "s", "agent_id": agent, "tool_input": {"command": cmd, "timeout": timeout}});
+        let input = |r: Option<String>| {
+            serde_json::from_str::<Value>(&r.unwrap()).unwrap()["hookSpecificOutput"]["updatedInput"].clone()
         };
-        let input = |r: Option<String>| serde_json::from_str::<Value>(&r.unwrap()).unwrap()["hookSpecificOutput"]["updatedInput"].clone();
         let long = input(rewrite(&v("cargo nextest run", Some("a1"), 3_600_000)));
         let cmd = long["command"].as_str().unwrap();
-        assert!(cmd.contains(" job run ") && cmd.contains("--until 270") && cmd.contains(" cap "), "a job, its output kept as usual: {cmd}");
-        assert_eq!(long["timeout"], 300_000, "Claude's own timeout covers one spell");
-        let id = cmd.split(" job run ").nth(1).unwrap().split_whitespace().next().unwrap();
+        assert!(
+            cmd.contains(" job run ") && cmd.contains("--until 270") && cmd.contains(" cap "),
+            "a job, its output kept as usual: {cmd}"
+        );
+        assert_eq!(
+            long["timeout"], 300_000,
+            "Claude's own timeout covers one spell"
+        );
+        let id = cmd
+            .split(" job run ")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
         let job = crate::jobs::load(id).unwrap();
         assert_eq!(job.command, "cargo nextest run");
-        assert_eq!(job.deadline_ms - job.started_ms, 600_000, "stopped where Claude would have: at most 10 minutes");
+        assert_eq!(
+            job.deadline_ms - job.started_ms,
+            600_000,
+            "stopped where Claude would have: at most 10 minutes"
+        );
         let short = input(rewrite(&v("cargo nextest run", Some("a1"), 120_000)));
-        assert!(!short["command"].as_str().unwrap().contains(" job run "), "a wait inside the cache's life runs as before");
+        assert!(
+            !short["command"].as_str().unwrap().contains(" job run "),
+            "a wait inside the cache's life runs as before"
+        );
         let main = input(rewrite(&v("cargo nextest run", None, 600_000)));
-        assert!(!main["command"].as_str().unwrap().contains(" job run "), "conversations' caches last an hour");
-        let more = input(rewrite(&v("toomux job follow abc --more", Some("a1"), 600_000)));
-        assert!(more["command"].as_str().unwrap().contains(" cap "), "the rest of the output is kept like the rest");
+        assert!(
+            !main["command"].as_str().unwrap().contains(" job run "),
+            "conversations' caches last an hour"
+        );
+        let more = input(rewrite(&v(
+            "toomux job follow abc --more",
+            Some("a1"),
+            600_000,
+        )));
+        assert!(
+            more["command"].as_str().unwrap().contains(" cap "),
+            "the rest of the output is kept like the rest"
+        );
         assert!(rewrite(&v("toomux job follow abc --more", None, 0)).is_none());
         assert!(rewrite(&v("toomux out abc", Some("a1"), 600_000)).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn scan(text: &str) -> Scan {
-        let mut s = Scan { hide_from: Some(0), ..Default::default() };
+        let mut s = Scan {
+            hide_from: Some(0),
+            ..Default::default()
+        };
         s.feed(text.as_bytes());
         s.finish();
         s
@@ -829,9 +1071,18 @@ mod tests {
         text.push_str("error: could not compile `x`\n");
         let s = scan(&text);
         let v = view("abc1234", Path::new("/k/abc1234.txt"), &s, 0, false);
-        assert!(v.contains("error[E0308]: mismatched types") && v.contains("--> src/main.rs:412:17"), "{v}");
-        assert!(v.contains("80 warnings (the first 4 shown)") && v.contains("/k/abc1234.txt"), "{v}");
-        assert!(v.trim_end().ends_with("error: could not compile `x`"), "the tail is never dropped:\n{v}");
+        assert!(
+            v.contains("error[E0308]: mismatched types") && v.contains("--> src/main.rs:412:17"),
+            "{v}"
+        );
+        assert!(
+            v.contains("80 warnings (the first 4 shown)") && v.contains("/k/abc1234.txt"),
+            "{v}"
+        );
+        assert!(
+            v.trim_end().ends_with("error: could not compile `x`"),
+            "the tail is never dropped:\n{v}"
+        );
     }
 
     #[test]

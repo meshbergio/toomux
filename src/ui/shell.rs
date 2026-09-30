@@ -64,7 +64,12 @@ pub fn run(cfg: Config, popup: bool) -> Result<()> {
     let mut term = ratatui::init();
     crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
     let res = run_inner(cfg, popup, &mut term);
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, SetCursorStyle::DefaultUserShape);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        SetCursorStyle::DefaultUserShape
+    );
     ratatui::restore();
     res
 }
@@ -112,7 +117,10 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
     // Ask which terminal opened the popup before our control client joins:
     // tmux answers with the client that last had a key, and that is it.
     let origin = if popup {
-        crate::tmux::run(&["display-message", "-p", "#{client_name}"]).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty())
+        crate::tmux::run(&["display-message", "-p", "#{client_name}"])
+            .ok()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
     } else {
         None
     };
@@ -145,7 +153,11 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
     });
     crate::usage::fetch_in_background(&app.cfg, now_ms());
     // Start on the session that most wants attention.
-    if let Some(p) = app.selected().and_then(|s| s.pane.as_ref()).map(|p| p.id.clone()) {
+    if let Some(p) = app
+        .selected()
+        .and_then(|s| s.pane.as_ref())
+        .map(|p| p.id.clone())
+    {
         app.shell_mut().want = Some((p, Instant::now()));
     }
     let mut last_sel = app.sel;
@@ -181,7 +193,8 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
         }
         app.flush();
         let now = Instant::now();
-        let reload_due = now >= app.loaded_at + Duration::from_secs(2) || (app.changed && now >= app.loaded_at + Duration::from_millis(500));
+        let reload_due = now >= app.loaded_at + Duration::from_secs(2)
+            || (app.changed && now >= app.loaded_at + Duration::from_millis(500));
         if reload_due && app.shell_ref().listing.is_none() {
             if app.shell_ref().gone {
                 app.reload();
@@ -190,7 +203,10 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
             } else {
                 // The reload happens when tmux answers with its panes.
                 let sh = app.shell_mut();
-                let seq = sh.control.one(format!("list-panes -a -F {}", control::quote(crate::tmux::PANES_FORMAT)));
+                let seq = sh.control.one(format!(
+                    "list-panes -a -F {}",
+                    control::quote(crate::tmux::PANES_FORMAT)
+                ));
                 sh.listing = Some(seq);
                 app.loaded_at = now;
             }
@@ -202,7 +218,10 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
         }
         if app.sel != last_sel {
             last_sel = app.sel;
-            let pane = app.selected().and_then(|s| s.pane.as_ref()).map(|p| p.id.clone());
+            let pane = app
+                .selected()
+                .and_then(|s| s.pane.as_ref())
+                .map(|p| p.id.clone());
             let sh = app.shell_mut();
             match pane {
                 Some(p) if sh.live.as_ref().is_none_or(|l| l.pane != p) => sh.want = Some((p, now)),
@@ -211,10 +230,11 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
             app.dirty = true;
         }
         if let Some((p, t)) = app.shell_ref().want.clone()
-            && now >= t + Duration::from_millis(90) {
-                app.shell_mut().want = None;
-                app.show_live(&p);
-            }
+            && now >= t + Duration::from_millis(90)
+        {
+            app.shell_mut().want = None;
+            app.show_live(&p);
+        }
         if app.shell_ref().reseed_at.is_some_and(|t| now >= t) {
             app.shell_mut().reseed_at = None;
             app.reseed();
@@ -253,7 +273,9 @@ impl App {
             return;
         }
         sh.ticked = Instant::now();
-        let Ok(me) = std::env::current_exe() else { return };
+        let Ok(me) = std::env::current_exe() else {
+            return;
+        };
         sh.ticker = std::process::Command::new(me)
             .arg("status")
             .stdin(std::process::Stdio::null())
@@ -320,7 +342,11 @@ impl App {
         let sh = self.shell_mut();
         match ev {
             control::Event::Output { pane, data } => {
-                if let Some(l) = sh.live.as_mut().filter(|l| crate::tmux::bare(&l.pane) == pane) {
+                if let Some(l) = sh
+                    .live
+                    .as_mut()
+                    .filter(|l| crate::tmux::bare(&l.pane) == pane)
+                {
                     l.output(&data);
                 }
             }
@@ -332,9 +358,10 @@ impl App {
             }
             control::Event::Reply { seq, lines, .. } => {
                 if let Some(l) = sh.live.as_mut()
-                    && l.reply(seq, lines) {
-                        self.dirty = true;
-                    }
+                    && l.reply(seq, lines)
+                {
+                    self.dirty = true;
+                }
             }
             control::Event::Layout => {
                 if sh.live.is_some() {
@@ -354,7 +381,9 @@ impl App {
     /// Point our control client at a pane and start following it.
     pub(super) fn show_live(&mut self, pane: &str) {
         let (w, h) = self.shell_ref().area_size();
-        let server = crate::tmux::server_of(pane).unwrap_or("default").to_string();
+        let server = crate::tmux::server_of(pane)
+            .unwrap_or("default")
+            .to_string();
         if server != self.shell_ref().control.server && !self.restart_control(&server) {
             return;
         }
@@ -514,11 +543,17 @@ impl App {
             }
             return;
         }
-        let Some(pane) = self.live_target() else { return };
+        let Some(pane) = self.live_target() else {
+            return;
+        };
         // paste-buffer -p brackets the text if the program asked for that.
         let sh = self.shell_mut();
-        sh.outbox.push(format!("set-buffer -b toomux-paste -- {}", control::quote(&text)));
-        sh.outbox.push(format!("paste-buffer -p -d -b toomux-paste -t {pane}"));
+        sh.outbox.push(format!(
+            "set-buffer -b toomux-paste -- {}",
+            control::quote(&text)
+        ));
+        sh.outbox
+            .push(format!("paste-buffer -p -d -b toomux-paste -t {pane}"));
     }
 
     fn shell_mouse(&mut self, m: MouseEvent) {
@@ -531,7 +566,8 @@ impl App {
             return;
         }
         let area = self.shell_ref().area;
-        let in_live = x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
+        let in_live =
+            x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
         if in_live && self.usage_view.is_none() && self.shell_ref().live.is_some() {
             if matches!(m.kind, MouseEventKind::Down(_)) {
                 self.shell_mut().focus_live = true;
@@ -542,7 +578,8 @@ impl App {
             let Some(l) = sh.live.as_mut() else { return };
             let (col, row) = (x - area.x, y - area.y);
             if let Some(bytes) = live::mouse(&m, col, row, l.flags) {
-                sh.outbox.push(format!("send-keys -t {pane} -H {}", live::hex(&bytes)));
+                sh.outbox
+                    .push(format!("send-keys -t {pane} -H {}", live::hex(&bytes)));
             } else {
                 match m.kind {
                     MouseEventKind::ScrollUp => l.scroll(3),
@@ -557,8 +594,15 @@ impl App {
                 self.click(x, y);
                 // A session clicked in the list opens live, ready for keys:
                 // that session, not the one that was showing.
-                if matches!(self.mode, Mode::Normal) && self.list_hits.iter().any(|(r, _)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
-                    let pane = self.selected().and_then(|s| s.pane.as_ref()).map(|p| p.id.clone());
+                if matches!(self.mode, Mode::Normal)
+                    && self.list_hits.iter().any(|(r, _)| {
+                        x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
+                    })
+                {
+                    let pane = self
+                        .selected()
+                        .and_then(|s| s.pane.as_ref())
+                        .map(|p| p.id.clone());
                     match pane {
                         Some(p) if self.live_pane().as_ref() != Some(&p) => self.go(&p),
                         Some(_) => self.shell_mut().focus_live = true,
@@ -591,10 +635,15 @@ impl App {
         // With the keyboard in a session, the list marks that session.
         if self.shell_ref().focus_live
             && let Some(pane) = self.live_pane()
-                && let Some(pid) = self.sessions.iter().find(|s| s.pane.as_ref().is_some_and(|p| p.id == pane)).map(|s| s.pid)
-                    && self.items().any(|s| s.pid == pid) {
-                        self.sel = Some(pid);
-                    }
+            && let Some(pid) = self
+                .sessions
+                .iter()
+                .find(|s| s.pane.as_ref().is_some_and(|p| p.id == pane))
+                .map(|s| s.pid)
+            && self.items().any(|s| s.pid == pid)
+        {
+            self.sel = Some(pid);
+        }
         self.cmd_hits.clear();
         self.list_hits.clear();
         // A clean margin, where your terminal shows through, and one rounded
@@ -616,7 +665,8 @@ impl App {
             .style(Style::new().bg(p_base).fg(self.pal.text));
         let full = border.inner(framed);
         f.render_widget(border, framed);
-        let focus_live = self.shell_ref().focus_live && self.usage_view.is_none() && self.memory.is_none();
+        let focus_live =
+            self.shell_ref().focus_live && self.usage_view.is_none() && self.memory.is_none();
         let (foot_lines, foot_hits) = if let Some(m) = &self.memory {
             (vec![self.hint_line(&m.hints(), full.width)], Vec::new())
         } else if focus_live && matches!(self.mode, Mode::Normal) {
@@ -624,9 +674,13 @@ impl App {
         } else {
             self.foot(full.width)
         };
-        let fh = (foot_lines.len() as u16).min(full.height.saturating_sub(2)).max(1);
+        let fh = (foot_lines.len() as u16)
+            .min(full.height.saturating_sub(2))
+            .max(1);
         let head_rows = self.head_lines(full.width);
-        let hh = (head_rows.len() as u16).min(full.height.saturating_sub(fh + 3)).max(1);
+        let hh = (head_rows.len() as u16)
+            .min(full.height.saturating_sub(fh + 3))
+            .max(1);
         let [head, rule_top, body, rule_bottom, foot] = Layout::vertical([
             Constraint::Length(hh),
             Constraint::Length(1),
@@ -639,32 +693,81 @@ impl App {
         f.render_widget(Block::new().style(Style::new().bg(self.pal.raised)), foot);
         for (row, (line, hits)) in head_rows.into_iter().enumerate().take(hh as usize) {
             let y = head.y + row as u16;
-            f.render_widget(Paragraph::new(line), Rect { y, height: 1, ..head });
+            f.render_widget(
+                Paragraph::new(line),
+                Rect {
+                    y,
+                    height: 1,
+                    ..head
+                },
+            );
             for (x, w, cmd) in hits {
-                self.cmd_hits.push((Rect { x: head.x + x, y, width: w, height: 1 }, cmd));
+                self.cmd_hits.push((
+                    Rect {
+                        x: head.x + x,
+                        y,
+                        width: w,
+                        height: 1,
+                    },
+                    cmd,
+                ));
             }
         }
         if matches!(self.mode, Mode::New(_)) {
             self.draw_new_head(f, head);
         }
         let show_list = self.shell_ref().show_list && self.memory.is_none();
-        let list_w = if show_list { (body.width * 32 / 100).clamp(34.min(body.width), 58) } else { 0 };
-        let [list, gap, right] =
-            Layout::horizontal([Constraint::Length(list_w), Constraint::Length(if show_list { 1 } else { 0 }), Constraint::Fill(1)]).areas(body);
+        let list_w = if show_list {
+            (body.width * 32 / 100).clamp(34.min(body.width), 58)
+        } else {
+            0
+        };
+        let [list, gap, right] = Layout::horizontal([
+            Constraint::Length(list_w),
+            Constraint::Length(if show_list { 1 } else { 0 }),
+            Constraint::Fill(1),
+        ])
+        .areas(body);
         // Hairlines close off the header and footer and meet the frame (├ ┤)
         // and the divider (┬ ┴): one drawn structure.
         let fc = self.pal.frame;
         let edge = |left: &'static str, right: &'static str, mid: &'static str| {
-            let mut j = vec![(framed.x, left), (framed.x + framed.width.saturating_sub(1), right)];
+            let mut j = vec![
+                (framed.x, left),
+                (framed.x + framed.width.saturating_sub(1), right),
+            ];
             if show_list {
                 j.push((gap.x, mid));
             }
             j
         };
         let bordered = framed.x < full.x;
-        let widen = |r: Rect| if bordered { Rect { x: framed.x, width: framed.width, ..r } } else { r };
-        let (top_j, bottom_j) = if bordered { (edge("├", "┤", "┬"), edge("├", "┤", "┴")) } else {
-            (if show_list { vec![(gap.x, "┬")] } else { vec![] }, if show_list { vec![(gap.x, "┴")] } else { vec![] })
+        let widen = |r: Rect| {
+            if bordered {
+                Rect {
+                    x: framed.x,
+                    width: framed.width,
+                    ..r
+                }
+            } else {
+                r
+            }
+        };
+        let (top_j, bottom_j) = if bordered {
+            (edge("├", "┤", "┬"), edge("├", "┤", "┴"))
+        } else {
+            (
+                if show_list {
+                    vec![(gap.x, "┬")]
+                } else {
+                    vec![]
+                },
+                if show_list {
+                    vec![(gap.x, "┴")]
+                } else {
+                    vec![]
+                },
+            )
         };
         hrule(f, widen(rule_top), fc, p_base, &top_j);
         hrule(f, widen(rule_bottom), fc, p_base, &bottom_j);
@@ -697,10 +800,23 @@ impl App {
         }
         let hint_y = foot.y + foot.height.saturating_sub(1);
         for (x, w, cmd) in foot_hits {
-            self.cmd_hits.push((Rect { x: foot.x + x, y: hint_y, width: w, height: 1 }, cmd));
+            self.cmd_hits.push((
+                Rect {
+                    x: foot.x + x,
+                    y: hint_y,
+                    width: w,
+                    height: 1,
+                },
+                cmd,
+            ));
         }
         let skip = foot_lines.len().saturating_sub(foot.height as usize);
-        f.render_widget(Paragraph::new(Text::from(foot_lines.into_iter().skip(skip).collect::<Vec<_>>())), foot);
+        f.render_widget(
+            Paragraph::new(Text::from(
+                foot_lines.into_iter().skip(skip).collect::<Vec<_>>(),
+            )),
+            foot,
+        );
         if matches!(self.mode, Mode::Help | Mode::Menu(_)) {
             recede(f.buffer_mut(), framed, self.pal.well, 0.62, &self.pal);
             self.cmd_hits.clear();
@@ -712,18 +828,22 @@ impl App {
             }
         }
         if let Some((hx, hy)) = self.hover
-            && let Some((r, cmd)) = self.cmd_hits.iter().find(|(r, _)| hx >= r.x && hx < r.x + r.width && hy >= r.y && hy < r.y + r.height) {
-                let menu = matches!(cmd, Cmd::MenuPick(_));
-                let buf = f.buffer_mut();
-                for x in r.x..(r.x + r.width).min(buf.area.width) {
-                    let c = &mut buf[(x, r.y)];
-                    if menu {
-                        c.bg = self.pal.hover;
-                    } else if !c.symbol().trim().is_empty() {
-                        c.fg = self.pal.accent;
-                    }
+            && let Some((r, cmd)) = self
+                .cmd_hits
+                .iter()
+                .find(|(r, _)| hx >= r.x && hx < r.x + r.width && hy >= r.y && hy < r.y + r.height)
+        {
+            let menu = matches!(cmd, Cmd::MenuPick(_));
+            let buf = f.buffer_mut();
+            for x in r.x..(r.x + r.width).min(buf.area.width) {
+                let c = &mut buf[(x, r.y)];
+                if menu {
+                    c.bg = self.pal.hover;
+                } else if !c.symbol().trim().is_empty() {
+                    c.fg = self.pal.accent;
                 }
             }
+        }
     }
 
     /// Whether the right side shows the live session (vs. a transcript).
@@ -735,7 +855,10 @@ impl App {
         if sh.focus_live {
             return true;
         }
-        let sel_pane = self.selected().and_then(|s| s.pane.as_ref()).map(|p| p.id.clone());
+        let sel_pane = self
+            .selected()
+            .and_then(|s| s.pane.as_ref())
+            .map(|p| p.id.clone());
         sel_pane.as_ref().is_some_and(|p| *p == l.pane) || (sh.want.is_some() && sel_pane.is_some())
     }
 
@@ -748,7 +871,11 @@ impl App {
         f.render_widget(Block::new().style(Style::new().bg(raised)), band);
         let now = now_ms();
         let live_pane = self.live_pane();
-        let s = self.sessions.iter().find(|s| s.pane.as_ref().map(|x| &x.id) == live_pane.as_ref()).cloned();
+        let s = self
+            .sessions
+            .iter()
+            .find(|s| s.pane.as_ref().map(|x| &x.id) == live_pane.as_ref())
+            .cloned();
         // Focus shows as the other side stepping back; no mark needed here.
         let _ = accent;
         let mut spans = vec![Span::raw("  ")];
@@ -762,9 +889,15 @@ impl App {
             let (word, rest, time) = s.state_parts(now);
             spans.push(Span::styled(format!("{g} "), Style::new().fg(c)));
             spans.push(Span::styled(s.title.clone(), title));
-            spans.push(Span::styled(format!("   {}", s.account_name(&self.cfg)), Style::new().fg(muted)));
+            spans.push(Span::styled(
+                format!("   {}", s.account_name(&self.cfg)),
+                Style::new().fg(muted),
+            ));
             spans.push(Span::styled(" · ", Style::new().fg(muted)));
-            spans.push(Span::styled(word, Style::new().fg(self.pal.word(s, noticed))));
+            spans.push(Span::styled(
+                word,
+                Style::new().fg(self.pal.word(s, noticed)),
+            ));
             for part in [rest, time].into_iter().flatten() {
                 spans.push(Span::styled(format!(" · {part}"), Style::new().fg(muted)));
             }
@@ -777,8 +910,12 @@ impl App {
                 extra.push((format!("◎ {}", q.chip(now)), self.voyage_tone(q)));
             }
             if let Some(tokens) = self.info.get(&s.id).and_then(|i| i.tokens) {
-                let near = self.cfg.handover_tokens > 0 && tokens * 4 >= self.cfg.handover_tokens * 3;
-                extra.push((format!("{}k context", tokens / 1000), if near { self.pal.working_word } else { muted }));
+                let near =
+                    self.cfg.handover_tokens > 0 && tokens * 4 >= self.cfg.handover_tokens * 3;
+                extra.push((
+                    format!("{}k context", tokens / 1000),
+                    if near { self.pal.working_word } else { muted },
+                ));
             }
             if let Some(chip) = self.cache_chip(s, now) {
                 extra.push(chip);
@@ -786,7 +923,10 @@ impl App {
             extra.extend(self.cost_so_far(s).map(|c| (c, muted)));
             extra.push((short_place(&s.place()), muted));
             if let Some((repo, n)) = &s.pr {
-                extra.push((format!("{}#{n}", repo.rsplit('/').next().unwrap_or(repo)), muted));
+                extra.push((
+                    format!("{}#{n}", repo.rsplit('/').next().unwrap_or(repo)),
+                    muted,
+                ));
             }
             let used: usize = spans.iter().map(|x| x.width()).sum();
             let mut room = (band.width as usize).saturating_sub(used + 1);
@@ -801,16 +941,25 @@ impl App {
         }
         let scrolled = self.shell_ref().live.as_ref().is_some_and(|l| l.scrolled());
         if scrolled {
-            spans.push(Span::styled("   scrolled back · any key returns", Style::new().fg(self.pal.working_word)));
+            spans.push(Span::styled(
+                "   scrolled back · any key returns",
+                Style::new().fg(self.pal.working_word),
+            ));
         }
         f.render_widget(Paragraph::new(Line::from(spans)), band);
-        let inner = Rect { x: area.x + 1, y: area.y + 1, width: area.width.saturating_sub(1), height: area.height.saturating_sub(1) };
+        let inner = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(1),
+            height: area.height.saturating_sub(1),
+        };
         let sh = self.shell_mut();
         sh.area = inner;
         let want = (inner.width, inner.height);
         if sh.sized != want && inner.width > 4 && inner.height > 2 {
             sh.sized = want;
-            sh.control.one(format!("refresh-client -C {}x{}", want.0, want.1));
+            sh.control
+                .one(format!("refresh-client -C {}x{}", want.0, want.1));
             if sh.live.is_some() {
                 sh.reseed_at = Some(Instant::now() + Duration::from_millis(150));
             }
@@ -840,11 +989,22 @@ impl App {
         let p = &self.pal;
         let w = width as usize;
         if let Some(t) = &self.flash
-            && t.2.elapsed() < Duration::from_secs(5) {
-                return (vec![Line::from(vec![Span::raw(" "), Span::styled(t.0.clone(), Style::new().fg(t.1))])], Vec::new());
-            }
-        let mut hints: Vec<(&str, &str, Option<Cmd>)> =
-            vec![("alt-s", "sessions", None), ("alt-u", "usage", Some(Cmd::UsageToggle)), ("alt-m", "memory", Some(Cmd::MemoryToggle)), ("alt-b", "list", None)];
+            && t.2.elapsed() < Duration::from_secs(5)
+        {
+            return (
+                vec![Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(t.0.clone(), Style::new().fg(t.1)),
+                ])],
+                Vec::new(),
+            );
+        }
+        let mut hints: Vec<(&str, &str, Option<Cmd>)> = vec![
+            ("alt-s", "sessions", None),
+            ("alt-u", "usage", Some(Cmd::UsageToggle)),
+            ("alt-m", "memory", Some(Cmd::MemoryToggle)),
+            ("alt-b", "list", None),
+        ];
         if self.shell_ref().popup {
             hints.push(("alt-j", "go there", Some(Cmd::GoThere)));
         }
@@ -878,7 +1038,10 @@ impl App {
 impl Shell {
     pub(super) fn live_title(&self, sessions: &[Session]) -> Option<String> {
         let pane = &self.live.as_ref()?.pane;
-        sessions.iter().find(|s| s.pane.as_ref().is_some_and(|p| &p.id == pane)).map(|s| s.title.clone())
+        sessions
+            .iter()
+            .find(|s| s.pane.as_ref().is_some_and(|p| &p.id == pane))
+            .map(|s| s.title.clone())
     }
 
     pub(super) fn has_live(&self) -> bool {
@@ -886,7 +1049,11 @@ impl Shell {
     }
 
     fn area_size(&self) -> (u16, u16) {
-        if self.area.width > 0 { (self.area.width, self.area.height) } else { (80, 24) }
+        if self.area.width > 0 {
+            (self.area.width, self.area.height)
+        } else {
+            (80, 24)
+        }
     }
 }
 

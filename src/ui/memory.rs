@@ -104,23 +104,39 @@ fn prepare(g: Graph) -> Loaded {
         .nodes
         .iter()
         .enumerate()
-        .map(|(i, n)| if n.kind == Kind::Project { Some(i) } else { n.project.as_ref().and_then(|p| g.get(p)) })
+        .map(|(i, n)| {
+            if n.kind == Kind::Project {
+                Some(i)
+            } else {
+                n.project.as_ref().and_then(|p| g.get(p))
+            }
+        })
         .collect();
     let (sky, lanes) = sky(&g, &home);
-    Loaded { g, adj, sky, lanes, home }
+    Loaded {
+        g,
+        adj,
+        sky,
+        lanes,
+        home,
+    }
 }
 
 /// Lay the projects out: discs sized by what they hold, pulled together by
 /// the links between them, pushed apart where they'd overlap. Wider than
 /// tall, as terminals are.
 fn sky(g: &Graph, home: &[Option<usize>]) -> (Vec<Star>, Vec<(usize, usize, u32)>) {
-    let mut projects: Vec<usize> = (0..g.nodes.len()).filter(|&i| g.nodes[i].kind == Kind::Project).collect();
+    let mut projects: Vec<usize> = (0..g.nodes.len())
+        .filter(|&i| g.nodes[i].kind == Kind::Project)
+        .collect();
     let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
-        if n.kind != Kind::Project && !n.kind.fine()
-            && let Some(p) = home[i] {
-                members.entry(p).or_default().push(i);
-            }
+        if n.kind != Kind::Project
+            && !n.kind.fine()
+            && let Some(p) = home[i]
+        {
+            members.entry(p).or_default().push(i);
+        }
     }
     let weight = |p: usize| members.get(&p).map_or(0, Vec::len) as f64 + 1.0;
     projects.sort_by(|a, b| weight(*b).total_cmp(&weight(*a)).then(a.cmp(b)));
@@ -129,17 +145,23 @@ fn sky(g: &Graph, home: &[Option<usize>]) -> (Vec<Star>, Vec<(usize, usize, u32)
     for e in &g.edges {
         if let (Some(a), Some(b)) = (home[e.from], home[e.to])
             && a != b
-            && let (Some(&ia), Some(&ib)) = (at.get(&a), at.get(&b)) {
-                *cross.entry((ia.min(ib), ia.max(ib))).or_default() += e.n;
-            }
+            && let (Some(&ia), Some(&ib)) = (at.get(&a), at.get(&b))
+        {
+            *cross.entry((ia.min(ib), ia.max(ib))).or_default() += e.n;
+        }
     }
     let n = projects.len();
-    let r: Vec<f64> = projects.iter().map(|&p| 0.02 + 0.016 * weight(p).sqrt()).collect();
-    let mut pos: Vec<(f64, f64)> = (0..n).map(|i| {
-        let a = i as f64 * GOLDEN;
-        let d = 0.06 * (i as f64).sqrt();
-        (a.cos() * d * 1.6, a.sin() * d)
-    }).collect();
+    let r: Vec<f64> = projects
+        .iter()
+        .map(|&p| 0.02 + 0.016 * weight(p).sqrt())
+        .collect();
+    let mut pos: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            let a = i as f64 * GOLDEN;
+            let d = 0.06 * (i as f64).sqrt();
+            (a.cos() * d * 1.6, a.sin() * d)
+        })
+        .collect();
     let lanes: Vec<(usize, usize, u32)> = cross.iter().map(|(&(a, b), &w)| (a, b, w)).collect();
     for step in 0..360 {
         let cool = 1.0 - step as f64 / 400.0;
@@ -200,7 +222,13 @@ fn sky(g: &Graph, home: &[Option<usize>]) -> (Vec<Star>, Vec<(usize, usize, u32)
                     (m, pos[i].0 + rr * a.cos(), pos[i].1 + rr * a.sin())
                 })
                 .collect();
-            Star { node: p, x: pos[i].0, y: pos[i].1, r: r[i], dust }
+            Star {
+                node: p,
+                x: pos[i].0,
+                y: pos[i].1,
+                r: r[i],
+                dust,
+            }
         })
         .collect();
     (stars, lanes)
@@ -238,7 +266,9 @@ fn group_of(g: &Graph, other: usize, link: Link, out: bool) -> (u8, &'static str
 fn group_text(name: &str, n: usize) -> String {
     match (n, name) {
         (1, "memory index") => name.to_string(),
-        (1, "sessions" | "memory files" | "notes" | "turns" | "kept outputs") => name.trim_end_matches('s').to_string(),
+        (1, "sessions" | "memory files" | "notes" | "turns" | "kept outputs") => {
+            name.trim_end_matches('s').to_string()
+        }
         (1, _) => name.to_string(),
         (_, "memory index") => format!("memory indexes {n}"),
         _ => format!("{name} {n}"),
@@ -320,7 +350,11 @@ impl MemView {
 
     fn arrive(&mut self, d: Loaded) {
         // Start on the project touched last.
-        self.sel = d.sky.iter().max_by_key(|s| d.g.nodes[s.node].last).map_or(0, |s| s.node);
+        self.sel = d
+            .sky
+            .iter()
+            .max_by_key(|s| d.g.nodes[s.node].last)
+            .map_or(0, |s| s.node);
         self.data = Some(d);
         self.layout();
     }
@@ -329,11 +363,15 @@ impl MemView {
         if self.rx.is_some() {
             return Some(Duration::from_millis(120));
         }
-        self.tween.filter(|t| t.elapsed().as_secs_f32() * 1000.0 < TWEEN_MS).map(|_| Duration::from_millis(16))
+        self.tween
+            .filter(|t| t.elapsed().as_secs_f32() * 1000.0 < TWEEN_MS)
+            .map(|_| Duration::from_millis(16))
     }
 
     fn shown(&self) -> Vec<(usize, f64, f64)> {
-        let Some(d) = &self.data else { return Vec::new() };
+        let Some(d) = &self.data else {
+            return Vec::new();
+        };
         match self.focus {
             None => d.sky.iter().map(|s| (s.node, s.x, s.y)).collect(),
             Some(_) => self.placed.iter().map(|p| (p.node, p.x, p.y)).collect(),
@@ -343,7 +381,10 @@ impl MemView {
     /// Gather the focus's links around it, or lay out the sky.
     fn layout(&mut self) {
         let old: HashMap<usize, (f64, f64)> = self.current_positions();
-        self.bloom = old.get(&self.focus.unwrap_or(self.sel)).copied().unwrap_or((0.0, 0.0));
+        self.bloom = old
+            .get(&self.focus.unwrap_or(self.sel))
+            .copied()
+            .unwrap_or((0.0, 0.0));
         self.placed.clear();
         self.groups.clear();
         let Some(d) = &self.data else { return };
@@ -369,7 +410,8 @@ impl MemView {
     }
 
     fn progress(&self) -> f64 {
-        self.tween.map_or(1.0, |t| ease(t.elapsed().as_secs_f32() * 1000.0 / TWEEN_MS))
+        self.tween
+            .map_or(1.0, |t| ease(t.elapsed().as_secs_f32() * 1000.0 / TWEEN_MS))
     }
 
     fn go(&mut self, to: usize) {
@@ -438,34 +480,42 @@ impl MemView {
 
     fn find(&mut self) {
         let Some(d) = &self.data else { return };
-        let Some(s) = self.search.as_mut() else { return };
+        let Some(s) = self.search.as_mut() else {
+            return;
+        };
         let q = s.query.to_lowercase();
         s.sel = 0;
         if q.trim().is_empty() {
             s.hits.clear();
             return;
         }
-        let mut scored: Vec<(i64, usize)> = d
-            .g
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                let label = n.label.to_lowercase();
-                let base = if n.kind.fine() { 0 } else { 40 };
-                let score = if let Some(at) = label.find(&q) {
-                    200 - at as i64 - (label.len() as i64 / 8) + if at == 0 { 60 } else { 0 }
-                } else if n.path.as_deref().is_some_and(|p| p.to_lowercase().contains(&q)) {
-                    90
-                } else if n.text.to_lowercase().contains(&q) {
-                    30
-                } else {
-                    return None;
-                };
-                Some((score + base, i))
-            })
-            .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then(d.g.nodes[b.1].last.cmp(&d.g.nodes[a.1].last)));
+        let mut scored: Vec<(i64, usize)> =
+            d.g.nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    let label = n.label.to_lowercase();
+                    let base = if n.kind.fine() { 0 } else { 40 };
+                    let score = if let Some(at) = label.find(&q) {
+                        200 - at as i64 - (label.len() as i64 / 8) + if at == 0 { 60 } else { 0 }
+                    } else if n
+                        .path
+                        .as_deref()
+                        .is_some_and(|p| p.to_lowercase().contains(&q))
+                    {
+                        90
+                    } else if n.text.to_lowercase().contains(&q) {
+                        30
+                    } else {
+                        return None;
+                    };
+                    Some((score + base, i))
+                })
+                .collect();
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(d.g.nodes[b.1].last.cmp(&d.g.nodes[a.1].last))
+        });
         s.hits = scored.into_iter().take(60).map(|x| x.1).collect();
     }
 
@@ -520,7 +570,13 @@ impl MemView {
                 }
             }
             KeyCode::Backspace => self.back(),
-            KeyCode::Char('/') => self.search = Some(Search { query: String::new(), hits: Vec::new(), sel: 0 }),
+            KeyCode::Char('/') => {
+                self.search = Some(Search {
+                    query: String::new(),
+                    hits: Vec::new(),
+                    sel: 0,
+                })
+            }
             KeyCode::Char('o') => self.open_browser(),
             KeyCode::Char('r') => {
                 let keep = (self.focus, self.sel);
@@ -546,7 +602,12 @@ impl MemView {
         let near = self
             .hits
             .iter()
-            .map(|&(n, c, r)| (n, (c as i32 - col as i32).abs() + 2 * (r as i32 - row as i32).abs()))
+            .map(|&(n, c, r)| {
+                (
+                    n,
+                    (c as i32 - col as i32).abs() + 2 * (r as i32 - row as i32).abs(),
+                )
+            })
             .filter(|h| h.1 <= 3)
             .min_by_key(|h| h.1);
         if let Some((n, _)) = near {
@@ -562,7 +623,12 @@ impl MemView {
         if self.search.is_some() {
             return vec![("enter", "go"), ("↑↓", "choose"), ("esc", "cancel")];
         }
-        let mut h = vec![("enter", "focus"), ("arrows", "move"), ("/", "find"), ("o", "browser")];
+        let mut h = vec![
+            ("enter", "focus"),
+            ("arrows", "move"),
+            ("/", "find"),
+            ("o", "browser"),
+        ];
         if !self.back.is_empty() {
             h.push(("bksp", "back"));
         }
@@ -633,7 +699,14 @@ fn groups_of(d: &Loaded, f: usize) -> Vec<(u8, &'static str, Vec<usize>, Link)> 
 
 fn gather(d: &Loaded, f: usize, aspect: f64) -> (Vec<Placed>, Vec<Group>) {
     let groups = groups_of(d, f);
-    let mut placed = vec![Placed { node: f, x: 0.0, y: 0.0, via: None, ring: 0, group: usize::MAX }];
+    let mut placed = vec![Placed {
+        node: f,
+        x: 0.0,
+        y: 0.0,
+        via: None,
+        ring: 0,
+        group: usize::MAX,
+    }];
     let mut labels = Vec::new();
     let total: f64 = groups.iter().map(|x| (x.2.len() as f64).max(3.0)).sum();
     if total == 0.0 {
@@ -654,12 +727,27 @@ fn gather(d: &Loaded, f: usize, aspect: f64) -> (Vec<Placed>, Vec<Group>) {
             let r = 0.5 + 0.17 * ring as f64;
             outer = r;
             let seats = ((span * r / 0.045).floor() as usize).max(1);
-            let take = if ring >= 2 { left.len() } else { seats.min(left.len()) };
+            let take = if ring >= 2 {
+                left.len()
+            } else {
+                seats.min(left.len())
+            };
             let (now, rest) = left.split_at(take);
             for (j, &m) in now.iter().enumerate() {
                 let a = angle - span * (j as f64 + 0.5) / take as f64;
-                let rr = if ring >= 2 { r + 0.05 * (j % 3) as f64 } else { r };
-                placed.push(Placed { node: m, x: a.cos() * rr * rx, y: a.sin() * rr * 0.9, via: Some(*link), ring: ring as u8, group: gi });
+                let rr = if ring >= 2 {
+                    r + 0.05 * (j % 3) as f64
+                } else {
+                    r
+                };
+                placed.push(Placed {
+                    node: m,
+                    x: a.cos() * rr * rx,
+                    y: a.sin() * rr * 0.9,
+                    via: Some(*link),
+                    ring: ring as u8,
+                    group: gi,
+                });
             }
             left = rest;
             ring += 1;
@@ -667,7 +755,15 @@ fn gather(d: &Loaded, f: usize, aspect: f64) -> (Vec<Placed>, Vec<Group>) {
         let mid = angle - span / 2.0;
         let lr = (outer + 0.16).min(1.0);
         let text = group_text(name, members.len());
-        labels.push(Group { text, x: mid.cos() * lr * rx, y: mid.sin() * lr * 0.9, from: angle, span, link: *link, members: members.len() });
+        labels.push(Group {
+            text,
+            x: mid.cos() * lr * rx,
+            y: mid.sin() * lr * 0.9,
+            from: angle,
+            span,
+            link: *link,
+            members: members.len(),
+        });
         angle -= span + gap;
     }
     (placed, labels)
@@ -722,7 +818,16 @@ impl App {
     fn memory_legend(&self, d: &Loaded, v: &MemView, width: usize) -> Vec<Vec<Span<'static>>> {
         let p = &self.pal;
         let g = &d.g;
-        let order = [Kind::Project, Kind::Index, Kind::File, Kind::Note, Kind::Session, Kind::Handover, Kind::Turn, Kind::Output];
+        let order = [
+            Kind::Project,
+            Kind::Index,
+            Kind::File,
+            Kind::Note,
+            Kind::Session,
+            Kind::Handover,
+            Kind::Turn,
+            Kind::Output,
+        ];
         let mut kinds: Vec<Kind> = Vec::new();
         let mut links: Vec<Link> = Vec::new();
         match v.focus {
@@ -778,7 +883,12 @@ impl App {
             .collect();
         let mut rows = pack(std::mem::take(&mut items), width);
         // One swatch per colour, naming the links it stands for.
-        let classes: [&[Link]; 4] = [&[Link::In, Link::Holds], &[Link::Links], &[Link::Wrote, Link::Continued], &[Link::Read, Link::Found]];
+        let classes: [&[Link]; 4] = [
+            &[Link::In, Link::Holds],
+            &[Link::Links],
+            &[Link::Wrote, Link::Continued],
+            &[Link::Read, Link::Found],
+        ];
         for members in classes {
             let here: Vec<&str> = members
                 .iter()
@@ -794,15 +904,19 @@ impl App {
                 })
                 .collect();
             if let Some(&first) = members.first()
-                && !here.is_empty() {
-                    items.push(vec![
-                        Span::styled("──", Style::new().fg(self.link_color(first))),
-                        Span::styled(format!(" {}", here.join(" · ")), Style::new().fg(p.muted)),
-                    ]);
-                }
+                && !here.is_empty()
+            {
+                items.push(vec![
+                    Span::styled("──", Style::new().fg(self.link_color(first))),
+                    Span::styled(format!(" {}", here.join(" · ")), Style::new().fg(p.muted)),
+                ]);
+            }
         }
         if v.focus.is_none() {
-            items.push(vec![Span::styled("──", Style::new().fg(p.dim)), Span::styled(" shared links".to_string(), Style::new().fg(p.muted))]);
+            items.push(vec![
+                Span::styled("──", Style::new().fg(p.dim)),
+                Span::styled(" shared links".to_string(), Style::new().fg(p.muted)),
+            ]);
         }
         rows.extend(pack(items, width));
         if v.focus.is_none() {
@@ -814,7 +928,10 @@ impl App {
                         Span::styled("⣿", Style::new().fg(file)),
                         Span::styled(" brighter is newer", muted),
                     ],
-                    vec![Span::styled("∙◉", Style::new().fg(p.text)), Span::styled(" bigger holds more", muted)],
+                    vec![
+                        Span::styled("∙◉", Style::new().fg(p.text)),
+                        Span::styled(" bigger holds more", muted),
+                    ],
                 ],
                 width,
             ));
@@ -839,15 +956,26 @@ impl App {
         let p = &self.pal;
         let (base, raised) = (p.base, p.raised);
         f.render_widget(Block::new().style(Style::new().bg(base)), area);
-        let Some(mut v) = self.memory.take() else { return };
-        let panel_w = if area.width >= 100 { (area.width * 34 / 100).clamp(34, 56) } else { 0 };
-        let [graph, gap, panel] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(if panel_w > 0 { 1 } else { 0 }), Constraint::Length(panel_w)]).areas(area);
+        let Some(mut v) = self.memory.take() else {
+            return;
+        };
+        let panel_w = if area.width >= 100 {
+            (area.width * 34 / 100).clamp(34, 56)
+        } else {
+            0
+        };
+        let [graph, gap, panel] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(if panel_w > 0 { 1 } else { 0 }),
+            Constraint::Length(panel_w),
+        ])
+        .areas(area);
         if panel_w > 0 {
             divider(f, gap, self.pal.frame, base);
             f.render_widget(Block::new().style(Style::new().bg(raised)), panel);
         }
-        let [head, canvas] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(graph);
+        let [head, canvas] =
+            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(graph);
         // Pixels are about square in braille: two across, four down a cell.
         let aspect = (canvas.width as f64 * 2.0) / (canvas.height.max(1) as f64 * 4.0);
         if canvas != v.area {
@@ -863,17 +991,44 @@ impl App {
         match (&v.data, &v.error) {
             (_, Some(e)) => {
                 let msg = format!("couldn't read memory: {e}");
-                f.render_widget(Paragraph::new(msg).style(Style::new().fg(self.pal.attention_word)).alignment(ratatui::layout::Alignment::Center), Rect { y: canvas.y + canvas.height / 2, height: 1, ..canvas });
+                f.render_widget(
+                    Paragraph::new(msg)
+                        .style(Style::new().fg(self.pal.attention_word))
+                        .alignment(ratatui::layout::Alignment::Center),
+                    Rect {
+                        y: canvas.y + canvas.height / 2,
+                        height: 1,
+                        ..canvas
+                    },
+                );
             }
             (None, _) => {
                 let dots = ".".repeat(1 + (v.started.elapsed().as_millis() / 300 % 3) as usize);
                 let msg = format!("reading memory{dots:<3}");
-                f.render_widget(Paragraph::new(msg).style(Style::new().fg(self.pal.muted)).alignment(ratatui::layout::Alignment::Center), Rect { y: canvas.y + canvas.height / 2, height: 1, ..canvas });
+                f.render_widget(
+                    Paragraph::new(msg)
+                        .style(Style::new().fg(self.pal.muted))
+                        .alignment(ratatui::layout::Alignment::Center),
+                    Rect {
+                        y: canvas.y + canvas.height / 2,
+                        height: 1,
+                        ..canvas
+                    },
+                );
             }
             (Some(_), None) => {
                 self.draw_memory_graph(f, canvas, &mut v);
                 if panel_w > 0 {
-                    self.draw_memory_panel(f, Rect { x: panel.x + 2, width: panel.width.saturating_sub(3), y: panel.y + 1, height: panel.height.saturating_sub(1) }, &v);
+                    self.draw_memory_panel(
+                        f,
+                        Rect {
+                            x: panel.x + 2,
+                            width: panel.width.saturating_sub(3),
+                            y: panel.y + 1,
+                            height: panel.height.saturating_sub(1),
+                        },
+                        &v,
+                    );
                 }
             }
         }
@@ -885,7 +1040,10 @@ impl App {
         let mut spans = vec![Span::styled("  memory", Style::new().fg(p.accent))];
         if let Some(s) = &v.search {
             spans.push(Span::styled("   find ", Style::new().fg(p.muted)));
-            spans.push(Span::styled(format!("{}▏", s.query), Style::new().fg(p.text)));
+            spans.push(Span::styled(
+                format!("{}▏", s.query),
+                Style::new().fg(p.text),
+            ));
         } else if let Some(d) = &v.data {
             let mut trail = Vec::new();
             if let Some(fo) = v.focus {
@@ -912,7 +1070,9 @@ impl App {
                 c(Kind::Project)
             );
             if used + counts.width() + 2 <= r.width as usize {
-                spans.push(Span::raw(" ".repeat(r.width as usize - used - counts.width())));
+                spans.push(Span::raw(
+                    " ".repeat(r.width as usize - used - counts.width()),
+                ));
                 spans.push(Span::styled(counts, Style::new().fg(p.muted)));
             }
         }
@@ -930,8 +1090,14 @@ impl App {
         // The legend's rows along the top, kept clear (the sky spreads to the
         // edges); `?` gives them back.
         let band = if v.legend && v.focus.is_none() {
-            let rows = self.memory_legend(d, v, (area.width as usize).saturating_sub(4).min(64)).len();
-            if rows == 0 { 0.0 } else { 2.0 * (rows + 2) as f64 / area.height.max(1) as f64 }
+            let rows = self
+                .memory_legend(d, v, (area.width as usize).saturating_sub(4).min(64))
+                .len();
+            if rows == 0 {
+                0.0
+            } else {
+                2.0 * (rows + 2) as f64 / area.height.max(1) as f64
+            }
         } else {
             0.0
         };
@@ -945,16 +1111,28 @@ impl App {
                 hi_y = hi_y.max(s.y + s.r);
             }
             let (cx, cy) = ((lo_x + hi_x) / 2.0, (lo_y + hi_y) / 2.0);
-            let s = (2.0 * a * 0.92 / (hi_x - lo_x).max(1e-3)).min(2.0 * 0.9 / (hi_y - lo_y).max(1e-3));
+            let s =
+                (2.0 * a * 0.92 / (hi_x - lo_x).max(1e-3)).min(2.0 * 0.9 / (hi_y - lo_y).max(1e-3));
             // Fitted whole it fills one way only (on a 132x40 screen, half the
             // height), so the projects spread apart to fill the other too.
             // Their discs keep their size and shape.
             let spread = |half: f64, off: &dyn Fn(&Star) -> f64| {
-                d.sky.iter().filter(|st| off(st).abs() > 1e-6).map(|st| (half - st.r * s) / off(st).abs()).fold(f64::MAX, f64::min).max(s)
+                d.sky
+                    .iter()
+                    .filter(|st| off(st).abs() > 1e-6)
+                    .map(|st| (half - st.r * s) / off(st).abs())
+                    .fold(f64::MAX, f64::min)
+                    .max(s)
             };
             let kx = spread(a * 0.92, &|st| st.x - cx);
             let ky = spread(0.9 - band / 2.0, &|st| st.y - cy);
-            Some((cx, cy, kx.min(ky * 1.8).min(s * 2.5), ky.min(kx * 1.8).min(s * 2.5), s))
+            Some((
+                cx,
+                cy,
+                kx.min(ky * 1.8).min(s * 2.5),
+                ky.min(kx * 1.8).min(s * 2.5),
+                s,
+            ))
         } else {
             None
         };
@@ -970,11 +1148,16 @@ impl App {
             let s = fit.map_or(1.0, |f| f.4);
             (ox + (x - st.x) * s, oy + (y - st.y) * s)
         };
-        let px = |x: f64, y: f64| -> (f64, f64) { ((x + a) / (2.0 * a) * wpx, (y + 1.0) / 2.0 * hpx) };
+        let px =
+            |x: f64, y: f64| -> (f64, f64) { ((x + a) / (2.0 * a) * wpx, (y + 1.0) / 2.0 * hpx) };
         let cell = |x: f64, y: f64| -> (u16, u16) {
             let (cx, cy) = px(x, y);
-            let col = ((cx / wpx) * area.width as f64).floor().clamp(0.0, area.width as f64 - 1.0) as u16;
-            let row = ((1.0 - cy / hpx) * area.height as f64).floor().clamp(0.0, area.height as f64 - 1.0) as u16;
+            let col = ((cx / wpx) * area.width as f64)
+                .floor()
+                .clamp(0.0, area.width as f64 - 1.0) as u16;
+            let row = ((1.0 - cy / hpx) * area.height as f64)
+                .floor()
+                .clamp(0.0, area.height as f64 - 1.0) as u16;
             (area.x + col, area.y + row)
         };
         // Where each shown node is this frame.
@@ -983,9 +1166,17 @@ impl App {
             .into_iter()
             .map(|(n, x, y)| {
                 let (x, y) = world(x, y);
-                let (fx, fy) = v.from.get(&n).map(|&(x, y)| world(x, y)).unwrap_or_else(|| world(v.bloom.0, v.bloom.1));
+                let (fx, fy) = v
+                    .from
+                    .get(&n)
+                    .map(|&(x, y)| world(x, y))
+                    .unwrap_or_else(|| world(v.bloom.0, v.bloom.1));
                 // The sky doesn't move: it's fitted, and fades in.
-                if v.focus.is_none() { (n, (x, y)) } else { (n, (fx + (x - fx) * t, fy + (y - fy) * t)) }
+                if v.focus.is_none() {
+                    (n, (x, y))
+                } else {
+                    (n, (fx + (x - fx) * t, fy + (y - fy) * t))
+                }
             })
             .collect();
         let fade = |c: Color, k: f64| mix(p.base, c, k.clamp(0.0, 1.0) as f32, c);
@@ -1022,9 +1213,20 @@ impl App {
                             continue;
                         }
                         let (ux, uy) = (dx / len, dy / len);
-                        let (x1, y1, x2, y2) = (x1 + ux * ra, y1 + uy * ra, x2 - ux * rb, y2 - uy * rb);
-                        let k = if hot { 0.75 } else { (0.06 + 0.04 * (w as f64).ln()).min(0.22) } * reveal;
-                        ctx.draw(&CLine { x1, y1, x2, y2, color: fade(if hot { p.accent } else { p.dim }, k) });
+                        let (x1, y1, x2, y2) =
+                            (x1 + ux * ra, y1 + uy * ra, x2 - ux * rb, y2 - uy * rb);
+                        let k = if hot {
+                            0.75
+                        } else {
+                            (0.06 + 0.04 * (w as f64).ln()).min(0.22)
+                        } * reveal;
+                        ctx.draw(&CLine {
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            color: fade(if hot { p.accent } else { p.dim }, k),
+                        });
                     }
                     ctx.layer();
                     // Each project's disc of members, by kind, bright where recent.
@@ -1034,7 +1236,8 @@ impl App {
                         for &(m, x, y) in &s.dust {
                             let (wx, wy) = member(s, x, y);
                             let k = recency(g.nodes[m].last) * if hot { 1.0 } else { 0.8 } * reveal;
-                            if let Color::Rgb(r, gg, b) = fade(self.kind_color(g.nodes[m].kind), k) {
+                            if let Color::Rgb(r, gg, b) = fade(self.kind_color(g.nodes[m].kind), k)
+                            {
                                 by_color.entry((r, gg, b)).or_default().push(px(wx, wy));
                             }
                         }
@@ -1042,11 +1245,19 @@ impl App {
                             let (cx, cy) = world(s.x, s.y);
                             let (x, y) = px(cx, cy);
                             let r = s.r * fit.map_or(1.0, |f| f.4) / (2.0 * a) * wpx;
-                            ctx.draw(&Circle { x, y, radius: r + 3.0, color: fade(p.accent, 0.8) });
+                            ctx.draw(&Circle {
+                                x,
+                                y,
+                                radius: r + 3.0,
+                                color: fade(p.accent, 0.8),
+                            });
                         }
                     }
                     for ((r, gg, b), pts) in &by_color {
-                        ctx.draw(&Points { coords: pts, color: Color::Rgb(*r, *gg, *b) });
+                        ctx.draw(&Points {
+                            coords: pts,
+                            color: Color::Rgb(*r, *gg, *b),
+                        });
                     }
                 } else if let Some(fo) = focus {
                     let &(cx, cy) = at.get(&fo).unwrap_or(&(0.0, 0.0));
@@ -1060,43 +1271,84 @@ impl App {
                             for pl in v.placed.iter().filter(|p| p.group == gi) {
                                 if let Some(&(x, y)) = at.get(&pl.node) {
                                     let (x1, y1) = px(x, y);
-                                    ctx.draw(&CLine { x1: x0, y1: y0, x2: x1, y2: y1, color: fade(c, 0.4) });
+                                    ctx.draw(&CLine {
+                                        x1: x0,
+                                        y1: y0,
+                                        x2: x1,
+                                        y2: y1,
+                                        color: fade(c, 0.4),
+                                    });
                                 }
                             }
                             continue;
                         }
                         let arc = 0.36;
                         let steps = ((gr.span * 40.0).ceil() as usize).max(2);
-                        let point = |th: f64| px(cx + th.cos() * arc * rx * t, cy + th.sin() * arc * 0.9 * t);
+                        let point = |th: f64| {
+                            px(cx + th.cos() * arc * rx * t, cy + th.sin() * arc * 0.9 * t)
+                        };
                         let mid = gr.from - gr.span / 2.0;
                         let (mx, my) = point(mid);
                         // A small group's arc hugs its members.
                         let span = gr.span.min(0.3 + 0.04 * gr.members as f64);
                         let start = mid + span / 2.0;
-                        ctx.draw(&CLine { x1: x0, y1: y0, x2: mx, y2: my, color: fade(c, 0.32) });
+                        ctx.draw(&CLine {
+                            x1: x0,
+                            y1: y0,
+                            x2: mx,
+                            y2: my,
+                            color: fade(c, 0.32),
+                        });
                         let mut last = point(start);
                         for i in 1..=steps {
                             let next = point(start - span * i as f64 / steps as f64);
-                            ctx.draw(&CLine { x1: last.0, y1: last.1, x2: next.0, y2: next.1, color: fade(c, 0.45) });
+                            ctx.draw(&CLine {
+                                x1: last.0,
+                                y1: last.1,
+                                x2: next.0,
+                                y2: next.1,
+                                color: fade(c, 0.45),
+                            });
                             last = next;
                         }
                     }
                     // The selection: its own line in, and its links to the others shown.
                     if let Some(pl) = v.placed.iter().find(|p| p.node == sel && p.node != fo)
-                        && let Some(&(x, y)) = at.get(&sel) {
-                            let (x1, y1) = px(x, y);
-                            let th = y.atan2(x / rx);
-                            let (ax, ay) = px(cx + th.cos() * 0.36 * rx, cy + th.sin() * 0.36 * 0.9);
-                            let c = self.link_color(pl.via.unwrap_or(Link::In));
-                            ctx.draw(&CLine { x1: x0, y1: y0, x2: ax, y2: ay, color: c });
-                            ctx.draw(&CLine { x1: ax, y1: ay, x2: x1, y2: y1, color: c });
-                            for &(o, e) in &d.adj[sel] {
-                                if o != fo && let Some(&(ox, oy)) = at.get(&o) {
-                                    let (x2, y2) = px(ox, oy);
-                                    ctx.draw(&CLine { x1, y1, x2, y2, color: fade(self.link_color(g.edges[e].kind), 0.7) });
-                                }
+                        && let Some(&(x, y)) = at.get(&sel)
+                    {
+                        let (x1, y1) = px(x, y);
+                        let th = y.atan2(x / rx);
+                        let (ax, ay) = px(cx + th.cos() * 0.36 * rx, cy + th.sin() * 0.36 * 0.9);
+                        let c = self.link_color(pl.via.unwrap_or(Link::In));
+                        ctx.draw(&CLine {
+                            x1: x0,
+                            y1: y0,
+                            x2: ax,
+                            y2: ay,
+                            color: c,
+                        });
+                        ctx.draw(&CLine {
+                            x1: ax,
+                            y1: ay,
+                            x2: x1,
+                            y2: y1,
+                            color: c,
+                        });
+                        for &(o, e) in &d.adj[sel] {
+                            if o != fo
+                                && let Some(&(ox, oy)) = at.get(&o)
+                            {
+                                let (x2, y2) = px(ox, oy);
+                                ctx.draw(&CLine {
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    color: fade(self.link_color(g.edges[e].kind), 0.7),
+                                });
                             }
                         }
+                    }
                     ctx.layer();
                     // Faint rings of dust for the members, so a crowd reads as a shape.
                     for pl in &v.placed {
@@ -1105,7 +1357,10 @@ impl App {
                         }
                         if let Some(&(x, y)) = at.get(&pl.node) {
                             let pt = [px(x, y)];
-                            ctx.draw(&Points { coords: &pt, color: fade(self.kind_color(g.nodes[pl.node].kind), 0.5) });
+                            ctx.draw(&Points {
+                                coords: &pt,
+                                color: fade(self.kind_color(g.nodes[pl.node].kind), 0.5),
+                            });
                         }
                     }
                 }
@@ -1116,16 +1371,24 @@ impl App {
         let buf = f.buffer_mut();
         let mut taken = vec![false; area.width as usize * area.height as usize];
         let free = |taken: &Vec<bool>, x: u16, y: u16, w: u16| -> bool {
-            if x < area.x || y < area.y || x + w > area.x + area.width || y >= area.y + area.height {
+            if x < area.x || y < area.y || x + w > area.x + area.width || y >= area.y + area.height
+            {
                 return false;
             }
-            (0..w).all(|i| !taken[(y - area.y) as usize * area.width as usize + (x - area.x + i) as usize])
+            (0..w).all(|i| {
+                !taken[(y - area.y) as usize * area.width as usize + (x - area.x + i) as usize]
+            })
         };
         let take = |taken: &mut Vec<bool>, x: u16, y: u16, w: u16| {
             for i in 0..w {
                 let (cx, cy) = (x + i, y);
-                if cx >= area.x && cx < area.x + area.width && cy >= area.y && cy < area.y + area.height {
-                    taken[(cy - area.y) as usize * area.width as usize + (cx - area.x) as usize] = true;
+                if cx >= area.x
+                    && cx < area.x + area.width
+                    && cy >= area.y
+                    && cy < area.y + area.height
+                {
+                    taken[(cy - area.y) as usize * area.width as usize + (cx - area.x) as usize] =
+                        true;
                 }
             }
         };
@@ -1150,13 +1413,25 @@ impl App {
             let hot = n == sel;
             let centre = Some(n) == focus;
             let glyph = if sky {
-                if d.sky.iter().find(|s| s.node == n).is_some_and(|s| s.dust.len() >= 12) { "◉" } else { "∙" }
+                if d.sky
+                    .iter()
+                    .find(|s| s.node == n)
+                    .is_some_and(|s| s.dust.len() >= 12)
+                {
+                    "◉"
+                } else {
+                    "∙"
+                }
             } else if centre {
                 "◉"
             } else {
                 Self::glyph(k)
             };
-            let color = if sky { fade(p.text, 0.55 + 0.45 * recency(g.nodes[n].last)) } else { self.kind_color(k) };
+            let color = if sky {
+                fade(p.text, 0.55 + 0.45 * recency(g.nodes[n].last))
+            } else {
+                self.kind_color(k)
+            };
             let cellv = &mut buf[(c, r)];
             cellv.set_symbol(glyph);
             cellv.set_fg(if hot { p.text } else { color });
@@ -1171,13 +1446,37 @@ impl App {
         let mut order: Vec<usize> = marks.iter().map(|m| m.0).collect();
         order.sort_by_key(|&n| {
             let node = &g.nodes[n];
-            let pri = if n == sel { 0 } else if Some(n) == focus { 1 } else { 2 };
-            (pri, std::cmp::Reverse(if sky { node.size } else { node.last.max(0) as u64 }))
+            let pri = if n == sel {
+                0
+            } else if Some(n) == focus {
+                1
+            } else {
+                2
+            };
+            (
+                pri,
+                std::cmp::Reverse(if sky {
+                    node.size
+                } else {
+                    node.last.max(0) as u64
+                }),
+            )
         });
         let pos: HashMap<usize, (u16, u16)> = marks.iter().map(|m| (m.0, (m.1, m.2))).collect();
-        let place = |buf: &mut ratatui::buffer::Buffer, taken: &mut Vec<bool>, text: &str, c: u16, r: u16, right: bool, style: Style| -> bool {
+        let place = |buf: &mut ratatui::buffer::Buffer,
+                     taken: &mut Vec<bool>,
+                     text: &str,
+                     c: u16,
+                     r: u16,
+                     right: bool,
+                     style: Style|
+         -> bool {
             // Up to 28 cells, fewer where the edge is nearer; under 8 isn't worth it.
-            let room = if right { (area.x + area.width).saturating_sub(c + 2) } else { c.saturating_sub(area.x + 1) } as usize;
+            let room = if right {
+                (area.x + area.width).saturating_sub(c + 2)
+            } else {
+                c.saturating_sub(area.x + 1)
+            } as usize;
             let max = room.min(28);
             if max < 8 && text.width() > max {
                 return false;
@@ -1195,7 +1494,11 @@ impl App {
                 text.to_string()
             };
             let w = text.width() as u16;
-            let x = if right { c + 2 } else { c.saturating_sub(w + 1) };
+            let x = if right {
+                c + 2
+            } else {
+                c.saturating_sub(w + 1)
+            };
             if !free(taken, x, r, w) {
                 return false;
             }
@@ -1205,20 +1508,34 @@ impl App {
         };
         // The cells the selection's ring passes through: no other label
         // crosses it.
-        let ring: Vec<(u16, u16)> = d.sky.iter().filter(|s| sky && s.node == sel).flat_map(|s| {
-            let (x, y) = px(world(s.x, s.y).0, world(s.x, s.y).1);
-            let r = s.r * fit.map_or(1.0, |f| f.4) / (2.0 * a) * wpx + 3.0;
-            (0..72).map(move |i| {
-                let th = i as f64 * std::f64::consts::TAU / 72.0;
-                let (qx, qy) = (x + r * th.cos(), y + r * th.sin());
-                let col = (qx / wpx * area.width as f64).floor().clamp(0.0, area.width as f64 - 1.0) as u16;
-                let row = ((1.0 - qy / hpx) * area.height as f64).floor().clamp(0.0, area.height as f64 - 1.0) as u16;
-                (area.x + col, area.y + row)
+        let ring: Vec<(u16, u16)> = d
+            .sky
+            .iter()
+            .filter(|s| sky && s.node == sel)
+            .flat_map(|s| {
+                let (x, y) = px(world(s.x, s.y).0, world(s.x, s.y).1);
+                let r = s.r * fit.map_or(1.0, |f| f.4) / (2.0 * a) * wpx + 3.0;
+                (0..72).map(move |i| {
+                    let th = i as f64 * std::f64::consts::TAU / 72.0;
+                    let (qx, qy) = (x + r * th.cos(), y + r * th.sin());
+                    let col = (qx / wpx * area.width as f64)
+                        .floor()
+                        .clamp(0.0, area.width as f64 - 1.0) as u16;
+                    let row = ((1.0 - qy / hpx) * area.height as f64)
+                        .floor()
+                        .clamp(0.0, area.height as f64 - 1.0) as u16;
+                    (area.x + col, area.y + row)
+                })
             })
-        }).collect();
+            .collect();
         let mut labelled = 0;
         let budget = if sky { 24 } else { 26 };
-        let outer: std::collections::HashSet<usize> = v.placed.iter().filter(|p| p.ring > 0).map(|p| p.node).collect();
+        let outer: std::collections::HashSet<usize> = v
+            .placed
+            .iter()
+            .filter(|p| p.ring > 0)
+            .map(|p| p.node)
+            .collect();
         // Group names sit in the outer ring, before the nodes claim room.
         if !sky {
             for gr in &v.groups {
@@ -1226,7 +1543,14 @@ impl App {
                 let w = gr.text.width() as u16;
                 let x = c.saturating_sub(w / 2).max(area.x);
                 if free(&taken, x, r, w) {
-                    buf.set_string(x, r, &gr.text, Style::new().fg(fade(p.muted, t)).add_modifier(Modifier::ITALIC));
+                    buf.set_string(
+                        x,
+                        r,
+                        &gr.text,
+                        Style::new()
+                            .fg(fade(p.muted, t))
+                            .add_modifier(Modifier::ITALIC),
+                    );
                     take(&mut taken, x, r, w);
                 }
             }
@@ -1240,7 +1564,10 @@ impl App {
             }
             let node = &g.nodes[n];
             let style = if hot {
-                Style::new().fg(p.text).bg(p.selection).add_modifier(Modifier::BOLD)
+                Style::new()
+                    .fg(p.text)
+                    .bg(p.selection)
+                    .add_modifier(Modifier::BOLD)
             } else if centre {
                 Style::new().fg(p.text).add_modifier(Modifier::BOLD)
             } else if sky {
@@ -1250,7 +1577,9 @@ impl App {
             };
             let right = c >= area.x + area.width / 2 || centre;
             // Outward only, so labels never crowd the middle; the selection may go either way.
-            if place(buf, &mut taken, &node.label, c, r, right, style) || ((hot || sky) && place(buf, &mut taken, &node.label, c, r, !right, style)) {
+            if place(buf, &mut taken, &node.label, c, r, right, style)
+                || ((hot || sky) && place(buf, &mut taken, &node.label, c, r, !right, style))
+            {
                 labelled += 1;
             }
             if hot {
@@ -1261,7 +1590,11 @@ impl App {
         }
         if v.legend {
             let rows = self.memory_legend(d, v, (area.width as usize).saturating_sub(4).min(64));
-            let cw = rows.iter().map(|r| r.iter().map(|s| s.width()).sum::<usize>()).max().unwrap_or(0) as u16;
+            let cw = rows
+                .iter()
+                .map(|r| r.iter().map(|s| s.width()).sum::<usize>())
+                .max()
+                .unwrap_or(0) as u16;
             // A blank row either side keeps it off the header and the footer.
             let (bw, bh) = (cw + 2, rows.len() as u16 + 2);
             if !rows.is_empty() && bw + 4 <= area.width && bh + 4 <= area.height {
@@ -1271,11 +1604,17 @@ impl App {
                 let busy = |&(x, y): &(u16, u16)| {
                     (y..y + bh)
                         .flat_map(|r| (x..x + bw).map(move |c| (c, r)))
-                        .filter(|&(c, r)| taken[(r - area.y) as usize * area.width as usize + (c - area.x) as usize])
+                        .filter(|&(c, r)| {
+                            taken[(r - area.y) as usize * area.width as usize
+                                + (c - area.x) as usize]
+                        })
                         .count()
                 };
                 let corners = [(left, bottom), (right, bottom), (left, top), (right, top)];
-                let &(x, y) = corners.iter().min_by_key(|c| busy(c)).unwrap_or(&corners[0]);
+                let &(x, y) = corners
+                    .iter()
+                    .min_by_key(|c| busy(c))
+                    .unwrap_or(&corners[0]);
                 for r in y..y + bh {
                     for c in x..x + bw {
                         buf[(c, r)].reset();
@@ -1299,30 +1638,74 @@ impl App {
         let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
         if let Some(s) = &v.search {
             lines.push(vec![Span::styled(
-                if s.query.is_empty() { "type to find a project, file, session or turn".to_string() } else { format!("{} found", s.hits.len()) },
+                if s.query.is_empty() {
+                    "type to find a project, file, session or turn".to_string()
+                } else {
+                    format!("{} found", s.hits.len())
+                },
                 Style::new().fg(p.muted),
             )]);
             lines.push(Vec::new());
-            for (i, &h) in s.hits.iter().enumerate().take(r.height.saturating_sub(2) as usize) {
+            for (i, &h) in s
+                .hits
+                .iter()
+                .enumerate()
+                .take(r.height.saturating_sub(2) as usize)
+            {
                 let n = &g.nodes[h];
                 let hot = i == s.sel;
                 let bg = if hot { p.selection } else { p.raised };
-                let mut l = vec![Span::styled(format!("{} ", Self::glyph(n.kind)), Style::new().fg(self.kind_color(n.kind)).bg(bg))];
+                let mut l = vec![Span::styled(
+                    format!("{} ", Self::glyph(n.kind)),
+                    Style::new().fg(self.kind_color(n.kind)).bg(bg),
+                )];
                 let room = w.saturating_sub(2);
-                let label: String = if n.label.width() > room { format!("{}…", n.label.chars().take(room.saturating_sub(1)).collect::<String>()) } else { n.label.clone() };
-                l.push(Span::styled(format!("{label:<room$}"), Style::new().fg(if hot { p.text } else { p.dim }).bg(bg)));
+                let label: String = if n.label.width() > room {
+                    format!(
+                        "{}…",
+                        n.label
+                            .chars()
+                            .take(room.saturating_sub(1))
+                            .collect::<String>()
+                    )
+                } else {
+                    n.label.clone()
+                };
+                l.push(Span::styled(
+                    format!("{label:<room$}"),
+                    Style::new().fg(if hot { p.text } else { p.dim }).bg(bg),
+                ));
                 lines.push(l);
             }
-            f.render_widget(Paragraph::new(Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>())), r);
+            f.render_widget(
+                Paragraph::new(Text::from(
+                    lines.into_iter().map(Line::from).collect::<Vec<_>>(),
+                )),
+                r,
+            );
             return;
         }
         let Some(n) = g.nodes.get(v.sel) else { return };
         let now = now_ms();
         lines.push(vec![
-            Span::styled(format!("{} ", Self::glyph(n.kind)), Style::new().fg(self.kind_color(n.kind))),
+            Span::styled(
+                format!("{} ", Self::glyph(n.kind)),
+                Style::new().fg(self.kind_color(n.kind)),
+            ),
             Span::styled(n.kind.word().to_string(), Style::new().fg(p.muted)),
         ]);
-        lines.extend(wrap_spans(&[(n.label.clone(), Style::new().fg(p.text).add_modifier(Modifier::BOLD))], w, w).into_iter().take(3));
+        lines.extend(
+            wrap_spans(
+                &[(
+                    n.label.clone(),
+                    Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+                )],
+                w,
+                w,
+            )
+            .into_iter()
+            .take(3),
+        );
         let mut meta: Vec<(String, Style)> = Vec::new();
         let sep = || (" · ".to_string(), Style::new().fg(p.muted));
         if let Some(h) = d.home[v.sel].filter(|&h| h != v.sel) {
@@ -1334,17 +1717,30 @@ impl App {
         };
         match n.kind {
             Kind::Session => {
-                meta.extend([sep(), (plural(n.size as usize, "turn"), Style::new().fg(p.dim))]);
+                meta.extend([
+                    sep(),
+                    (plural(n.size as usize, "turn"), Style::new().fg(p.dim)),
+                ]);
                 if n.at > 0 {
                     // When it started, and for how long it ran.
                     let ran = ago(n.last - n.at);
-                    let span = if ran == "now" { format!("started {}", when(n.at)) } else { format!("started {}, ran {ran}", when(n.at)) };
+                    let span = if ran == "now" {
+                        format!("started {}", when(n.at))
+                    } else {
+                        format!("started {}, ran {ran}", when(n.at))
+                    };
                     meta.extend([sep(), (span, Style::new().fg(p.muted))]);
                 }
             }
             Kind::Project => {
-                meta.push((plural(n.size as usize, "entry").replace("entrys", "entries"), Style::new().fg(p.dim)));
-                meta.extend([sep(), (format!("last {}", when(n.last)), Style::new().fg(p.muted))]);
+                meta.push((
+                    plural(n.size as usize, "entry").replace("entrys", "entries"),
+                    Style::new().fg(p.dim),
+                ));
+                meta.extend([
+                    sep(),
+                    (format!("last {}", when(n.last)), Style::new().fg(p.muted)),
+                ]);
             }
             _ if n.at > 0 => meta.extend([sep(), (when(n.at), Style::new().fg(p.muted))]),
             _ => {}
@@ -1356,7 +1752,9 @@ impl App {
         lines.push(Vec::new());
         // What it's linked to, grouped and counted as the graph does.
         let groups = groups_of(d, v.sel);
-        let text_room = (r.height as usize).saturating_sub(lines.len() + groups.len().min(8) * 4 + 3).min(10);
+        let text_room = (r.height as usize)
+            .saturating_sub(lines.len() + groups.len().min(8) * 4 + 3)
+            .min(10);
         if !n.text.is_empty() && text_room >= 2 {
             let body: Vec<Vec<Span<'static>>> = n
                 .text
@@ -1371,22 +1769,44 @@ impl App {
         // Each group: its name and count, then its latest few, one a line.
         let room = (r.height as usize).saturating_sub(lines.len() + 3);
         let heads = groups.len().min(8);
-        let per = room.saturating_sub(heads * 2).checked_div(heads).map_or(0, |p| p.clamp(1, 3));
+        let per = room
+            .saturating_sub(heads * 2)
+            .checked_div(heads)
+            .map_or(0, |p| p.clamp(1, 3));
         for (_, name, members, _) in groups.iter().take(8) {
             let mut members = members.clone();
             members.sort_by_key(|&m| std::cmp::Reverse(g.nodes[m].last));
-            lines.push(vec![Span::styled(group_text(name, members.len()), Style::new().fg(p.muted))]);
+            lines.push(vec![Span::styled(
+                group_text(name, members.len()),
+                Style::new().fg(p.muted),
+            )]);
             for &m in members.iter().take(per) {
                 let o = &g.nodes[m];
                 let room = w.saturating_sub(2);
-                let label: String = if o.label.width() > room { format!("{}…", o.label.chars().take(room.saturating_sub(1)).collect::<String>()) } else { o.label.clone() };
+                let label: String = if o.label.width() > room {
+                    format!(
+                        "{}…",
+                        o.label
+                            .chars()
+                            .take(room.saturating_sub(1))
+                            .collect::<String>()
+                    )
+                } else {
+                    o.label.clone()
+                };
                 lines.push(vec![
-                    Span::styled(format!("{} ", Self::glyph(o.kind)), Style::new().fg(self.kind_color(o.kind))),
+                    Span::styled(
+                        format!("{} ", Self::glyph(o.kind)),
+                        Style::new().fg(self.kind_color(o.kind)),
+                    ),
                     Span::styled(label, Style::new().fg(p.dim)),
                 ]);
             }
             if members.len() > per {
-                lines.push(vec![Span::styled(format!("  and {} more", members.len() - per), Style::new().fg(p.muted))]);
+                lines.push(vec![Span::styled(
+                    format!("  and {} more", members.len() - per),
+                    Style::new().fg(p.muted),
+                )]);
             }
             lines.push(Vec::new());
         }
@@ -1399,7 +1819,10 @@ impl App {
             if !id.is_empty() {
                 id.push(sep());
             }
-            id.push((format!("toomux jump {}", &n.id[2..10.min(n.id.len())]), Style::new().fg(p.muted)));
+            id.push((
+                format!("toomux jump {}", &n.id[2..10.min(n.id.len())]),
+                Style::new().fg(p.muted),
+            ));
         }
         if let Some(path) = &n.path {
             if !id.is_empty() {
@@ -1408,7 +1831,11 @@ impl App {
             id.push((tilde(path), Style::new().fg(p.muted)));
         }
         lines.extend(wrap_chips(&id, w, w));
-        let lines: Vec<Line> = lines.into_iter().take(r.height as usize).map(Line::from).collect();
+        let lines: Vec<Line> = lines
+            .into_iter()
+            .take(r.height as usize)
+            .map(Line::from)
+            .collect();
         f.render_widget(Paragraph::new(Text::from(lines)), r);
     }
 }
@@ -1429,13 +1856,44 @@ mod tests {
         };
         let sid = "0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c";
         let entries = vec![
-            e(1, "project:/w/toomux", "memory: /m/voyage.md", "voyage.md\n\n---\nname: voyage\n---\nsee [[release]]"),
-            e(2, "project:/w/toomux", "memory: /m/release.md", "release.md\n\ngo public later"),
-            e(3, "project:/w/toomux", &format!("session:{sid}#1"), "You asked: tune tiers\n\nOutcome: done"),
-            e(4, "project:/w/toomux", &format!("session:{sid}#2"), "You asked: the ship\n\nOutcome: drawn"),
-            e(0, "project:/w/atlas", "memory: /c/icons.md", "icons.md\n\niconoir"),
+            e(
+                1,
+                "project:/w/toomux",
+                "memory: /m/voyage.md",
+                "voyage.md\n\n---\nname: voyage\n---\nsee [[release]]",
+            ),
+            e(
+                2,
+                "project:/w/toomux",
+                "memory: /m/release.md",
+                "release.md\n\ngo public later",
+            ),
+            e(
+                3,
+                "project:/w/toomux",
+                &format!("session:{sid}#1"),
+                "You asked: tune tiers\n\nOutcome: done",
+            ),
+            e(
+                4,
+                "project:/w/toomux",
+                &format!("session:{sid}#2"),
+                "You asked: the ship\n\nOutcome: drawn",
+            ),
+            e(
+                0,
+                "project:/w/atlas",
+                "memory: /c/icons.md",
+                "icons.md\n\niconoir",
+            ),
         ];
-        crate::graph::assemble(&entries, &[], &HashMap::new(), &crate::graph::Titles::new(), 10)
+        crate::graph::assemble(
+            &entries,
+            &[],
+            &HashMap::new(),
+            &crate::graph::Titles::new(),
+            10,
+        )
     }
 
     #[test]
@@ -1446,20 +1904,39 @@ mod tests {
         assert_eq!(d.sky.len(), 2, "one star per project");
         let toomux = d.g.get("p:/w/toomux").unwrap();
         assert_eq!(v.sel, toomux, "starts on the project touched last");
-        assert_eq!(d.sky.iter().find(|s| s.node == toomux).unwrap().dust.len(), 3, "two files and a session, no turns");
+        assert_eq!(
+            d.sky.iter().find(|s| s.node == toomux).unwrap().dust.len(),
+            3,
+            "two files and a session, no turns"
+        );
         v.key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(v.focus, Some(toomux));
         let names: Vec<&str> = v.groups.iter().map(|g| g.text.as_str()).collect();
-        assert!(names.contains(&"memory files 2") && names.contains(&"session"), "{names:?}");
+        assert!(
+            names.contains(&"memory files 2") && names.contains(&"session"),
+            "{names:?}"
+        );
         // Into the session: its turns come with it.
-        let s = v.data.as_ref().unwrap().g.get("s:0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c").unwrap();
+        let s = v
+            .data
+            .as_ref()
+            .unwrap()
+            .g
+            .get("s:0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c")
+            .unwrap();
         v.sel = s;
         v.key(KeyEvent::from(KeyCode::Enter));
         let names: Vec<&str> = v.groups.iter().map(|g| g.text.as_str()).collect();
-        assert!(names.contains(&"turns 2") && names.contains(&"project"), "{names:?}");
+        assert!(
+            names.contains(&"turns 2") && names.contains(&"project"),
+            "{names:?}"
+        );
         v.key(KeyEvent::from(KeyCode::Backspace));
         assert_eq!(v.focus, Some(toomux), "back to the project");
-        assert!(v.key(KeyEvent::from(KeyCode::Esc)), "esc goes to the sky first");
+        assert!(
+            v.key(KeyEvent::from(KeyCode::Esc)),
+            "esc goes to the sky first"
+        );
         assert_eq!(v.focus, None);
         assert!(!v.key(KeyEvent::from(KeyCode::Esc)), "then closes");
         assert!(v.legend, "the legend shows at first");
@@ -1482,6 +1959,14 @@ mod tests {
         let names: Vec<&str> = v.groups.iter().map(|g| g.text.as_str()).collect();
         assert!(names.contains(&"linked from"), "{names:?}");
         // One way of saying it, the same in the panel.
-        assert_eq!([group_text("found", 3), group_text("turns", 6), group_text("turns", 1), group_text("memory index", 2)], ["found 3", "turns 6", "turn", "memory indexes 2"]);
+        assert_eq!(
+            [
+                group_text("found", 3),
+                group_text("turns", 6),
+                group_text("turns", 1),
+                group_text("memory index", 2)
+            ],
+            ["found 3", "turns 6", "turn", "memory indexes 2"]
+        );
     }
 }

@@ -96,7 +96,10 @@ fn book_path() -> PathBuf {
 }
 
 fn load_book() -> Book {
-    std::fs::read_to_string(book_path()).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+    std::fs::read_to_string(book_path())
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default()
 }
 
 fn save_book(book: &Book) -> Result<()> {
@@ -112,7 +115,11 @@ pub fn lock(wait: std::time::Duration) -> Option<std::fs::File> {
     use std::os::fd::AsRawFd;
     let dir = book_path().parent()?.to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
-    let f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("index.lock")).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("index.lock"))
+        .ok()?;
     let start = std::time::Instant::now();
     loop {
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
@@ -128,7 +135,9 @@ pub fn lock(wait: std::time::Duration) -> Option<std::fs::File> {
 /// Every account's transcript folders, each once.
 pub(crate) fn roots(cfg: &Config) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    let mut dirs: Vec<PathBuf> = (0..cfg.accounts.len()).map(|i| cfg.account_dir(i).join("projects")).collect();
+    let mut dirs: Vec<PathBuf> = (0..cfg.accounts.len())
+        .map(|i| cfg.account_dir(i).join("projects"))
+        .collect();
     dirs.push(crate::config::home().join(".claude/projects"));
     for d in dirs {
         let c = crate::config::canon(&d);
@@ -153,41 +162,80 @@ pub fn run(cfg: &Config) -> Result<usize> {
     // Memory first: opening it may bring it up to date, which resets the book.
     let mem = Memory::open()?;
     // One indexer at a time; a busy one means this pass isn't needed.
-    let Some(_lock) = lock(std::time::Duration::ZERO) else { return Ok(0) };
+    let Some(_lock) = lock(std::time::Duration::ZERO) else {
+        return Ok(0);
+    };
     let mut book = load_book();
     let now = std::time::SystemTime::now();
     let wanted = |path: &Path, md: &std::fs::Metadata, book: &Book| {
         let modified = md.modified().unwrap_or(now);
-        let fresh = now.duration_since(modified).map_or(true, |d| d.as_secs() < BACKFILL_DAYS * 86_400);
+        let fresh = now
+            .duration_since(modified)
+            .map_or(true, |d| d.as_secs() < BACKFILL_DAYS * 86_400);
         let known = book.files.get(&path.display().to_string());
-        (fresh || known.is_some()) && !known.is_some_and(|k| k.offset >= md.len() && k.open.is_none())
+        (fresh || known.is_some())
+            && !known.is_some_and(|k| k.offset >= md.len() && k.open.is_none())
     };
     let mut files: Vec<File> = Vec::new();
     for root in roots(cfg) {
-        let Ok(projects) = std::fs::read_dir(&root) else { continue };
+        let Ok(projects) = std::fs::read_dir(&root) else {
+            continue;
+        };
         for p in projects.flatten() {
-            let Ok(rd) = std::fs::read_dir(p.path()) else { continue };
+            let Ok(rd) = std::fs::read_dir(p.path()) else {
+                continue;
+            };
             for f in rd.flatten() {
                 let path = f.path();
                 let Ok(md) = f.metadata() else { continue };
                 if md.is_dir() {
                     // <session>/subagents/agent-<id>.jsonl
                     let session = f.file_name().to_string_lossy().into_owned();
-                    for a in std::fs::read_dir(path.join("subagents")).into_iter().flatten().flatten() {
+                    for a in std::fs::read_dir(path.join("subagents"))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                    {
                         let ap = a.path();
-                        let Some(agent) = ap.file_stem().and_then(|s| s.to_str()).and_then(|s| s.strip_prefix("agent-")).map(str::to_string) else { continue };
+                        let Some(agent) = ap
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .and_then(|s| s.strip_prefix("agent-"))
+                            .map(str::to_string)
+                        else {
+                            continue;
+                        };
                         let Ok(amd) = a.metadata() else { continue };
-                        if ap.extension().is_some_and(|x| x == "jsonl") && wanted(&ap, &amd, &book) {
-                            files.push(File { modified: amd.modified().unwrap_or(now), len: amd.len(), path: ap, session: session.clone(), agent: Some(agent) });
+                        if ap.extension().is_some_and(|x| x == "jsonl") && wanted(&ap, &amd, &book)
+                        {
+                            files.push(File {
+                                modified: amd.modified().unwrap_or(now),
+                                len: amd.len(),
+                                path: ap,
+                                session: session.clone(),
+                                agent: Some(agent),
+                            });
                         }
                     }
                     continue;
                 }
-                if path.extension().and_then(|x| x.to_str()) != Some("jsonl") || !wanted(&path, &md, &book) {
+                if path.extension().and_then(|x| x.to_str()) != Some("jsonl")
+                    || !wanted(&path, &md, &book)
+                {
                     continue;
                 }
-                let session = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                files.push(File { modified: md.modified().unwrap_or(now), len: md.len(), path, session, agent: None });
+                let session = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                files.push(File {
+                    modified: md.modified().unwrap_or(now),
+                    len: md.len(),
+                    path,
+                    session,
+                    agent: None,
+                });
             }
         }
     }
@@ -201,10 +249,18 @@ pub fn run(cfg: &Config) -> Result<usize> {
         }
         let key = f.path.display().to_string();
         let mut prog = book.files.get(&key).cloned().unwrap_or_default();
-        let quiet = now.duration_since(f.modified).is_ok_and(|d| d.as_secs() >= QUIET_SECS);
+        let quiet = now
+            .duration_since(f.modified)
+            .is_ok_and(|d| d.as_secs() >= QUIET_SECS);
         let src = source(&f, &mem);
         let (read, n) = mem.batch(|_| {
-            let (read, mut n) = read_from(&f.path, prog.offset, budget.min(f.len.saturating_sub(prog.offset)), &mut prog, &src)?;
+            let (read, mut n) = read_from(
+                &f.path,
+                prog.offset,
+                budget.min(f.len.saturating_sub(prog.offset)),
+                &mut prog,
+                &src,
+            )?;
             if quiet && prog.offset >= f.len {
                 n += close(&src, &mut prog)?;
             }
@@ -217,7 +273,13 @@ pub fn run(cfg: &Config) -> Result<usize> {
     added += mem.batch(|m| memory_files(&roots(cfg), &mut book, m))?;
     // Conversations read before their names were kept: Claude Code writes
     // them again every few turns, so the end of each has them.
-    let untitled: Vec<String> = book.files.iter().filter(|(k, p)| !p.titled && session_of(k).is_some()).map(|(k, _)| k.clone()).take(TITLES_PER_PASS).collect();
+    let untitled: Vec<String> = book
+        .files
+        .iter()
+        .filter(|(k, p)| !p.titled && session_of(k).is_some())
+        .map(|(k, _)| k.clone())
+        .take(TITLES_PER_PASS)
+        .collect();
     for k in untitled {
         let m = crate::transcript::meta(Path::new(&k));
         if let Some(p) = book.files.get_mut(&k) {
@@ -254,11 +316,15 @@ fn memory_files(roots: &[PathBuf], book: &mut Book, mem: &Memory) -> Result<usiz
     let mut changed = 0;
     for root in roots {
         for project in std::fs::read_dir(root).into_iter().flatten().flatten() {
-            let Ok(rd) = std::fs::read_dir(project.path().join("memory")) else { continue };
+            let Ok(rd) = std::fs::read_dir(project.path().join("memory")) else {
+                continue;
+            };
             let mut scope: Option<String> = None;
             for f in rd.flatten() {
                 let path = f.path();
-                let Ok(md) = std::fs::metadata(&path) else { continue };
+                let Ok(md) = std::fs::metadata(&path) else {
+                    continue;
+                };
                 if path.extension().is_none_or(|x| x != "md") || !md.is_file() {
                     continue;
                 }
@@ -272,9 +338,14 @@ fn memory_files(roots: &[PathBuf], book: &mut Book, mem: &Memory) -> Result<usiz
                 if book.notes.get(&key) == Some(&at) {
                     continue;
                 }
-                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
                 let scope = scope.get_or_insert_with(|| workspace_scope(&project.path()));
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let content = format!("{name}\n\n{}", clip(&text, NOTE_CHARS));
                 if mem.put(scope, &format!("memory: {key}"), &content, at)? {
                     changed += 1;
@@ -283,7 +354,12 @@ fn memory_files(roots: &[PathBuf], book: &mut Book, mem: &Memory) -> Result<usiz
             }
         }
     }
-    let gone: Vec<String> = book.notes.keys().filter(|k| !seen.contains(*k)).cloned().collect();
+    let gone: Vec<String> = book
+        .notes
+        .keys()
+        .filter(|k| !seen.contains(*k))
+        .cloned()
+        .collect();
     for k in gone {
         changed += mem.delete_source(&format!("memory: {k}"))?;
         book.notes.remove(&k);
@@ -297,38 +373,71 @@ fn memory_files(roots: &[PathBuf], book: &mut Book, mem: &Memory) -> Result<usiz
 fn workspace_scope(dir: &Path) -> String {
     match recorded_cwd(dir) {
         Some(cwd) => memory::project_scope(&cwd),
-        None => format!("project:{}", dir.file_name().map(|n| n.to_string_lossy().replace('-', "/")).unwrap_or_default()),
+        None => format!(
+            "project:{}",
+            dir.file_name()
+                .map(|n| n.to_string_lossy().replace('-', "/"))
+                .unwrap_or_default()
+        ),
     }
 }
 
 /// The folder a transcript folder's conversations ran in, as the first of
 /// them to say recorded it.
 pub fn recorded_cwd(dir: &Path) -> Option<String> {
-    std::fs::read_dir(dir).into_iter().flatten().flatten().find_map(|f| {
-        let p = f.path();
-        if p.extension().is_none_or(|x| x != "jsonl") {
-            return None;
-        }
-        let mut head = String::new();
-        std::fs::File::open(&p).ok()?.take(256 << 10).read_to_string(&mut head).ok();
-        head.lines().find_map(|l| serde_json::from_str::<Value>(l).ok()?.get("cwd")?.as_str().map(str::to_string))
-    })
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|f| {
+            let p = f.path();
+            if p.extension().is_none_or(|x| x != "jsonl") {
+                return None;
+            }
+            let mut head = String::new();
+            std::fs::File::open(&p)
+                .ok()?
+                .take(256 << 10)
+                .read_to_string(&mut head)
+                .ok();
+            head.lines().find_map(|l| {
+                serde_json::from_str::<Value>(l)
+                    .ok()?
+                    .get("cwd")?
+                    .as_str()
+                    .map(str::to_string)
+            })
+        })
 }
 
 fn source<'a>(f: &File, mem: &'a Memory) -> Source<'a> {
     match &f.agent {
-        None => Source { label: format!("session:{}", f.session), who: None, mem, full: false },
+        None => Source {
+            label: format!("session:{}", f.session),
+            who: None,
+            mem,
+            full: false,
+        },
         Some(a) => {
-            let meta: Value = std::fs::read_to_string(f.path.with_file_name(format!("agent-{a}.meta.json")))
-                .ok()
-                .and_then(|r| serde_json::from_str(&r).ok())
-                .unwrap_or(Value::Null);
-            let kind = meta.get("agentType").and_then(Value::as_str).unwrap_or("general-purpose");
+            let meta: Value =
+                std::fs::read_to_string(f.path.with_file_name(format!("agent-{a}.meta.json")))
+                    .ok()
+                    .and_then(|r| serde_json::from_str(&r).ok())
+                    .unwrap_or(Value::Null);
+            let kind = meta
+                .get("agentType")
+                .and_then(Value::as_str)
+                .unwrap_or("general-purpose");
             let who = match meta.get("description").and_then(Value::as_str) {
                 Some(d) => format!("A {kind} subagent ({d})"),
                 None => format!("A {kind} subagent"),
             };
-            Source { label: format!("session:{}/agent-{a}", f.session), who: Some(who), mem, full: false }
+            Source {
+                label: format!("session:{}/agent-{a}", f.session),
+                who: Some(who),
+                mem,
+                full: false,
+            }
         }
     }
 }
@@ -337,16 +446,34 @@ fn source<'a>(f: &File, mem: &'a Memory) -> Source<'a> {
 /// the fresh session can find all of it. Waits a little for a running pass.
 pub fn flush(path: &Path) -> Result<()> {
     let mem = Memory::open()?;
-    let Some(_lock) = lock(std::time::Duration::from_secs(20)) else { anyhow::bail!("the indexer is busy") };
+    let Some(_lock) = lock(std::time::Duration::from_secs(20)) else {
+        anyhow::bail!("the indexer is busy")
+    };
     let mut book = load_book();
     let key = path.display().to_string();
     let mut prog = book.files.get(&key).cloned().unwrap_or_default();
-    let session = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let session = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
     let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let f = File { path: path.to_path_buf(), modified: std::time::SystemTime::now(), len, session, agent: None };
+    let f = File {
+        path: path.to_path_buf(),
+        modified: std::time::SystemTime::now(),
+        len,
+        session,
+        agent: None,
+    };
     let src = source(&f, &mem);
     mem.batch(|_| {
-        read_from(path, prog.offset, len.saturating_sub(prog.offset), &mut prog, &src)?;
+        read_from(
+            path,
+            prog.offset,
+            len.saturating_sub(prog.offset),
+            &mut prog,
+            &src,
+        )?;
         close(&src, &mut prog)
     })?;
     book.files.insert(key, prog);
@@ -358,7 +485,13 @@ fn flag(v: &Value, k: &str) -> bool {
 }
 
 /// Read up to `max` bytes of whole lines from `offset`, turning them into turns.
-fn read_from(path: &Path, offset: u64, max: u64, prog: &mut Progress, src: &Source) -> Result<(u64, usize)> {
+fn read_from(
+    path: &Path,
+    offset: u64,
+    max: u64,
+    prog: &mut Progress,
+    src: &Source,
+) -> Result<(u64, usize)> {
     if max == 0 {
         return Ok((0, 0));
     }
@@ -391,8 +524,16 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
                 }
             }
         }
-        if line.contains("-title\"") && let Ok(v) = serde_json::from_str::<Value>(line) {
-            let at = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+        if line.contains("-title\"")
+            && let Ok(v) = serde_json::from_str::<Value>(line)
+        {
+            let at = |k: &str| {
+                v.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            };
             match v.get("type").and_then(Value::as_str) {
                 Some("custom-title") => prog.custom = at("customTitle").or(prog.custom.take()),
                 Some("ai-title") => prog.ai = at("aiTitle").or(prog.ai.take()),
@@ -405,7 +546,9 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
         if !src.full && line.contains("\"type\":\"tool_result\"") {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         // A subagent's own transcript is all sidechain; in a session's, it's
         // someone else's.
         if (src.who.is_none() && flag(&v, "isSidechain"))
@@ -421,14 +564,19 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.timestamp_millis())
             .unwrap_or(0);
-        let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+        let cwd = v
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         match v.get("type").and_then(Value::as_str) {
             Some("user") => {
                 let Some(prompt) = prompt_of(&v) else {
                     if src.full
-                        && let Some(t) = prog.open.as_mut() {
-                            t.log.extend(results_of(&v));
-                        }
+                        && let Some(t) = prog.open.as_mut()
+                    {
+                        t.log.extend(results_of(&v));
+                    }
                     continue;
                 };
                 added += close(src, prog)?;
@@ -436,7 +584,14 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
                 // toomux's own handover request closes the turn before it but
                 // isn't a conversation worth remembering; its brief is indexed.
                 if !prompt.contains("[toomux handover]") {
-                    prog.open = Some(Turn { prompt, answer: String::new(), cwd, at_ms, n: 0, log: Vec::new() });
+                    prog.open = Some(Turn {
+                        prompt,
+                        answer: String::new(),
+                        cwd,
+                        at_ms,
+                        n: 0,
+                        log: Vec::new(),
+                    });
                 }
             }
             Some("assistant") => {
@@ -445,10 +600,13 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
                     continue;
                 }
                 if src.full
-                    && let Some(t) = prog.open.as_mut().or(prog.last.as_mut()) {
-                        t.log.extend(calls_of(v.pointer("/message/content")));
-                    }
-                let Some(text) = text_of(v.pointer("/message/content")) else { continue };
+                    && let Some(t) = prog.open.as_mut().or(prog.last.as_mut())
+                {
+                    t.log.extend(calls_of(v.pointer("/message/content")));
+                }
+                let Some(text) = text_of(v.pointer("/message/content")) else {
+                    continue;
+                };
                 // The turn's last words are its outcome.
                 if let Some(t) = prog.open.as_mut() {
                     t.answer = text;
@@ -459,7 +617,10 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
                 }
             }
             Some("system") => {
-                if matches!(v.get("subtype").and_then(Value::as_str), Some("turn_duration" | "stop_hook_summary")) {
+                if matches!(
+                    v.get("subtype").and_then(Value::as_str),
+                    Some("turn_duration" | "stop_hook_summary")
+                ) {
                     added += close(src, prog)?;
                 }
             }
@@ -471,7 +632,9 @@ fn feed(text: &str, prog: &mut Progress, src: &Source) -> Result<usize> {
 
 /// Store the open turn, if it has an outcome, and keep it as the last one.
 fn close(src: &Source, prog: &mut Progress) -> Result<usize> {
-    let Some(mut t) = prog.open.take() else { return Ok(0) };
+    let Some(mut t) = prog.open.take() else {
+        return Ok(0);
+    };
     // Nothing came of it, or it ran somewhere throwaway.
     if t.answer.trim().is_empty() || t.cwd.is_empty() || t.cwd.starts_with("/tmp/") {
         return Ok(0);
@@ -484,22 +647,41 @@ fn close(src: &Source, prog: &mut Progress) -> Result<usize> {
         format!("You asked: {}\n\n{}", t.prompt, t.log.join("\n\n"))
     } else {
         match &src.who {
-            None => format!("You asked: {}\n\nOutcome: {}", clip(&t.prompt, PROMPT_CHARS), clip(&t.answer, ANSWER_CHARS)),
-            Some(who) => format!("{who} was asked: {}\n\nOutcome: {}", clip(&t.prompt, PROMPT_CHARS), clip(&t.answer, ANSWER_CHARS)),
+            None => format!(
+                "You asked: {}\n\nOutcome: {}",
+                clip(&t.prompt, PROMPT_CHARS),
+                clip(&t.answer, ANSWER_CHARS)
+            ),
+            Some(who) => format!(
+                "{who} was asked: {}\n\nOutcome: {}",
+                clip(&t.prompt, PROMPT_CHARS),
+                clip(&t.answer, ANSWER_CHARS)
+            ),
         }
     };
-    let changed = src.mem.put(&memory::project_scope(&t.cwd), &format!("{}#{}", src.label, t.n), &content, t.at_ms)?;
+    let changed = src.mem.put(
+        &memory::project_scope(&t.cwd),
+        &format!("{}#{}", src.label, t.n),
+        &content,
+        t.at_ms,
+    )?;
     prog.last = Some(t);
     Ok(usize::from(changed))
 }
 
 /// An assistant message whole: its words, and each tool call with its input.
 fn calls_of(content: Option<&Value>) -> Vec<String> {
-    let Some(items) = content.and_then(Value::as_array) else { return Vec::new() };
+    let Some(items) = content.and_then(Value::as_array) else {
+        return Vec::new();
+    };
     items
         .iter()
         .filter_map(|i| match i.get("type").and_then(Value::as_str) {
-            Some("text") => i.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()).map(str::to_string),
+            Some("text") => i
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|t| !t.trim().is_empty())
+                .map(str::to_string),
             Some("tool_use") => Some(format!(
                 "→ {} {}",
                 i.get("name").and_then(Value::as_str).unwrap_or("tool"),
@@ -512,7 +694,9 @@ fn calls_of(content: Option<&Value>) -> Vec<String> {
 
 /// What each tool call in a user message returned.
 fn results_of(v: &Value) -> Vec<String> {
-    let Some(items) = v.pointer("/message/content").and_then(Value::as_array) else { return Vec::new() };
+    let Some(items) = v.pointer("/message/content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     items
         .iter()
         .filter(|i| i.get("type").and_then(Value::as_str) == Some("tool_result"))
@@ -521,7 +705,11 @@ fn results_of(v: &Value) -> Vec<String> {
                 Some(Value::String(s)) => s.clone(),
                 Some(Value::Array(parts)) => parts
                     .iter()
-                    .map(|p| p.get("text").and_then(Value::as_str).map_or_else(|| "[image]".to_string(), str::to_string))
+                    .map(|p| {
+                        p.get("text")
+                            .and_then(Value::as_str)
+                            .map_or_else(|| "[image]".to_string(), str::to_string)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n"),
                 _ => String::new(),
@@ -535,8 +723,12 @@ fn results_of(v: &Value) -> Vec<String> {
 /// by its memory source (`session:<id>#<n>` or `session:<id>/agent-<a>#<n>`),
 /// from the transcript or, once Claude Code has deleted it, the archive.
 pub fn whole_turn(cfg: &Config, source: &str) -> Result<String> {
-    let rest = source.strip_prefix("session:").ok_or_else(|| anyhow::anyhow!("{source} isn't a conversation turn"))?;
-    let (who, n) = rest.rsplit_once('#').ok_or_else(|| anyhow::anyhow!("{source} has no turn number"))?;
+    let rest = source
+        .strip_prefix("session:")
+        .ok_or_else(|| anyhow::anyhow!("{source} isn't a conversation turn"))?;
+    let (who, n) = rest
+        .rsplit_once('#')
+        .ok_or_else(|| anyhow::anyhow!("{source} has no turn number"))?;
     let (session, agent) = match who.split_once("/agent-") {
         Some((s, a)) => (s, Some(a)),
         None => (who, None),
@@ -544,11 +736,17 @@ pub fn whole_turn(cfg: &Config, source: &str) -> Result<String> {
     let text = crate::archive::transcript(cfg, session, agent)
         .ok_or_else(|| anyhow::anyhow!("no transcript for {session}, here or in the archive"))?;
     let mem = Memory::in_memory()?;
-    let src = Source { label: format!("session:{who}"), who: agent.map(|_| String::new()), mem: &mem, full: true };
+    let src = Source {
+        label: format!("session:{who}"),
+        who: agent.map(|_| String::new()),
+        mem: &mem,
+        full: true,
+    };
     let mut prog = Progress::default();
     feed(&text, &mut prog, &src)?;
     close(&src, &mut prog)?;
-    mem.by_source(source)?.ok_or_else(|| anyhow::anyhow!("turn {n} isn't in that transcript"))
+    mem.by_source(source)?
+        .ok_or_else(|| anyhow::anyhow!("turn {n} isn't in that transcript"))
 }
 
 /// A prompt you typed (not a tool result, command plumbing or a notification).
@@ -556,10 +754,17 @@ fn prompt_of(v: &Value) -> Option<String> {
     let text = match v.pointer("/message/content")? {
         Value::String(s) => s.clone(),
         Value::Array(items) => {
-            if items.iter().any(|i| i.get("type").and_then(Value::as_str) == Some("tool_result")) {
+            if items
+                .iter()
+                .any(|i| i.get("type").and_then(Value::as_str) == Some("tool_result"))
+            {
                 return None;
             }
-            items.iter().filter_map(|i| i.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+            items
+                .iter()
+                .filter_map(|i| i.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
         }
         _ => return None,
     };
@@ -567,14 +772,30 @@ fn prompt_of(v: &Value) -> Option<String> {
     // Claude Code's own plumbing arrives as user messages too; pasted text is
     // wrapped in a tag but is a real prompt.
     const PLUMBING: &[&str] = &[
-        "<command-", "<local-command", "<task-notification", "<system-reminder", "<bash-", "<user-memory-input", "<teammate-message",
+        "<command-",
+        "<local-command",
+        "<task-notification",
+        "<system-reminder",
+        "<bash-",
+        "<user-memory-input",
+        "<teammate-message",
     ];
-    if t.is_empty() || t.starts_with("Caveat:") || t.starts_with("[Request interrupted") || PLUMBING.iter().any(|p| t.starts_with(p)) {
+    if t.is_empty()
+        || t.starts_with("Caveat:")
+        || t.starts_with("[Request interrupted")
+        || PLUMBING.iter().any(|p| t.starts_with(p))
+    {
         return None;
     }
-    let unwrapped = t.strip_prefix('<').and_then(|r| r.split_once('>')).filter(|(tag, _)| tag.starts_with("pasted_content"));
+    let unwrapped = t
+        .strip_prefix('<')
+        .and_then(|r| r.split_once('>'))
+        .filter(|(tag, _)| tag.starts_with("pasted_content"));
     let t = match unwrapped {
-        Some((_, rest)) => rest.rsplit_once("</pasted_content").map_or(rest, |(a, _)| a).trim(),
+        Some((_, rest)) => rest
+            .rsplit_once("</pasted_content")
+            .map_or(rest, |(a, _)| a)
+            .trim(),
         None => t,
     };
     (!t.is_empty()).then(|| t.to_string())
@@ -604,14 +825,25 @@ mod tests {
     use super::*;
 
     fn src<'a>(mem: &'a Memory, who: Option<&str>) -> Source<'a> {
-        Source { label: "session:abc".into(), who: who.map(str::to_string), mem, full: false }
+        Source {
+            label: "session:abc".into(),
+            who: who.map(str::to_string),
+            mem,
+            full: false,
+        }
     }
 
     fn feed(path: &Path, lines: &[&str], prog: &mut Progress, src: &Source) -> usize {
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
         std::io::Write::write_all(&mut f, (lines.join("\n") + "\n").as_bytes()).unwrap();
         let len = std::fs::metadata(path).unwrap().len();
-        read_from(path, prog.offset, len - prog.offset, prog, src).unwrap().1
+        read_from(path, prog.offset, len - prog.offset, prog, src)
+            .unwrap()
+            .1
     }
 
     #[test]
@@ -629,9 +861,20 @@ mod tests {
             r#"{"type":"ai-title","aiTitle":" "}"#,
         ];
         feed(&path, &lines, &mut prog, &src(&mem, None));
-        assert_eq!((prog.custom.as_deref(), prog.ai.as_deref(), prog.titled), (Some("Release"), Some("Stale image tag"), true));
-        assert_eq!(session_of("/c/projects/-w/0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c.jsonl"), Some("0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c"));
-        assert_eq!(session_of("/c/projects/-w/0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c/subagents/agent-a0123456789abcdef0123.jsonl"), None);
+        assert_eq!(
+            (prog.custom.as_deref(), prog.ai.as_deref(), prog.titled),
+            (Some("Release"), Some("Stale image tag"), true)
+        );
+        assert_eq!(
+            session_of("/c/projects/-w/0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c.jsonl"),
+            Some("0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c")
+        );
+        assert_eq!(
+            session_of(
+                "/c/projects/-w/0ff6405c-c71f-4a6a-8d59-de4d9a0cca4c/subagents/agent-a0123456789abcdef0123.jsonl"
+            ),
+            None
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -653,12 +896,22 @@ mod tests {
         let mut prog = Progress::default();
         let n = feed(&path, &lines, &mut prog, &src(&mem, None));
         assert_eq!(n, 1, "the first exchange closed when the next prompt came");
-        assert_eq!(prog.open.as_ref().unwrap().prompt, "ship it", "the second is still open");
+        assert_eq!(
+            prog.open.as_ref().unwrap().prompt,
+            "ship it",
+            "the second is still open"
+        );
         let hits = mem.search(&[], None, "deploy image tag", 5).unwrap();
         assert_eq!(hits[0].source, "session:abc#1");
         let e = mem.get(&hits[0].id).unwrap().unwrap();
-        assert!(e.content.contains("why is the deploy failing") && e.content.contains("bumped it to 1.4.2"));
-        assert!(!e.content.contains("Looking."), "the outcome is the turn's last words");
+        assert!(
+            e.content.contains("why is the deploy failing")
+                && e.content.contains("bumped it to 1.4.2")
+        );
+        assert!(
+            !e.content.contains("Looking."),
+            "the outcome is the turn's last words"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -696,7 +949,13 @@ mod tests {
         assert_eq!(n, 1);
         let hits = mem.search(&[], None, "migration", 5).unwrap();
         assert_eq!(hits.len(), 1, "one entry for the turn, brought up to date");
-        assert!(mem.get(&hits[0].id).unwrap().unwrap().content.contains("42 tables moved"));
+        assert!(
+            mem.get(&hits[0].id)
+                .unwrap()
+                .unwrap()
+                .content
+                .contains("42 tables moved")
+        );
         // Noise is not a conversation.
         let n = feed(
             &path,
@@ -712,7 +971,11 @@ mod tests {
             &s,
         );
         assert_eq!(n, 0);
-        assert!(mem.search(&[], None, "API Error continued scratch", 5).unwrap().is_empty());
+        assert!(
+            mem.search(&[], None, "API Error continued scratch", 5)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(mem.count().unwrap(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -724,7 +987,12 @@ mod tests {
         let path = dir.join("agent-a1.jsonl");
         let _ = std::fs::remove_file(&path);
         let mem = Memory::in_memory().unwrap();
-        let s = Source { label: "session:abc/agent-a1".into(), who: Some("An Explore subagent (find the flag)".into()), mem: &mem, full: false };
+        let s = Source {
+            label: "session:abc/agent-a1".into(),
+            who: Some("An Explore subagent (find the flag)".into()),
+            mem: &mem,
+            full: false,
+        };
         let mut prog = Progress::default();
         feed(
             &path,
@@ -736,9 +1004,17 @@ mod tests {
             &s,
         );
         close(&s, &mut prog).unwrap();
-        let hits = mem.search(&[], Some("session:abc"), "retry flag", 5).unwrap();
+        let hits = mem
+            .search(&[], Some("session:abc"), "retry flag", 5)
+            .unwrap();
         assert_eq!(hits[0].source, "session:abc/agent-a1#1");
-        assert!(mem.get(&hits[0].id).unwrap().unwrap().content.starts_with("An Explore subagent (find the flag) was asked"));
+        assert!(
+            mem.get(&hits[0].id)
+                .unwrap()
+                .unwrap()
+                .content
+                .starts_with("An Explore subagent (find the flag) was asked")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
@@ -747,21 +1023,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("-work-app");
         std::fs::create_dir_all(project.join("memory")).unwrap();
-        std::fs::write(project.join("s1.jsonl"), "{\"type\":\"user\",\"cwd\":\"/work/app\"}\n").unwrap();
+        std::fs::write(
+            project.join("s1.jsonl"),
+            "{\"type\":\"user\",\"cwd\":\"/work/app\"}\n",
+        )
+        .unwrap();
         let note = project.join("memory/deploys.md");
         std::fs::write(&note, "deploys go to perth through the bastion").unwrap();
         let mem = Memory::in_memory().unwrap();
         let mut book = Book::default();
         let roots = vec![root.clone()];
         assert_eq!(memory_files(&roots, &mut book, &mem).unwrap(), 1);
-        let hits = mem.search(&["project:/work/app".into()], None, "bastion", 5).unwrap();
-        assert_eq!(hits.len(), 1, "found under the project its conversations ran in");
+        let hits = mem
+            .search(&["project:/work/app".into()], None, "bastion", 5)
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "found under the project its conversations ran in"
+        );
         assert_eq!(hits[0].source, format!("memory: {}", note.display()));
-        assert_eq!(memory_files(&roots, &mut book, &mem).unwrap(), 0, "unchanged, not read again");
+        assert_eq!(
+            memory_files(&roots, &mut book, &mem).unwrap(),
+            0,
+            "unchanged, not read again"
+        );
         std::fs::write(&note, "deploys go to oregon now").unwrap();
         book.notes.insert(note.display().to_string(), 0);
         assert_eq!(memory_files(&roots, &mut book, &mem).unwrap(), 1);
-        assert!(mem.search(&[], None, "bastion", 5).unwrap().is_empty(), "the old text is replaced");
+        assert!(
+            mem.search(&[], None, "bastion", 5).unwrap().is_empty(),
+            "the old text is replaced"
+        );
         assert_eq!(mem.count().unwrap(), 1);
         std::fs::remove_file(&note).unwrap();
         assert_eq!(memory_files(&roots, &mut book, &mem).unwrap(), 1);
@@ -779,15 +1072,34 @@ mod tests {
             r#"{"type":"system","subtype":"turn_duration"}"#,
         ]
         .join("\n");
-        let clipped = Source { label: "session:abc".into(), who: None, mem: &mem, full: false };
+        let clipped = Source {
+            label: "session:abc".into(),
+            who: None,
+            mem: &mem,
+            full: false,
+        };
         super::feed(&lines, &mut Progress::default(), &clipped).unwrap();
         let short = mem.by_source("session:abc#1").unwrap().unwrap();
-        assert!(!short.contains("E0425"), "the index keeps the prompt and the outcome: {short}");
+        assert!(
+            !short.contains("E0425"),
+            "the index keeps the prompt and the outcome: {short}"
+        );
         let whole_mem = Memory::in_memory().unwrap();
-        let whole = Source { label: "session:abc".into(), who: None, mem: &whole_mem, full: true };
+        let whole = Source {
+            label: "session:abc".into(),
+            who: None,
+            mem: &whole_mem,
+            full: true,
+        };
         super::feed(&lines, &mut Progress::default(), &whole).unwrap();
         let all = whole_mem.by_source("session:abc#1").unwrap().unwrap();
-        for part in ["Checking the log.", "→ Bash", "cargo build", "← error[E0425]", "A missing binding; fixed."] {
+        for part in [
+            "Checking the log.",
+            "→ Bash",
+            "cargo build",
+            "← error[E0425]",
+            "A missing binding; fixed.",
+        ] {
             assert!(all.contains(part), "{part} missing from {all}");
         }
     }

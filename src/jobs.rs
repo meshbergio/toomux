@@ -20,10 +20,10 @@
 //! status are the same as before, and the command still stops at the timeout
 //! the agent gave it.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub fn dir() -> PathBuf {
@@ -69,12 +69,18 @@ const AWAY_MS: i64 = 10 * 60_000;
 /// How long a subagent waits on a command in one go: under its five-minute
 /// cache, with room for the call around it.
 pub fn keep_warm() -> Duration {
-    let secs = std::env::var("TOOMUX_KEEP_WARM_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(270);
+    let secs = std::env::var("TOOMUX_KEEP_WARM_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(270);
     Duration::from_secs(secs)
 }
 
 fn path(id: &str) -> PathBuf {
     dir().join(format!("{id}.json"))
+}
+fn path_in(base: &Path, id: &str) -> PathBuf {
+    base.join(format!("{id}.json"))
 }
 pub fn log_path(id: &str) -> PathBuf {
     dir().join(format!("{id}.log"))
@@ -82,24 +88,42 @@ pub fn log_path(id: &str) -> PathBuf {
 fn followers_path(id: &str) -> PathBuf {
     dir().join(format!("{id}.followers"))
 }
+fn lock_path(id: &str) -> PathBuf {
+    dir().join(format!("{id}.lock"))
+}
 
 pub fn load(id: &str) -> Option<Job> {
-    std::fs::read_to_string(path(id)).ok().and_then(|r| serde_json::from_str(&r).ok())
+    load_from(&dir(), id)
+}
+
+fn load_from(base: &Path, id: &str) -> Option<Job> {
+    std::fs::read_to_string(path_in(base, id))
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
 }
 
 fn save(j: &Job) -> Result<()> {
-    std::fs::create_dir_all(dir())?;
-    let tmp = dir().join(format!(".{}.{}", j.id, std::process::id()));
+    save_in(&dir(), j)
+}
+
+fn save_in(base: &Path, j: &Job) -> Result<()> {
+    std::fs::create_dir_all(base)?;
+    let tmp = base.join(format!(".{}.{}", j.id, std::process::id()));
     std::fs::write(&tmp, serde_json::to_string(j)?)?;
-    std::fs::rename(tmp, path(&j.id))?;
+    std::fs::rename(tmp, path_in(base, &j.id))?;
     Ok(())
 }
 
 /// Change a job on disk (re-reading first; the host and followers share it).
 fn update(id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
-    let mut j = load(id).with_context(|| format!("no job {id}"))?;
+    update_in(&dir(), id, f)
+}
+
+fn update_in(base: &Path, id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
+    let _guard = crate::lock::exclusive(&base.join(format!("{id}.lock")))?;
+    let mut j = load_from(base, id).with_context(|| format!("no job {id}"))?;
     f(&mut j);
-    save(&j)?;
+    save_in(base, &j)?;
     Ok(j)
 }
 
@@ -121,12 +145,20 @@ pub fn create(id: &str, command: &str, cwd: &str, session: &str, timeout_ms: i64
 
 /// Every job, newest first.
 pub fn all() -> Vec<Job> {
-    let mut out: Vec<Job> = std::fs::read_dir(dir())
+    all_in(&dir())
+}
+
+fn all_in(base: &Path) -> Vec<Job> {
+    let mut out: Vec<Job> = std::fs::read_dir(base)
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| std::fs::read_to_string(e.path()).ok().and_then(|r| serde_json::from_str(&r).ok()))
+        .filter_map(|e| {
+            std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|r| serde_json::from_str(&r).ok())
+        })
         .collect();
     out.sort_by_key(|j: &Job| std::cmp::Reverse(j.started_ms));
     out
@@ -134,7 +166,10 @@ pub fn all() -> Vec<Job> {
 
 /// A session's jobs that are still running.
 pub fn running_for(session: &str) -> Vec<Job> {
-    all().into_iter().filter(|j| j.session == session && j.status == "running" && alive_group(j.pgid)).collect()
+    all()
+        .into_iter()
+        .filter(|j| j.session == session && j.status == "running" && alive_group(j.pgid))
+        .collect()
 }
 
 /// Before a handover: let the session's jobs carry on without it.
@@ -174,9 +209,7 @@ fn alive_group(pgid: i32) -> bool {
 /// Alive and not just waiting to be reaped (a killed follower stays a zombie
 /// until its parent gets round to it).
 fn alive(pid: i32) -> bool {
-    pid > 0
-        && unsafe { libc::kill(pid, 0) } == 0
-        && !crate::platform::is_zombie(pid)
+    pid > 0 && unsafe { libc::kill(pid, 0) } == 0 && !crate::platform::is_zombie(pid)
 }
 
 /// `toomux job run <id>`: start the host, then follow it (for at most
@@ -225,9 +258,15 @@ pub fn host(id: &str) -> Result<()> {
     if job.status != "starting" {
         return Ok(());
     }
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path(id))?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path(id))?;
     let mut cmd = std::process::Command::new("bash");
-    cmd.args(["-c", &job.command]).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    cmd.args(["-c", &job.command])
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
     use std::os::unix::process::CommandExt;
     unsafe {
         cmd.pre_exec(|| {
@@ -246,9 +285,16 @@ pub fn host(id: &str) -> Result<()> {
     let mut ever_followed = false;
     loop {
         if let Ok(Some(status)) = child.try_wait() {
-            let code = status.code().unwrap_or(128 + std::os::unix::process::ExitStatusExt::signal(&status).unwrap_or(0));
+            let code = status.code().unwrap_or(
+                128 + std::os::unix::process::ExitStatusExt::signal(&status).unwrap_or(0),
+            );
             let _ = update(id, |j| {
-                j.status = if j.status == "stopping" { "stopped" } else { "exited" }.into();
+                j.status = if j.status == "stopping" {
+                    "stopped"
+                } else {
+                    "exited"
+                }
+                .into();
                 j.exit = Some(code);
             });
             return Ok(());
@@ -259,9 +305,14 @@ pub fn host(id: &str) -> Result<()> {
             last_follower = Instant::now();
         }
         let j = load(id).unwrap_or_default();
-        if j.deadline_ms > 0 && crate::registry::now_ms() >= j.deadline_ms && j.status == "running" {
+        if j.deadline_ms > 0 && crate::registry::now_ms() >= j.deadline_ms && j.status == "running"
+        {
             if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_path(id)) {
-                let _ = writeln!(f, "\n[toomux · stopped: it reached the {} timeout it was given]", span(j.deadline_ms - j.started_ms));
+                let _ = writeln!(
+                    f,
+                    "\n[toomux · stopped: it reached the {} timeout it was given]",
+                    span(j.deadline_ms - j.started_ms)
+                );
             }
             stop_group(pgid);
             let status = child.wait().ok();
@@ -274,9 +325,12 @@ pub fn host(id: &str) -> Result<()> {
         // Its follower is gone and no handover asked it to carry on (or the
         // fresh session never came for it): the session stopped it or ended,
         // so stop the command as Claude would.
-        let abandoned = ever_followed && !followed && last_follower.elapsed() > Duration::from_secs(3);
+        let abandoned =
+            ever_followed && !followed && last_follower.elapsed() > Duration::from_secs(3);
         let never = !ever_followed && last_follower.elapsed() > Duration::from_secs(20);
-        if (abandoned || never) && !carrying(&j, crate::registry::now_ms()) || j.status == "stopping" {
+        if (abandoned || never) && !carrying(&j, crate::registry::now_ms())
+            || j.status == "stopping"
+        {
             stop_group(pgid);
             let status = child.wait().ok();
             let _ = update(id, |j| {
@@ -325,10 +379,17 @@ fn span(ms: i64) -> String {
 /// carries on from what the last follower showed, waiting `keep_warm()`.
 pub fn follow(id: &str, tail: Option<usize>, until: Option<Duration>, more: bool) -> Result<i32> {
     let began = Instant::now();
-    let until = if more { Some(until.unwrap_or_else(keep_warm)) } else { until };
+    let until = if more {
+        Some(until.unwrap_or_else(keep_warm))
+    } else {
+        until
+    };
     std::fs::create_dir_all(dir())?;
     {
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(followers_path(id))?;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(followers_path(id))?;
         writeln!(f, "{}", std::process::id())?;
     }
     // Being followed again: normal rules apply from here.
@@ -337,13 +398,21 @@ pub fn follow(id: &str, tail: Option<usize>, until: Option<Duration>, more: bool
         j.carry_until_ms = 0;
     });
     let mut out = std::io::stdout().lock();
-    let mut pos: u64 = if more { load(id).map_or(0, |j| j.shown) } else { 0 };
+    let mut pos: u64 = if more {
+        load(id).map_or(0, |j| j.shown)
+    } else {
+        0
+    };
     if let Some(n) = tail.filter(|_| !more) {
         let bytes = std::fs::read(log_path(id)).unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = text.lines().collect();
         if lines.len() > n {
-            writeln!(out, "[… {} earlier lines: toomux job log {id}]", lines.len() - n)?;
+            writeln!(
+                out,
+                "[… {} earlier lines: toomux job log {id}]",
+                lines.len() - n
+            )?;
         }
         for l in &lines[lines.len().saturating_sub(n)..] {
             writeln!(out, "{l}")?;
@@ -388,10 +457,16 @@ pub fn follow(id: &str, tail: Option<usize>, until: Option<Duration>, more: bool
         match j.status.as_str() {
             "exited" | "stopped" => {
                 // One more read for anything written just before the end.
-                if std::fs::metadata(log_path(id)).map(|m| m.len()).unwrap_or(0) > pos {
+                if std::fs::metadata(log_path(id))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+                    > pos
+                {
                     continue;
                 }
-                return Ok(j.exit.unwrap_or(if j.status == "stopped" { 143 } else { 0 }));
+                return Ok(j
+                    .exit
+                    .unwrap_or(if j.status == "stopped" { 143 } else { 0 }));
             }
             _ if until.is_some_and(|u| began.elapsed() >= u) => {
                 // Step away, leaving it running until its deadline.
@@ -399,10 +474,17 @@ pub fn follow(id: &str, tail: Option<usize>, until: Option<Duration>, more: bool
                 let j = update(id, |j| {
                     j.shown = pos;
                     j.carry_on = true;
-                    j.carry_until_ms = if j.deadline_ms > 0 { j.deadline_ms } else { now + AWAY_MS };
+                    j.carry_until_ms = if j.deadline_ms > 0 {
+                        j.deadline_ms
+                    } else {
+                        now + AWAY_MS
+                    };
                 })?;
                 let stops = if j.deadline_ms > 0 {
-                    format!("It stops in {} if still going (the timeout it was given).", span(j.deadline_ms - now))
+                    format!(
+                        "It stops in {} if still going (the timeout it was given).",
+                        span(j.deadline_ms - now)
+                    )
                 } else {
                     format!("Unfollowed, it stops in {}.", span(AWAY_MS))
                 };
@@ -434,7 +516,17 @@ pub fn log(id: &str, tail: Option<usize>) -> Result<String> {
     let bytes = std::fs::read(log_path(id)).with_context(|| format!("no log for job {id}"))?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Ok(match tail {
-        Some(n) => text.lines().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") + "\n",
+        Some(n) => {
+            text.lines()
+                .rev()
+                .take(n)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        }
         None => text,
     })
 }
@@ -449,8 +541,73 @@ pub fn prune() {
         _ => j.started_ms < now - 7 * 86_400_000,
     };
     for j in all().into_iter().filter(old) {
-        for p in [path(&j.id), log_path(&j.id), followers_path(&j.id)] {
+        for p in [
+            path(&j.id),
+            log_path(&j.id),
+            followers_path(&j.id),
+            lock_path(&j.id),
+        ] {
             let _ = std::fs::remove_file(p);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_job_updates_are_serialised() {
+        let tmp = std::env::temp_dir().join(format!("toomux-jobs-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let jobs_dir = tmp.join("jobs");
+        let job = Job {
+            id: "race".into(),
+            command: "true".into(),
+            cwd: "/tmp".into(),
+            session: "session".into(),
+            started_ms: crate::registry::now_ms(),
+            status: "starting".into(),
+            ..Default::default()
+        };
+        save_in(&jobs_dir, &job).unwrap();
+
+        let mut threads = Vec::new();
+        for _ in 0..12 {
+            let jobs_dir = jobs_dir.clone();
+            threads.push(std::thread::spawn(move || {
+                for _ in 0..25 {
+                    update_in(&jobs_dir, "race", |j| j.shown += 1).unwrap();
+                }
+            }));
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(load_from(&jobs_dir, "race").unwrap().shown, 300);
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn malformed_job_records_are_ignored_by_listing() {
+        let tmp = std::env::temp_dir().join(format!("toomux-jobs-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let jobs_dir = tmp.join("jobs");
+        std::fs::create_dir_all(&jobs_dir).unwrap();
+        std::fs::write(path_in(&jobs_dir, "bad"), "{bad").unwrap();
+        let good = Job {
+            id: "good".into(),
+            command: "true".into(),
+            cwd: "/tmp".into(),
+            session: "session".into(),
+            started_ms: crate::registry::now_ms(),
+            status: "starting".into(),
+            ..Default::default()
+        };
+        save_in(&jobs_dir, &good).unwrap();
+        let jobs = all_in(&jobs_dir);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "good");
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

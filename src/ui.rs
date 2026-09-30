@@ -1,14 +1,14 @@
 use crate::actions;
-use crate::config::{hex, tilde, Config};
-use crate::registry::{self, ago, now_ms, Session, State as St};
+use crate::config::{Config, hex, tilde};
+use crate::registry::{self, Session, State as St, ago, now_ms};
 use crate::state::State;
 use crate::tmux;
 use crate::transcript::{self, Who};
 use ansi_to_tui::IntoText;
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -20,10 +20,13 @@ use std::time::{Duration, Instant};
 
 /// How long a conversation's cached context lasts between calls.
 const CACHE_MS: i64 = 3_600_000;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 mod memory;
+mod render;
 mod shell;
+
+use render::*;
 
 /// `toomux` as the whole terminal, with sessions live beside the list.
 pub fn run_shell(cfg: Config, popup: bool) -> Result<()> {
@@ -58,7 +61,11 @@ struct Palette {
 
 /// The terminal has hung up (its pane or window closed).
 pub(crate) fn terminal_gone() -> bool {
-    let mut fd = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
+    let mut fd = libc::pollfd {
+        fd: 0,
+        events: libc::POLLIN,
+        revents: 0,
+    };
     let n = unsafe { libc::poll(&mut fd, 1, 0) };
     n > 0 && fd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
 }
@@ -67,10 +74,12 @@ pub(crate) fn terminal_gone() -> bool {
 /// it's ignored (a launcher, a tracer) crossterm's poll spins on the dead tty
 /// inside its own loop, at full CPU, and never returns to ours.
 pub(crate) fn exit_with_terminal() {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(1));
-        if terminal_gone() {
-            std::process::exit(0);
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if terminal_gone() {
+                std::process::exit(0);
+            }
         }
     });
 }
@@ -85,7 +94,11 @@ fn rgb(s: &str) -> Color {
 fn mix(a: Color, b: Color, t: f32, fallback: Color) -> Color {
     match (a, b) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
-            let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
+            let m = |x: u8, y: u8| {
+                (x as f32 + (y as f32 - x as f32) * t)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
             Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
         }
         _ if t < 0.2 => a,
@@ -101,7 +114,11 @@ fn recede(buf: &mut ratatui::buffer::Buffer, area: Rect, ground: Color, t: f32, 
         for x in area.x..area.x + area.width {
             let c = &mut buf[(x, y)];
             // Named and indexed colours can't be mixed; treat them as text.
-            let fg = if matches!(c.fg, Color::Rgb(..)) { c.fg } else { p.text };
+            let fg = if matches!(c.fg, Color::Rgb(..)) {
+                c.fg
+            } else {
+                p.text
+            };
             c.fg = mix(fg, ground, t, p.muted);
             if c.bg != Color::Reset {
                 c.bg = mix(c.bg, ground, t, ground);
@@ -249,7 +266,12 @@ enum Cmd {
 }
 
 enum Pending {
-    Switch { pid: i32, account: usize, wait: bool, force: bool },
+    Switch {
+        pid: i32,
+        account: usize,
+        wait: bool,
+        force: bool,
+    },
     Adopt(i32),
     Close(i32),
     Unqueue(i32),
@@ -278,10 +300,18 @@ impl NewFlow {
         let q = self.query.trim().to_lowercase();
         let mut out: Vec<crate::places::Place> = Vec::new();
         if q.starts_with('/') || q.starts_with('~') {
-            let p = crate::config::expand(self.query.trim()).display().to_string();
+            let p = crate::config::expand(self.query.trim())
+                .display()
+                .to_string();
             let p = p.trim_end_matches('/').to_string();
             if std::path::Path::new(&p).is_dir() && !self.places.iter().any(|x| x.path == p) {
-                out.push(crate::places::Place { path: p, score: 0.0, last_ms: 0, prompts: 0, recent: vec![] });
+                out.push(crate::places::Place {
+                    path: p,
+                    score: 0.0,
+                    last_ms: 0,
+                    prompts: 0,
+                    recent: vec![],
+                });
             }
         }
         let terms: Vec<&str> = q.split_whitespace().collect();
@@ -290,7 +320,9 @@ impl NewFlow {
                 .iter()
                 .filter(|pl| {
                     let hay = tilde(&pl.path).to_lowercase();
-                    terms.iter().all(|t| hay.contains(t.trim_start_matches('~')))
+                    terms
+                        .iter()
+                        .all(|t| hay.contains(t.trim_start_matches('~')))
                 })
                 .cloned(),
         );
@@ -463,7 +495,9 @@ impl App {
             shell: None,
             seen: 0,
         };
-        app.plans = (0..app.cfg.accounts.len()).map(|i| crate::usage::plan(&app.cfg, i)).collect();
+        app.plans = (0..app.cfg.accounts.len())
+            .map(|i| crate::usage::plan(&app.cfg, i))
+            .collect();
         app.rebuild();
         app
     }
@@ -481,7 +515,8 @@ impl App {
             while watch_rx.try_recv().is_ok() {
                 self.changed = true;
             }
-            let mut reload = since > Duration::from_secs(1) || (self.changed && since > Duration::from_millis(500));
+            let mut reload = since > Duration::from_secs(1)
+                || (self.changed && since > Duration::from_millis(500));
             while let Ok(done) = self.done_rx.try_recv() {
                 self.working_on = None;
                 match done {
@@ -498,8 +533,14 @@ impl App {
                 term.draw(|f| self.draw(f))?;
                 self.dirty = false;
             }
-            let next = if self.changed { Duration::from_millis(500) } else { Duration::from_secs(1) };
-            let rest = next.saturating_sub(self.loaded_at.elapsed()).max(Duration::from_millis(40));
+            let next = if self.changed {
+                Duration::from_millis(500)
+            } else {
+                Duration::from_secs(1)
+            };
+            let rest = next
+                .saturating_sub(self.loaded_at.elapsed())
+                .max(Duration::from_millis(40));
             let mut wait = tick.unwrap_or(rest).min(rest);
             // Take every pending event before drawing again.
             while event::poll(wait)? {
@@ -510,7 +551,9 @@ impl App {
                     Event::Mouse(m) => match m.kind {
                         MouseEventKind::Down(MouseButton::Left) => self.click(m.column, m.row),
                         MouseEventKind::Down(MouseButton::Right) => self.menu_at(m.column, m.row),
-                        MouseEventKind::Moved | MouseEventKind::Drag(_) => self.hover = Some((m.column, m.row)),
+                        MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                            self.hover = Some((m.column, m.row))
+                        }
                         MouseEventKind::ScrollDown => self.scroll_by(1),
                         MouseEventKind::ScrollUp => self.scroll_by(-1),
                         _ => {}
@@ -530,17 +573,24 @@ impl App {
         if let Some(t) = self.memory.as_ref().and_then(|m| m.busy()) {
             return Some(t);
         }
-        let fading = self.fade.is_some_and(|(_, t)| t.elapsed() < Duration::from_millis(260));
+        let fading = self
+            .fade
+            .is_some_and(|(_, t)| t.elapsed() < Duration::from_millis(260));
         let easing = (self.shown_scroll - self.scroll as f32).abs() > 0.01;
         if fading || easing {
             return Some(Duration::from_millis(30));
         }
-        let flash = self.flash.as_ref().is_some_and(|(_, _, t)| t.elapsed() < Duration::from_millis(5_800));
+        let flash = self
+            .flash
+            .as_ref()
+            .is_some_and(|(_, _, t)| t.elapsed() < Duration::from_millis(5_800));
         // Breathing is for when you're looking at the list: in the full-screen
         // shell, a session with the keyboard keeps the rest perfectly still.
         let list_in_view = self.shell.as_ref().is_none_or(|sh| !sh.focus_live);
         let breathing = self.working_on.is_some()
-            || (list_in_view && matches!(self.mode, Mode::Normal) && self.items().any(|s| s.state == St::Working && !s.dormant));
+            || (list_in_view
+                && matches!(self.mode, Mode::Normal)
+                && self.items().any(|s| s.state == St::Working && !s.dormant));
         (flash || breathing).then_some(Duration::from_millis(200))
     }
 
@@ -552,7 +602,11 @@ impl App {
         self.info = crate::usage::sessions();
         // Open voyages, and ones met a few minutes ago (their landing shows).
         let now = now_ms();
-        self.voyages = crate::voyage::landed(now).into_iter().chain(crate::voyage::open()).map(|q| (q.session().to_string(), q)).collect();
+        self.voyages = crate::voyage::landed(now)
+            .into_iter()
+            .chain(crate::voyage::open())
+            .map(|q| (q.session().to_string(), q))
+            .collect();
         self.loaded_at = Instant::now();
         self.rebuild();
         // Redraw only when something you'd see is different.
@@ -569,7 +623,18 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         let now = now_ms();
         for s in &self.sessions {
-            (s.pid, s.state as u8, &s.title, &s.topic, s.status_text(now), s.account, s.pin, &s.queued, &s.limit).hash(&mut h);
+            (
+                s.pid,
+                s.state as u8,
+                &s.title,
+                &s.topic,
+                s.status_text(now),
+                s.account,
+                s.pin,
+                &s.queued,
+                &s.limit,
+            )
+                .hash(&mut h);
             s.pane.as_ref().map(|p| &p.id).hash(&mut h);
         }
         for u in &self.usage {
@@ -579,11 +644,20 @@ impl App {
             (u.at_ms / 60_000, &u.problem).hash(&mut h);
         }
         self.notices.len().hash(&mut h);
-        let mut voyages: Vec<_> = self.voyages.values().map(|q| (&q.id, q.session(), q.status.word(), q.at_limit, q.chip(now))).collect();
+        let mut voyages: Vec<_> = self
+            .voyages
+            .values()
+            .map(|q| (&q.id, q.session(), q.status.word(), q.at_limit, q.chip(now)))
+            .collect();
         voyages.sort();
         voyages.hash(&mut h);
         // The detail pane's scene moves once a second.
-        if self.cfg.voyage_scene && !self.sidebar && self.selected().is_some_and(|s| self.voyages.contains_key(&s.id)) {
+        if self.cfg.voyage_scene
+            && !self.sidebar
+            && self
+                .selected()
+                .is_some_and(|s| self.voyages.contains_key(&s.id))
+        {
             (now / 1000).hash(&mut h);
         }
         h.finish()
@@ -607,9 +681,14 @@ impl App {
             s.state.section(),
             if s.pane.is_some() { "tmux" } else { "outside" }
         );
-        let hay = (hay + if s.pin.is_some() { " pinned" } else { "" } + if s.dormant { " not running" } else { "" })
-            .to_lowercase();
-        self.filter.to_lowercase().split_whitespace().all(|t| hay.contains(t))
+        let hay = (hay
+            + if s.pin.is_some() { " pinned" } else { "" }
+            + if s.dormant { " not running" } else { "" })
+        .to_lowercase();
+        self.filter
+            .to_lowercase()
+            .split_whitespace()
+            .all(|t| hay.contains(t))
     }
 
     fn rebuild(&mut self) {
@@ -635,7 +714,10 @@ impl App {
         if self.group != Group::Attention {
             idx.sort_by(|&a, &b| {
                 let (sa, sb) = (&self.sessions[a], &self.sessions[b]);
-                key(sa).cmp(&key(sb)).then(sa.state.cmp(&sb.state)).then(sb.since_ms.cmp(&sa.since_ms))
+                key(sa)
+                    .cmp(&key(sb))
+                    .then(sa.state.cmp(&sb.state))
+                    .then(sb.since_ms.cmp(&sa.since_ms))
             });
         }
         let mut rows = Vec::new();
@@ -682,7 +764,10 @@ impl App {
         if pids.is_empty() {
             return;
         }
-        let cur = self.sel.and_then(|p| pids.iter().position(|&x| x == p)).unwrap_or(0) as i32;
+        let cur = self
+            .sel
+            .and_then(|p| pids.iter().position(|&x| x == p))
+            .unwrap_or(0) as i32;
         let next = (cur + d).clamp(0, pids.len() as i32 - 1) as usize;
         self.select(pids[next]);
     }
@@ -765,7 +850,11 @@ impl App {
                     }
                     KeyCode::Char('u') if ctrl => buf.clear(),
                     KeyCode::Char('w') if ctrl => {
-                        let t = buf.trim_end().rsplit_once(' ').map(|(a, _)| format!("{a} ")).unwrap_or_default();
+                        let t = buf
+                            .trim_end()
+                            .rsplit_once(' ')
+                            .map(|(a, _)| format!("{a} "))
+                            .unwrap_or_default();
                         buf = t;
                     }
                     KeyCode::Char(c) if !ctrl => buf.push(c),
@@ -789,7 +878,9 @@ impl App {
                 }
             }
             Mode::New(_) => {
-                let Mode::New(flow) = &mut self.mode else { return };
+                let Mode::New(flow) = &mut self.mode else {
+                    return;
+                };
                 let n = flow.shown().len();
                 match k.code {
                     KeyCode::Esc if !flow.query.is_empty() => {
@@ -800,7 +891,9 @@ impl App {
                     KeyCode::Enter => self.exec(Cmd::Yes),
                     KeyCode::Down => flow.sel = (flow.sel + 1).min(n.saturating_sub(1)),
                     KeyCode::Up => flow.sel = flow.sel.saturating_sub(1),
-                    KeyCode::Char('j') if ctrl => flow.sel = (flow.sel + 1).min(n.saturating_sub(1)),
+                    KeyCode::Char('j') if ctrl => {
+                        flow.sel = (flow.sel + 1).min(n.saturating_sub(1))
+                    }
                     KeyCode::Char('k') if ctrl => flow.sel = flow.sel.saturating_sub(1),
                     KeyCode::PageDown => flow.sel = (flow.sel + 8).min(n.saturating_sub(1)),
                     KeyCode::PageUp => flow.sel = flow.sel.saturating_sub(8),
@@ -898,7 +991,9 @@ impl App {
         if let Mode::New(flow) = &mut self.mode {
             if let Some(&(_, i)) = self.list_hits.iter().find(|(r, _)| inside(r)) {
                 let double = flow.sel == i as usize
-                    && self.last_click.is_some_and(|(t, p)| p == i && t.elapsed() < Duration::from_millis(450));
+                    && self
+                        .last_click
+                        .is_some_and(|(t, p)| p == i && t.elapsed() < Duration::from_millis(450));
                 flow.sel = i as usize;
                 self.last_click = Some((Instant::now(), i));
                 if double {
@@ -912,7 +1007,9 @@ impl App {
         }
         if let Some(&(_, pid)) = self.list_hits.iter().find(|(r, _)| inside(r)) {
             let double = self.sidebar
-                || self.last_click.is_some_and(|(t, p)| p == pid && t.elapsed() < Duration::from_millis(450));
+                || self
+                    .last_click
+                    .is_some_and(|(t, p)| p == pid && t.elapsed() < Duration::from_millis(450));
             self.select(pid);
             self.last_click = Some((Instant::now(), pid));
             if double {
@@ -928,11 +1025,25 @@ impl App {
             return;
         }
         let inside = |r: &Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
-        let Some(&(_, pid)) = self.list_hits.iter().find(|(r, _)| inside(r)) else { return };
+        let Some(&(_, pid)) = self.list_hits.iter().find(|(r, _)| inside(r)) else {
+            return;
+        };
         self.select(pid);
-        let Some(s) = self.selected().cloned() else { return };
+        let Some(s) = self.selected().cloned() else {
+            return;
+        };
         let mut items: Vec<(String, Cmd)> = Vec::new();
-        items.push((if s.dormant { "reopen" } else if self.shell.is_some() { "open" } else { "jump to it" }.into(), Cmd::Jump));
+        items.push((
+            if s.dormant {
+                "reopen"
+            } else if self.shell.is_some() {
+                "open"
+            } else {
+                "jump to it"
+            }
+            .into(),
+            Cmd::Jump,
+        ));
         if s.pane.is_some() && self.shell.as_ref().is_some_and(|sh| sh.popup) {
             items.push(("go there in tmux".into(), Cmd::GoThere));
         }
@@ -940,8 +1051,18 @@ impl App {
             let label = match &s.queued {
                 Some(to) => format!("stay here, don't move to {to}"),
                 None if self.cfg.accounts.len() == 2 => {
-                    let other = self.cfg.accounts.iter().enumerate().find(|(i, _)| Some(*i) != s.account);
-                    format!("move to {}", other.map(|(_, a)| a.name.as_str()).unwrap_or("the other account"))
+                    let other = self
+                        .cfg
+                        .accounts
+                        .iter()
+                        .enumerate()
+                        .find(|(i, _)| Some(*i) != s.account);
+                    format!(
+                        "move to {}",
+                        other
+                            .map(|(_, a)| a.name.as_str())
+                            .unwrap_or("the other account")
+                    )
                 }
                 None => "move to another account".into(),
             };
@@ -950,25 +1071,43 @@ impl App {
         if s.pane.is_none() && !s.dormant {
             items.push(("bring into tmux".into(), Cmd::Adopt));
         }
-        items.push((if s.pin.is_some() { "unpin" } else { "pin to alt-1..9" }.into(), Cmd::Pin));
+        items.push((
+            if s.pin.is_some() {
+                "unpin"
+            } else {
+                "pin to alt-1..9"
+            }
+            .into(),
+            Cmd::Pin,
+        ));
         if !s.dormant {
             items.push(("rename".into(), Cmd::Rename));
         }
         if let Some(a) = s.account {
-            items.push((format!("{} usage", self.cfg.accounts[a].name), Cmd::Usage(a)));
+            items.push((
+                format!("{} usage", self.cfg.accounts[a].name),
+                Cmd::Usage(a),
+            ));
         }
         if s.restore.is_some() {
             items.push(("don't offer again".into(), Cmd::Close));
         } else if !s.dormant {
             items.push(("close".into(), Cmd::Close));
         }
-        self.mode = Mode::Menu(Menu { pid, at: (x, y), sel: 0, items });
+        self.mode = Mode::Menu(Menu {
+            pid,
+            at: (x, y),
+            sel: 0,
+            items,
+        });
     }
 
     fn exec(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::MenuPick(n) => {
-                let Mode::Menu(m) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+                let Mode::Menu(m) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return;
+                };
                 if let Some((_, c)) = m.items.get(n).cloned() {
                     self.sel = Some(m.pid);
                     self.exec(c);
@@ -977,17 +1116,29 @@ impl App {
             }
             Cmd::Usage(i) => {
                 self.mode = Mode::Normal;
-                self.usage_view = if self.usage_view == Some(i) { None } else { Some(i) };
+                self.usage_view = if self.usage_view == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
                 return;
             }
             Cmd::UsageToggle => {
                 let a = self.selected().and_then(|s| s.account).unwrap_or(0);
-                self.usage_view = if self.usage_view.is_some() { None } else { Some(a) };
+                self.usage_view = if self.usage_view.is_some() {
+                    None
+                } else {
+                    Some(a)
+                };
                 return;
             }
             Cmd::MemoryToggle => {
                 self.mode = Mode::Normal;
-                self.memory = if self.memory.is_some() { None } else { Some(memory::MemView::open()) };
+                self.memory = if self.memory.is_some() {
+                    None
+                } else {
+                    Some(memory::MemView::open())
+                };
                 self.dirty = true;
                 return;
             }
@@ -998,7 +1149,12 @@ impl App {
         }
         if matches!(cmd, Cmd::New) {
             let places = crate::places::frecent(&self.cfg, now_ms());
-            self.mode = Mode::New(NewFlow { places, query: String::new(), sel: 0, folder: None });
+            self.mode = Mode::New(NewFlow {
+                places,
+                query: String::new(),
+                sel: 0,
+                folder: None,
+            });
             return;
         }
         if matches!(cmd, Cmd::Help) {
@@ -1012,7 +1168,10 @@ impl App {
         if matches!(cmd, Cmd::Sweep) {
             let stale: Vec<(i32, bool)> = self.stale().into_iter().map(|pid| (pid, true)).collect();
             if stale.is_empty() {
-                self.say(format!("nothing has been idle for {}+ days", self.cfg.stale_days), self.pal.dim);
+                self.say(
+                    format!("nothing has been idle for {}+ days", self.cfg.stale_days),
+                    self.pal.dim,
+                );
             } else {
                 self.mode = Mode::Sweep(stale);
                 self.rebuild();
@@ -1035,14 +1194,29 @@ impl App {
                     self.rebuild();
                 }
                 Cmd::Yes => {
-                    let pids: Vec<i32> = list.iter().filter(|(_, on)| *on).map(|(p, _)| *p).collect();
+                    let pids: Vec<i32> =
+                        list.iter().filter(|(_, on)| *on).map(|(p, _)| *p).collect();
                     self.mode = Mode::Normal;
                     self.rebuild();
                     if !pids.is_empty() {
-                        let pinned = pids.iter().filter(|p| self.sessions.iter().any(|s| s.pid == **p && s.pin.is_some())).count();
-                        let note = if pinned > 0 { " pinned ones stay pinned and can be reopened." } else { "" };
+                        let pinned = pids
+                            .iter()
+                            .filter(|p| {
+                                self.sessions
+                                    .iter()
+                                    .any(|s| s.pid == **p && s.pin.is_some())
+                            })
+                            .count();
+                        let note = if pinned > 0 {
+                            " pinned ones stay pinned and can be reopened."
+                        } else {
+                            ""
+                        };
                         let n = pids.len();
-                        let prompt = format!("close {n} idle session{}?{note}", if n == 1 { "" } else { "s" });
+                        let prompt = format!(
+                            "close {n} idle session{}?{note}",
+                            if n == 1 { "" } else { "s" }
+                        );
                         self.mode = Mode::Confirm(prompt, Pending::Many(Batch::Close, pids));
                     }
                 }
@@ -1052,7 +1226,10 @@ impl App {
             return;
         }
         if let Mode::Offer(..) = self.mode {
-            let Mode::Offer(_, one, _, all) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+            let Mode::Offer(_, one, _, all) = std::mem::replace(&mut self.mode, Mode::Normal)
+            else {
+                return;
+            };
             match cmd {
                 Cmd::Yes => self.run_pending(one),
                 Cmd::All => self.run_pending(all),
@@ -1066,7 +1243,8 @@ impl App {
                 (Cmd::No, None) => self.mode = Mode::Normal,
                 (Cmd::Yes, None) => {
                     if let Some(place) = flow.shown().get(flow.sel) {
-                        let (acct, why) = crate::places::account_for(&self.cfg, &place.path, &self.sessions);
+                        let (acct, why) =
+                            crate::places::account_for(&self.cfg, &place.path, &self.sessions);
                         flow.folder = Some((place.path.clone(), acct, why));
                     }
                 }
@@ -1087,10 +1265,22 @@ impl App {
             return;
         };
         match cmd {
-            Cmd::New | Cmd::All | Cmd::Sweep | Cmd::Toggle | Cmd::Usage(_) | Cmd::UsageToggle | Cmd::MemoryToggle | Cmd::MenuPick(_) => {}
+            Cmd::New
+            | Cmd::All
+            | Cmd::Sweep
+            | Cmd::Toggle
+            | Cmd::Usage(_)
+            | Cmd::UsageToggle
+            | Cmd::MemoryToggle
+            | Cmd::MenuPick(_) => {}
             Cmd::Help => self.mode = Mode::Help,
             Cmd::RestoreAll => {
-                let all: Vec<Session> = self.sessions.iter().filter(|x| x.restore.is_some()).cloned().collect();
+                let all: Vec<Session> = self
+                    .sessions
+                    .iter()
+                    .filter(|x| x.restore.is_some())
+                    .cloned()
+                    .collect();
                 if all.is_empty() {
                     return;
                 }
@@ -1104,9 +1294,15 @@ impl App {
                 }
                 crate::snapshot::forget(&ok);
                 if failed.is_empty() {
-                    self.say(format!("reopened {} sessions where they were", ok.len()), self.pal.finished);
+                    self.say(
+                        format!("reopened {} sessions where they were", ok.len()),
+                        self.pal.finished,
+                    );
                 } else {
-                    self.say(format!("reopened {} · {}", ok.len(), failed.join(" · ")), self.pal.attention);
+                    self.say(
+                        format!("reopened {} · {}", ok.len(), failed.join(" · ")),
+                        self.pal.attention,
+                    );
                 }
                 self.reload();
             }
@@ -1130,12 +1326,29 @@ impl App {
             }
             Cmd::Pin => {
                 if s.pin.is_some() {
-                    State::update(|st| st.unpin(&s.id));
-                    self.say(format!("unpinned {}", s.title), self.pal.dim);
+                    match State::update(|st| st.unpin(&s.id)) {
+                        Ok(_) => self.say(format!("unpinned {}", s.title), self.pal.dim),
+                        Err(e) => {
+                            self.say(format!("couldn't update pins: {e}"), self.pal.attention)
+                        }
+                    }
                 } else {
                     match State::update(|st| st.pin(s.pin_record(&self.cfg))) {
-                        Some(n) => self.say(format!("pinned {} · alt-{} jumps to it from anywhere", s.title, n + 1), self.pal.dim),
-                        None => self.say("all nine pins are taken · ctrl-p on one to free it".into(), self.pal.dim),
+                        Ok(Some(n)) => self.say(
+                            format!(
+                                "pinned {} · alt-{} jumps to it from anywhere",
+                                s.title,
+                                n + 1
+                            ),
+                            self.pal.dim,
+                        ),
+                        Ok(None) => self.say(
+                            "all nine pins are taken · ctrl-p on one to free it".into(),
+                            self.pal.dim,
+                        ),
+                        Err(e) => {
+                            self.say(format!("couldn't update pins: {e}"), self.pal.attention)
+                        }
                     }
                 }
                 self.reload();
@@ -1158,12 +1371,18 @@ impl App {
                         self.attach_pane = Some(pane);
                         self.quit = true;
                     }
-                    Err(e) => self.say(format!("couldn't reopen {}: {e}", s.title), self.pal.attention),
+                    Err(e) => self.say(
+                        format!("couldn't reopen {}: {e}", s.title),
+                        self.pal.attention,
+                    ),
                 }
             }
             Cmd::Jump => {
                 if s.pane.is_none() {
-                    self.say(format!("{} runs outside tmux · ctrl-o brings it in", s.title), self.pal.dim);
+                    self.say(
+                        format!("{} runs outside tmux · ctrl-o brings it in", s.title),
+                        self.pal.dim,
+                    );
                 } else if tmux::inside() || self.shell.is_some() {
                     let pane = s.pane.as_ref().map(|p| p.id.clone()).unwrap_or_default();
                     self.go(&pane);
@@ -1173,9 +1392,18 @@ impl App {
                 }
             }
             Cmd::GoThere => match &s.pane {
-                _ if s.dormant => self.say(format!("{} isn't running · enter reopens it", s.title), self.pal.dim),
-                None => self.say(format!("{} runs outside tmux · ctrl-o brings it in", s.title), self.pal.dim),
-                Some(p) => match actions::jump_client(&p.id, self.shell.as_ref().and_then(|sh| sh.origin.as_deref())) {
+                _ if s.dormant => self.say(
+                    format!("{} isn't running · enter reopens it", s.title),
+                    self.pal.dim,
+                ),
+                None => self.say(
+                    format!("{} runs outside tmux · ctrl-o brings it in", s.title),
+                    self.pal.dim,
+                ),
+                Some(p) => match actions::jump_client(
+                    &p.id,
+                    self.shell.as_ref().and_then(|sh| sh.origin.as_deref()),
+                ) {
                     Ok(()) => self.quit = true,
                     Err(e) => self.say(e.to_string(), self.pal.attention),
                 },
@@ -1188,7 +1416,9 @@ impl App {
                 );
             }
             Cmd::Account => {
-                let opts: Vec<usize> = (0..self.cfg.accounts.len()).filter(|&i| Some(i) != s.account).collect();
+                let opts: Vec<usize> = (0..self.cfg.accounts.len())
+                    .filter(|&i| Some(i) != s.account)
+                    .collect();
                 match opts.as_slice() {
                     [] => self.say("only one account is configured".into(), self.pal.dim),
                     [one] => self.confirm_switch(&s, *one),
@@ -1205,9 +1435,20 @@ impl App {
                 if s.pane.is_some() {
                     self.say(format!("{} is already in tmux", s.title), self.pal.dim);
                 } else if !s.can_move() && s.state != St::Background {
-                    self.say(format!("{} is {} · bring it in once it's idle", s.title, s.state.section()), self.pal.dim);
+                    self.say(
+                        format!(
+                            "{} is {} · bring it in once it's idle",
+                            s.title,
+                            s.state.section()
+                        ),
+                        self.pal.dim,
+                    );
                 } else {
-                    let bg = if s.state == St::Background { " its background tasks will stop." } else { "" };
+                    let bg = if s.state == St::Background {
+                        " its background tasks will stop."
+                    } else {
+                        ""
+                    };
                     let p = format!(
                         "bring {} into tmux? it restarts on the same conversation in a tmux server of its own.{bg}",
                         s.title
@@ -1216,8 +1457,13 @@ impl App {
                 }
             }
             Cmd::Close => {
-                let warn = if s.is_idle() { "" } else { " it's still working and will be interrupted." };
-                self.mode = Mode::Confirm(format!("close {}?{warn}", s.title), Pending::Close(s.pid));
+                let warn = if s.is_idle() {
+                    ""
+                } else {
+                    " it's still working and will be interrupted."
+                };
+                self.mode =
+                    Mode::Confirm(format!("close {}?{warn}", s.title), Pending::Close(s.pid));
             }
             Cmd::No => {
                 self.mode = Mode::Normal;
@@ -1226,7 +1472,9 @@ impl App {
                 }
             }
             Cmd::Yes if matches!(self.mode, Mode::Rename(_)) => {
-                let Mode::Rename(buf) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+                let Mode::Rename(buf) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return;
+                };
                 match actions::rename(&self.cfg, &s, &buf, false) {
                     Ok(m) => self.say(m, self.pal.dim),
                     Err(e) => self.say(e.to_string(), self.pal.attention),
@@ -1234,7 +1482,10 @@ impl App {
                 self.reload();
             }
             Cmd::Yes => {
-                let Mode::Confirm(_, pending) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+                let Mode::Confirm(_, pending) = std::mem::replace(&mut self.mode, Mode::Normal)
+                else {
+                    return;
+                };
                 self.run_pending(pending);
             }
         }
@@ -1267,7 +1518,11 @@ impl App {
             }
             return;
         }
-        let r = if self.sidebar { actions::follow(pane) } else { actions::jump_pane(pane) };
+        let r = if self.sidebar {
+            actions::follow(pane)
+        } else {
+            actions::jump_pane(pane)
+        };
         match r {
             Ok(()) if !self.sidebar => self.quit = true,
             Ok(()) => {}
@@ -1278,24 +1533,69 @@ impl App {
     fn confirm_switch(&mut self, s: &Session, account: usize) {
         let to = &self.cfg.accounts[account].name;
         let (prompt, wait, force) = if let Some(l) = &s.limit {
-            (format!("move {} to {to}? it hit {l} on {}", s.title, s.account_name(&self.cfg)), false, false)
+            (
+                format!(
+                    "move {} to {to}? it hit {l} on {}",
+                    s.title,
+                    s.account_name(&self.cfg)
+                ),
+                false,
+                false,
+            )
         } else if s.is_idle() {
-            (format!("move {} to {to}? it restarts on the same conversation", s.title), false, false)
+            (
+                format!(
+                    "move {} to {to}? it restarts on the same conversation",
+                    s.title
+                ),
+                false,
+                false,
+            )
         } else if s.state == St::Background {
-            (format!("{} has background tasks running · moving it to {to} stops them. move anyway?", s.title), false, true)
+            (
+                format!(
+                    "{} has background tasks running · moving it to {to} stops them. move anyway?",
+                    s.title
+                ),
+                false,
+                true,
+            )
         } else {
-            (format!("{} is {} · move it to {to} as soon as it goes idle?", s.title, s.state.section()), true, false)
+            (
+                format!(
+                    "{} is {} · move it to {to} as soon as it goes idle?",
+                    s.title,
+                    s.state.section()
+                ),
+                true,
+                false,
+            )
         };
-        let one = Pending::Switch { pid: s.pid, account, wait, force };
+        let one = Pending::Switch {
+            pid: s.pid,
+            account,
+            wait,
+            force,
+        };
         let limited: Vec<i32> = self
             .sessions
             .iter()
-            .filter(|x| !x.dormant && x.limit.is_some() && x.account == s.account && x.account != Some(account))
+            .filter(|x| {
+                !x.dormant
+                    && x.limit.is_some()
+                    && x.account == s.account
+                    && x.account != Some(account)
+            })
             .map(|x| x.pid)
             .collect();
         if s.limit.is_some() && limited.len() > 1 {
             let label = format!("all {} limited", limited.len());
-            self.mode = Mode::Offer(prompt, one, label, Pending::Many(Batch::Move(account), limited));
+            self.mode = Mode::Offer(
+                prompt,
+                one,
+                label,
+                Pending::Many(Batch::Move(account), limited),
+            );
         } else {
             self.mode = Mode::Confirm(prompt, one);
         }
@@ -1304,12 +1604,19 @@ impl App {
     /// Live sessions idle for at least stale_days.
     fn stale(&self) -> Vec<i32> {
         let cutoff = now_ms() - self.cfg.stale_days as i64 * 86_400_000;
-        self.sessions.iter().filter(|s| !s.dormant && s.is_idle() && s.since_ms < cutoff).map(|s| s.pid).collect()
+        self.sessions
+            .iter()
+            .filter(|s| !s.dormant && s.is_idle() && s.since_ms < cutoff)
+            .map(|s| s.pid)
+            .collect()
     }
 
     fn run_pending(&mut self, p: Pending) {
         if let Pending::Many(batch, pids) = p {
-            let targets: Vec<Session> = pids.iter().filter_map(|p| self.sessions.iter().find(|s| s.pid == *p).cloned()).collect();
+            let targets: Vec<Session> = pids
+                .iter()
+                .filter_map(|p| self.sessions.iter().find(|s| s.pid == *p).cloned())
+                .collect();
             let (cfg, tx) = (self.cfg.clone(), self.done_tx.clone());
             let n = targets.len();
             self.working_on = Some(match batch {
@@ -1341,35 +1648,55 @@ impl App {
             return;
         }
         let pid = match &p {
-            Pending::Switch { pid, .. } | Pending::Adopt(pid) | Pending::Close(pid) | Pending::Unqueue(pid) => *pid,
+            Pending::Switch { pid, .. }
+            | Pending::Adopt(pid)
+            | Pending::Close(pid)
+            | Pending::Unqueue(pid) => *pid,
             Pending::Many(..) => unreachable!(),
         };
-        let Some(s) = self.sessions.iter().find(|x| x.pid == pid).cloned() else { return };
+        let Some(s) = self.sessions.iter().find(|x| x.pid == pid).cloned() else {
+            return;
+        };
         if let Pending::Unqueue(_) = p {
             if crate::queue::cancel(s.pid, s.proc_start.as_deref()) {
-                self.say(format!("{} stays on {}", s.title, s.account_name(&self.cfg)), self.pal.dim);
+                self.say(
+                    format!("{} stays on {}", s.title, s.account_name(&self.cfg)),
+                    self.pal.dim,
+                );
             }
             self.reload();
             return;
         }
-        if let Pending::Switch { account, wait: true, .. } = p {
+        if let Pending::Switch {
+            account,
+            wait: true,
+            ..
+        } = p
+        {
             let to = self.cfg.accounts[account].name.clone();
             match actions::switch_later(&s, &to) {
-                Ok(()) => self.say(format!("{} will move to {to} when it goes idle", s.title), self.pal.dim),
+                Ok(()) => self.say(
+                    format!("{} will move to {to} when it goes idle", s.title),
+                    self.pal.dim,
+                ),
                 Err(e) => self.say(e.to_string(), self.pal.attention),
             }
             return;
         }
         let (label, cfg, tx) = (s.title.clone(), self.cfg.clone(), self.done_tx.clone());
         self.working_on = Some(match &p {
-            Pending::Switch { account, .. } => format!("moving {label} to {}", self.cfg.accounts[*account].name),
+            Pending::Switch { account, .. } => {
+                format!("moving {label} to {}", self.cfg.accounts[*account].name)
+            }
             Pending::Adopt(_) => format!("bringing {label} into tmux"),
             Pending::Close(_) => format!("closing {label}"),
             Pending::Unqueue(_) | Pending::Many(..) => unreachable!(),
         });
         std::thread::spawn(move || {
             let r = match p {
-                Pending::Switch { account, force, .. } => actions::switch(&cfg, &s, account, false, force),
+                Pending::Switch { account, force, .. } => {
+                    actions::switch(&cfg, &s, account, false, force)
+                }
                 Pending::Adopt(_) => actions::adopt(&cfg, &s),
                 Pending::Close(_) => actions::close(&cfg, &s),
                 Pending::Unqueue(_) | Pending::Many(..) => unreachable!(),
@@ -1385,11 +1712,18 @@ impl App {
         self.list_hits.clear();
         let full = f.area();
         let (base, raised, well) = (self.pal.base, self.pal.raised, self.pal.well);
-        f.render_widget(Block::new().style(Style::new().bg(base).fg(self.pal.text)), full);
+        f.render_widget(
+            Block::new().style(Style::new().bg(base).fg(self.pal.text)),
+            full,
+        );
         let (foot_lines, foot_hits) = self.foot(full.width);
-        let fh = (foot_lines.len() as u16).min(full.height.saturating_sub(2)).max(1);
+        let fh = (foot_lines.len() as u16)
+            .min(full.height.saturating_sub(2))
+            .max(1);
         let head_rows = self.head_lines(full.width);
-        let hh = (head_rows.len() as u16).min(full.height.saturating_sub(fh + 2)).max(1);
+        let hh = (head_rows.len() as u16)
+            .min(full.height.saturating_sub(fh + 2))
+            .max(1);
         let [head, rule_top, body, rule_bottom, foot] = Layout::vertical([
             Constraint::Length(hh),
             Constraint::Length(1),
@@ -1404,9 +1738,24 @@ impl App {
         f.render_widget(Block::new().style(Style::new().bg(raised)), foot);
         for (row, (line, hits)) in head_rows.into_iter().enumerate().take(hh as usize) {
             let y = head.y + row as u16;
-            f.render_widget(Paragraph::new(line), Rect { y, height: 1, ..head });
+            f.render_widget(
+                Paragraph::new(line),
+                Rect {
+                    y,
+                    height: 1,
+                    ..head
+                },
+            );
             for (x, w, cmd) in hits {
-                self.cmd_hits.push((Rect { x: head.x + x, y, width: w, height: 1 }, cmd));
+                self.cmd_hits.push((
+                    Rect {
+                        x: head.x + x,
+                        y,
+                        width: w,
+                        height: 1,
+                    },
+                    cmd,
+                ));
             }
         }
         // Hairlines close off the header and footer, meeting the divider.
@@ -1416,8 +1765,12 @@ impl App {
             if self.sidebar {
                 self.draw_places(f, body);
             } else {
-                let [list, _, preview] =
-                    Layout::horizontal([Constraint::Percentage(42), Constraint::Length(2), Constraint::Fill(1)]).areas(body);
+                let [list, _, preview] = Layout::horizontal([
+                    Constraint::Percentage(42),
+                    Constraint::Length(2),
+                    Constraint::Fill(1),
+                ])
+                .areas(body);
                 self.draw_places(f, list);
                 self.draw_place_preview(f, preview);
             }
@@ -1427,8 +1780,12 @@ impl App {
                 None => self.draw_list(f, body),
             }
         } else {
-            let [list, gap, preview] =
-                Layout::horizontal([Constraint::Percentage(42), Constraint::Length(2), Constraint::Fill(1)]).areas(body);
+            let [list, gap, preview] = Layout::horizontal([
+                Constraint::Percentage(42),
+                Constraint::Length(2),
+                Constraint::Fill(1),
+            ])
+            .areas(body);
             divider(f, Rect { width: 1, ..gap }, self.pal.frame, self.pal.base);
             divider_x = Some(gap.x);
             self.draw_list(f, list);
@@ -1448,10 +1805,23 @@ impl App {
         }
         let hint_y = foot.y + foot.height.saturating_sub(1);
         for (x, w, cmd) in foot_hits {
-            self.cmd_hits.push((Rect { x: foot.x + x, y: hint_y, width: w, height: 1 }, cmd));
+            self.cmd_hits.push((
+                Rect {
+                    x: foot.x + x,
+                    y: hint_y,
+                    width: w,
+                    height: 1,
+                },
+                cmd,
+            ));
         }
         let skip = foot_lines.len().saturating_sub(foot.height as usize);
-        f.render_widget(Paragraph::new(Text::from(foot_lines.into_iter().skip(skip).collect::<Vec<_>>())), foot);
+        f.render_widget(
+            Paragraph::new(Text::from(
+                foot_lines.into_iter().skip(skip).collect::<Vec<_>>(),
+            )),
+            foot,
+        );
 
         // Overlays: everything behind them recedes, and only they take clicks.
         if matches!(self.mode, Mode::Help | Mode::Menu(_)) {
@@ -1465,7 +1835,10 @@ impl App {
         }
         // Hover: whatever the pointer rests on that can be clicked lights up.
         if let Some((hx, hy)) = self.hover {
-            let hit = self.cmd_hits.iter().find(|(r, _)| hx >= r.x && hx < r.x + r.width && hy >= r.y && hy < r.y + r.height);
+            let hit = self
+                .cmd_hits
+                .iter()
+                .find(|(r, _)| hx >= r.x && hx < r.x + r.width && hy >= r.y && hy < r.y + r.height);
             if let Some((r, cmd)) = hit {
                 let menu = matches!(cmd, Cmd::MenuPick(_));
                 let buf = f.buffer_mut();
@@ -1486,12 +1859,18 @@ impl App {
         let Mode::New(flow) = &self.mode else { return };
         let mut spans = vec![Span::raw(" ")];
         if !self.sidebar {
-            spans.push(Span::styled("toomux", Style::new().fg(p.accent).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                "toomux",
+                Style::new().fg(p.accent).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::styled("   new session", Style::new().fg(p.text)));
             spans.push(Span::raw("   "));
         }
         if flow.query.is_empty() {
-            spans.push(Span::styled("type to filter, or a path", Style::new().fg(p.muted)));
+            spans.push(Span::styled(
+                "type to filter, or a path",
+                Style::new().fg(p.muted),
+            ));
         } else {
             spans.extend([
                 Span::styled("folder ", Style::new().fg(p.dim)),
@@ -1509,29 +1888,51 @@ impl App {
         let w = area.width as usize;
         let shown = flow.shown();
         if shown.is_empty() {
-            let msg = if flow.query.is_empty() { " no folders in your history yet · type a path" } else { " no folder matches" };
-            f.render_widget(Paragraph::new(Span::styled(msg, Style::new().fg(p.dim))), area);
+            let msg = if flow.query.is_empty() {
+                " no folders in your history yet · type a path"
+            } else {
+                " no folder matches"
+            };
+            f.render_widget(
+                Paragraph::new(Span::styled(msg, Style::new().fg(p.dim))),
+                area,
+            );
             return;
         }
         let chosen = flow.folder.as_ref().map(|(f, _, _)| f.clone());
         let mut items: Vec<(usize, Vec<Line<'static>>)> = Vec::new();
         for (i, pl) in shown.iter().enumerate() {
             let selected = i == flow.sel;
-            let bar = if selected { Span::styled("▎", Style::new().fg(p.accent)) } else { Span::raw(" ") };
+            let bar = if selected {
+                Span::styled("▎", Style::new().fg(p.accent))
+            } else {
+                Span::raw(" ")
+            };
             let mut style = Style::new().fg(p.text);
             if selected {
                 style = style.add_modifier(Modifier::BOLD);
             }
             let mut lines = Vec::new();
-            for chunk in wrap_chips(&path_segments(&tilde(&pl.path), style), w.saturating_sub(4), w.saturating_sub(4)) {
+            for chunk in wrap_chips(
+                &path_segments(&tilde(&pl.path), style),
+                w.saturating_sub(4),
+                w.saturating_sub(4),
+            ) {
                 let mut l = vec![bar.clone(), Span::raw("   ")];
                 l.extend(chunk);
                 lines.push(Line::from(l));
             }
-            let here = self.sessions.iter().filter(|s| !s.dormant && s.cwd == pl.path).count();
+            let here = self
+                .sessions
+                .iter()
+                .filter(|s| !s.dormant && s.cwd == pl.path)
+                .count();
             let mut detail = Vec::new();
             if pl.last_ms > 0 {
-                detail.push((format!("last used {} ago", ago(now - pl.last_ms)), Style::new().fg(p.dim)));
+                detail.push((
+                    format!("last used {} ago", ago(now - pl.last_ms)),
+                    Style::new().fg(p.dim),
+                ));
                 detail.push((" · ".to_string(), Style::new().fg(p.muted)));
                 detail.push((format!("{} prompts", pl.prompts), Style::new().fg(p.muted)));
             } else {
@@ -1567,7 +1968,12 @@ impl App {
             if y + h > scroll && y < scroll + area.height {
                 let top = y.max(scroll);
                 let vis = (y + h).min(scroll + area.height) - top;
-                let r = Rect { x: area.x, y: area.y + top - scroll, width: area.width, height: vis };
+                let r = Rect {
+                    x: area.x,
+                    y: area.y + top - scroll,
+                    width: area.width,
+                    height: vis,
+                };
                 let mut para = Paragraph::new(Text::from(lines)).scroll((top - y, 0));
                 if i == flow.sel {
                     para = para.style(Style::new().bg(p.selection));
@@ -1581,48 +1987,101 @@ impl App {
 
     fn draw_place_preview(&mut self, f: &mut Frame, area: Rect) {
         f.render_widget(Block::new().style(Style::new().bg(self.pal.well)), area);
-        let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4), height: area.height.saturating_sub(1) };
+        let inner = Rect {
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(1),
+        };
         let p = &self.pal;
         let Mode::New(flow) = &self.mode else { return };
         let shown = flow.shown();
-        let Some(pl) = shown.get(flow.sel) else { return };
+        let Some(pl) = shown.get(flow.sel) else {
+            return;
+        };
         let w = inner.width as usize;
         let now = now_ms();
         let mut lines: Vec<Line<'static>> = Vec::new();
-        for chunk in wrap_chips(&path_segments(&tilde(&pl.path), Style::new().fg(p.text).add_modifier(Modifier::BOLD)), w, w) {
+        for chunk in wrap_chips(
+            &path_segments(
+                &tilde(&pl.path),
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            ),
+            w,
+            w,
+        ) {
             lines.push(Line::from(chunk));
         }
         let (acct, why) = crate::places::account_for(&self.cfg, &pl.path, &self.sessions);
         let args = crate::places::new_args(&self.cfg, &self.sessions);
         lines.push(Line::from(vec![
-            Span::styled(format!("starts on {}", self.cfg.accounts[acct].name), Style::new().fg(p.dim)),
+            Span::styled(
+                format!("starts on {}", self.cfg.accounts[acct].name),
+                Style::new().fg(p.dim),
+            ),
             Span::styled(format!(" · {why}"), Style::new().fg(p.muted)),
         ]));
         if !args.is_empty() {
-            for chunk in wrap_spans(&[(format!("claude {}", args.join(" ")), Style::new().fg(p.muted))], w, w) {
+            for chunk in wrap_spans(
+                &[(
+                    format!("claude {}", args.join(" ")),
+                    Style::new().fg(p.muted),
+                )],
+                w,
+                w,
+            ) {
                 lines.push(Line::from(chunk));
             }
         }
         lines.push(Line::raw(""));
-        let here: Vec<&Session> = self.sessions.iter().filter(|s| !s.dormant && s.cwd == pl.path).collect();
+        let here: Vec<&Session> = self
+            .sessions
+            .iter()
+            .filter(|s| !s.dormant && s.cwd == pl.path)
+            .collect();
         if !here.is_empty() {
-            lines.push(Line::from(Span::styled("running here", Style::new().fg(p.dim))));
+            lines.push(Line::from(Span::styled(
+                "running here",
+                Style::new().fg(p.dim),
+            )));
             for s in here {
                 let (g, c) = p.state(s.state);
-                let mut segs = vec![(format!("{g} "), Style::new().fg(c)), (s.title.clone(), Style::new().fg(p.text))];
+                let mut segs = vec![
+                    (format!("{g} "), Style::new().fg(c)),
+                    (s.title.clone(), Style::new().fg(p.text)),
+                ];
                 segs.push((format!("  {}", s.status_text(now)), Style::new().fg(p.dim)));
-                lines.extend(wrap_spans(&segs, w, w.saturating_sub(2)).into_iter().map(Line::from));
+                lines.extend(
+                    wrap_spans(&segs, w, w.saturating_sub(2))
+                        .into_iter()
+                        .map(Line::from),
+                );
             }
             lines.push(Line::raw(""));
         }
         if !pl.recent.is_empty() {
-            lines.push(Line::from(Span::styled("recent prompts here", Style::new().fg(p.dim))));
+            lines.push(Line::from(Span::styled(
+                "recent prompts here",
+                Style::new().fg(p.dim),
+            )));
             for r in &pl.recent {
-                let first = r.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
-                let chunks = wrap_spans(&[(first, Style::new().fg(p.text))], w.saturating_sub(2), w.saturating_sub(2));
+                let first = r
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let chunks = wrap_spans(
+                    &[(first, Style::new().fg(p.text))],
+                    w.saturating_sub(2),
+                    w.saturating_sub(2),
+                );
                 let n = chunks.len();
                 for (i, chunk) in chunks.into_iter().take(3).enumerate() {
-                    let mut l = vec![Span::styled(if i == 0 { "· " } else { "  " }, Style::new().fg(p.muted))];
+                    let mut l = vec![Span::styled(
+                        if i == 0 { "· " } else { "  " },
+                        Style::new().fg(p.muted),
+                    )];
                     l.extend(chunk);
                     if i == 2 && n > 3 {
                         l.push(Span::styled(" …", Style::new().fg(p.muted)));
@@ -1681,14 +2140,24 @@ impl App {
                     ],
                 )
             } else {
-                ("anywhere in tmux", &[("alt-s", "open toomux"), ("alt-b", "show or hide the sidebar"), ("alt-1..9", "jump to a pin")])
+                (
+                    "anywhere in tmux",
+                    &[
+                        ("alt-s", "open toomux"),
+                        ("alt-b", "show or hide the sidebar"),
+                        ("alt-1..9", "jump to a pin"),
+                    ],
+                )
             },
             ("", &[("any key", "close this")]),
         ];
         let mut lines: Vec<Line<'static>> = Vec::new();
         for (title, keys) in groups {
             if !title.is_empty() {
-                lines.push(Line::from(Span::styled(title.to_string(), Style::new().fg(p.muted))));
+                lines.push(Line::from(Span::styled(
+                    title.to_string(),
+                    Style::new().fg(p.muted),
+                )));
             }
             for (k, what) in keys {
                 lines.push(Line::from(vec![
@@ -1701,7 +2170,12 @@ impl App {
         lines.pop();
         let h = (lines.len() as u16 + 4).min(area.height);
         let w = (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 8).min(area.width);
-        let r = Rect { x: area.x + (area.width - w) / 2, y: area.y + (area.height - h) / 2, width: w, height: h };
+        let r = Rect {
+            x: area.x + (area.width - w) / 2,
+            y: area.y + (area.height - h) / 2,
+            width: w,
+            height: h,
+        };
         f.render_widget(ratatui::widgets::Clear, r);
         let block = Block::bordered()
             .border_type(ratatui::widgets::BorderType::Rounded)
@@ -1717,14 +2191,31 @@ impl App {
     fn draw_menu(&mut self, f: &mut Frame, full: Rect) {
         let p = &self.pal;
         let Mode::Menu(m) = &self.mode else { return };
-        let title = self.sessions.iter().find(|s| s.pid == m.pid).map(|s| s.title.clone()).unwrap_or_default();
-        let inner_w = m.items.iter().map(|(l, c)| l.width() + key_for(c).width() + 3).max().unwrap_or(0).max(20) + 3;
+        let title = self
+            .sessions
+            .iter()
+            .find(|s| s.pid == m.pid)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        let inner_w = m
+            .items
+            .iter()
+            .map(|(l, c)| l.width() + key_for(c).width() + 3)
+            .max()
+            .unwrap_or(0)
+            .max(20)
+            + 3;
         let title_lines = wrap_spans(&[(title, Style::new().fg(p.dim))], inner_w, inner_w);
         let w = (inner_w as u16 + 2).min(full.width);
         let h = (m.items.len() as u16 + title_lines.len() as u16 + 3).min(full.height);
         let x = m.at.0.saturating_add(1).min(full.width.saturating_sub(w));
         let y = m.at.1.min(full.height.saturating_sub(h));
-        let r = Rect { x, y, width: w, height: h };
+        let r = Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
         f.render_widget(ratatui::widgets::Clear, r);
         let block = Block::bordered()
             .border_type(ratatui::widgets::BorderType::Rounded)
@@ -1732,21 +2223,39 @@ impl App {
             .style(Style::new().bg(p.overlay));
         let inner = block.inner(r);
         f.render_widget(block, r);
-        let mut lines: Vec<Line<'static>> =
-            title_lines.into_iter().map(|l| { let mut l = l; l.insert(0, Span::raw(" ")); Line::from(l) }).collect();
-        lines.push(Line::from(Span::styled(format!(" {}", "─".repeat(inner_w.saturating_sub(1))), Style::new().fg(p.faint))));
+        let mut lines: Vec<Line<'static>> = title_lines
+            .into_iter()
+            .map(|l| {
+                let mut l = l;
+                l.insert(0, Span::raw(" "));
+                Line::from(l)
+            })
+            .collect();
+        lines.push(Line::from(Span::styled(
+            format!(" {}", "─".repeat(inner_w.saturating_sub(1))),
+            Style::new().fg(p.faint),
+        )));
         let top = inner.y + lines.len() as u16;
         let mut hits = Vec::new();
         for (n, (label, cmd)) in m.items.iter().enumerate() {
             let on = n == m.sel;
-            let row = Rect { x: inner.x, y: top + n as u16, width: inner.width, height: 1 };
+            let row = Rect {
+                x: inner.x,
+                y: top + n as u16,
+                width: inner.width,
+                height: 1,
+            };
             let mut style = Style::new().fg(if on { p.text } else { p.dim });
             let mut key_style = Style::new().fg(p.muted);
             if on {
                 style = style.bg(p.selection);
                 key_style = key_style.bg(p.selection);
             }
-            let bar = if on { Span::styled("▎", Style::new().fg(p.accent).bg(p.selection)) } else { Span::raw(" ") };
+            let bar = if on {
+                Span::styled("▎", Style::new().fg(p.accent).bg(p.selection))
+            } else {
+                Span::raw(" ")
+            };
             let key = key_for(cmd);
             let fill = (inner.width as usize).saturating_sub(label.width() + key.width() + 3);
             lines.push(Line::from(vec![
@@ -1786,18 +2295,30 @@ impl App {
     fn head_chips(&self, bar: usize) -> (Vec<Span<'static>>, Vec<(u16, u16, Cmd)>) {
         let p = &self.pal;
         let now = now_ms();
-        let mut spans = vec![Span::styled(" toomux", Style::new().fg(p.accent)), Span::raw("      ")];
+        let mut spans = vec![
+            Span::styled(" toomux", Style::new().fg(p.accent)),
+            Span::raw("      "),
+        ];
         let mut hits = Vec::new();
         let mut first = true;
         for (i, a) in self.cfg.accounts.iter().enumerate() {
-            let Some(u) = self.usage.get(i).filter(|u| u.five.is_some() || u.week.is_some()) else { continue };
+            let Some(u) = self
+                .usage
+                .get(i)
+                .filter(|u| u.five.is_some() || u.week.is_some())
+            else {
+                continue;
+            };
             if !first {
                 spans.push(Span::raw("       "));
             }
             first = false;
             let x0: usize = spans.iter().map(|s| s.width()).sum();
             let viewing = self.usage_view == Some(i);
-            spans.push(Span::styled(a.name.clone(), Style::new().fg(if viewing { p.accent } else { p.text })));
+            spans.push(Span::styled(
+                a.name.clone(),
+                Style::new().fg(if viewing { p.accent } else { p.text }),
+            ));
             let fresh = self.fresh_limit(i, now);
             // At a limit, only that window matters.
             let limited = [&u.five, &u.week].into_iter().flatten().any(|m| m.limited);
@@ -1814,7 +2335,10 @@ impl App {
         }
         let unknown = self.sessions.iter().filter(|s| s.account.is_none()).count();
         if unknown > 0 {
-            spans.push(Span::styled(format!("       other ○{unknown}"), Style::new().fg(p.muted)));
+            spans.push(Span::styled(
+                format!("       other ○{unknown}"),
+                Style::new().fg(p.muted),
+            ));
         }
         (spans, hits)
     }
@@ -1822,25 +2346,43 @@ impl App {
     /// A limit that hit in the last few minutes is news; after that it's a
     /// settled fact, drawn quietly.
     fn fresh_limit(&self, account: usize, now: i64) -> bool {
-        self.sessions
-            .iter()
-            .any(|s| s.account == Some(account) && s.limit.is_some() && s.since_ms > 0 && now - s.since_ms < 10 * 60_000)
+        self.sessions.iter().any(|s| {
+            s.account == Some(account)
+                && s.limit.is_some()
+                && s.since_ms > 0
+                && now - s.since_ms < 10 * 60_000
+        })
     }
 
     /// One meter: "5h ━━━━╾───── 42%". At a limit: "wk at limit · back sat
     /// 5pm •", quiet, with one rose dot; rose throughout only when it's news.
-    fn meter_spans(&self, label: &str, m: &crate::usage::Meter, bar: usize, stale: bool, fresh: bool, now: i64) -> Vec<Span<'static>> {
+    fn meter_spans(
+        &self,
+        label: &str,
+        m: &crate::usage::Meter,
+        bar: usize,
+        stale: bool,
+        fresh: bool,
+        now: i64,
+    ) -> Vec<Span<'static>> {
         let p = &self.pal;
         let mut out = vec![Span::styled(format!("{label} "), Style::new().fg(p.muted))];
         if m.limited && !fresh {
             out.push(Span::styled("at limit", Style::new().fg(p.dim)));
             if m.resets_ms > now {
-                out.push(Span::styled(format!(" · {}", registry::back_at(m.resets_ms, now)), Style::new().fg(p.muted)));
+                out.push(Span::styled(
+                    format!(" · {}", registry::back_at(m.resets_ms, now)),
+                    Style::new().fg(p.muted),
+                ));
             }
             out.push(Span::styled(" •", Style::new().fg(p.attention)));
             return out;
         }
-        let tone = if stale { p.muted } else { p.usage_tone(m.used, m.limited) };
+        let tone = if stale {
+            p.muted
+        } else {
+            p.usage_tone(m.used, m.limited)
+        };
         if bar > 0 {
             out.extend(self.bar_spans(if m.limited { 100.0 } else { m.used }, bar, tone));
             out.push(Span::raw(" "));
@@ -1848,10 +2390,16 @@ impl App {
         if m.limited {
             out.push(Span::styled("limit", Style::new().fg(p.attention_word)));
             if m.resets_ms > now {
-                out.push(Span::styled(format!(" · {}", registry::back_at(m.resets_ms, now)), Style::new().fg(p.muted)));
+                out.push(Span::styled(
+                    format!(" · {}", registry::back_at(m.resets_ms, now)),
+                    Style::new().fg(p.muted),
+                ));
             }
         } else {
-            out.push(Span::styled(format!("{:.0}%", m.used), Style::new().fg(tone)));
+            out.push(Span::styled(
+                format!("{:.0}%", m.used),
+                Style::new().fg(tone),
+            ));
         }
         out
     }
@@ -1878,18 +2426,47 @@ impl App {
         let now = now_ms();
         let w = width as usize;
         let mut rows = Vec::new();
-        let nw = self.cfg.accounts.iter().map(|a| a.name.width()).max().unwrap_or(0);
+        let nw = self
+            .cfg
+            .accounts
+            .iter()
+            .map(|a| a.name.width())
+            .max()
+            .unwrap_or(0);
         for (i, a) in self.cfg.accounts.iter().enumerate() {
-            let Some(u) = self.usage.get(i).filter(|u| u.five.is_some() || u.week.is_some()) else { continue };
-            let style = if self.usage_view == Some(i) { Style::new().fg(p.accent) } else { Style::new().fg(p.dim) };
+            let Some(u) = self
+                .usage
+                .get(i)
+                .filter(|u| u.five.is_some() || u.week.is_some())
+            else {
+                continue;
+            };
+            let style = if self.usage_view == Some(i) {
+                Style::new().fg(p.accent)
+            } else {
+                Style::new().fg(p.dim)
+            };
             let mut line = Vec::new();
             for (bar, tight) in [(4, false), (0, false), (0, true)] {
-                line = vec![Span::raw(" "), Span::styled(format!("{:<nw$}", a.name), style)];
+                line = vec![
+                    Span::raw(" "),
+                    Span::styled(format!("{:<nw$}", a.name), style),
+                ];
                 // At the limit, only that window matters.
                 let limited = [&u.five, &u.week].into_iter().flatten().find(|m| m.limited);
                 let shown: Vec<(&str, &crate::usage::Meter)> = match limited {
-                    Some(m) => vec![(if u.week.as_ref().is_some_and(|w| w.limited) { "wk" } else { "5h" }, m)],
-                    None => [("5h", &u.five), ("wk", &u.week)].into_iter().filter_map(|(l, m)| m.as_ref().map(|m| (l, m))).collect(),
+                    Some(m) => vec![(
+                        if u.week.as_ref().is_some_and(|w| w.limited) {
+                            "wk"
+                        } else {
+                            "5h"
+                        },
+                        m,
+                    )],
+                    None => [("5h", &u.five), ("wk", &u.week)]
+                        .into_iter()
+                        .filter_map(|(l, m)| m.as_ref().map(|m| (l, m)))
+                        .collect(),
                 };
                 let fresh = self.fresh_limit(i, now);
                 for (label, m) in shown {
@@ -1908,7 +2485,10 @@ impl App {
             rows.push((Line::from(line), vec![(0, width, Cmd::Usage(i))]));
         }
         if rows.is_empty() {
-            rows.push((Line::from(Span::styled(" toomux", Style::new().fg(p.accent))), Vec::new()));
+            rows.push((
+                Line::from(Span::styled(" toomux", Style::new().fg(p.accent))),
+                Vec::new(),
+            ));
         }
         rows
     }
@@ -1916,9 +2496,16 @@ impl App {
     fn draw_list(&mut self, f: &mut Frame, area: Rect) {
         // The list's own line: the filter (or how to start one) and how it's
         // grouped, where filtering actually applies.
-        let top = Rect { height: 1.min(area.height), ..area };
+        let top = Rect {
+            height: 1.min(area.height),
+            ..area
+        };
         self.draw_list_top(f, top);
-        let area = Rect { y: area.y + 2, height: area.height.saturating_sub(2), ..area };
+        let area = Rect {
+            y: area.y + 2,
+            height: area.height.saturating_sub(2),
+            ..area
+        };
         let now = now_ms();
         let w = area.width.max(10) as usize;
         let sel = self.sel;
@@ -1949,9 +2536,18 @@ impl App {
                     y += 1;
                 }
                 Row::Item(i) => {
-                    let lines = self.item_lines(&self.sessions[*i], w, now, Some(self.sessions[*i].pid) == sel);
+                    let lines = self.item_lines(
+                        &self.sessions[*i],
+                        w,
+                        now,
+                        Some(self.sessions[*i].pid) == sel,
+                    );
                     let h = lines.len() as u16;
-                    placed.push(Placed { y, lines, pid: Some(self.sessions[*i].pid) });
+                    placed.push(Placed {
+                        y,
+                        lines,
+                        pid: Some(self.sessions[*i].pid),
+                    });
                     y += h;
                 }
             }
@@ -1984,18 +2580,35 @@ impl App {
             let p = &self.pal;
             let lines: Vec<Line> = if self.filter.is_empty() {
                 vec![
-                    Line::from(Span::styled(" no claude sessions running", Style::new().fg(p.dim))),
+                    Line::from(Span::styled(
+                        " no claude sessions running",
+                        Style::new().fg(p.dim),
+                    )),
                     Line::raw(""),
-                    Line::from(vec![Span::styled(" ^n", Style::new().fg(p.text)), Span::styled(" starts one in a recent folder", Style::new().fg(p.muted))]),
-                    Line::from(vec![Span::styled(" alt-b", Style::new().fg(p.text)), Span::styled(" keeps this list beside your work", Style::new().fg(p.muted))]),
+                    Line::from(vec![
+                        Span::styled(" ^n", Style::new().fg(p.text)),
+                        Span::styled(" starts one in a recent folder", Style::new().fg(p.muted)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(" alt-b", Style::new().fg(p.text)),
+                        Span::styled(
+                            " keeps this list beside your work",
+                            Style::new().fg(p.muted),
+                        ),
+                    ]),
                 ]
             } else {
-                vec![Line::from(Span::styled(" nothing matches · esc clears the filter", Style::new().fg(p.dim)))]
+                vec![Line::from(Span::styled(
+                    " nothing matches · esc clears the filter",
+                    Style::new().fg(p.dim),
+                ))]
             };
             f.render_widget(Paragraph::new(Text::from(lines)), area);
             return;
         }
-        let hover = self.hover.filter(|_| matches!(self.mode, Mode::Normal | Mode::Sweep(_)));
+        let hover = self
+            .hover
+            .filter(|_| matches!(self.mode, Mode::Normal | Mode::Sweep(_)));
         for p in placed {
             let h = p.lines.len() as u16;
             if p.y + h <= scroll || p.y >= scroll + area.height {
@@ -2004,9 +2617,16 @@ impl App {
             let top = p.y.max(scroll);
             let skip = top - p.y;
             let vis_h = (p.y + h).min(scroll + area.height) - top;
-            let r = Rect { x: area.x, y: area.y + top - scroll, width: area.width, height: vis_h };
+            let r = Rect {
+                x: area.x,
+                y: area.y + top - scroll,
+                width: area.width,
+                height: vis_h,
+            };
             let mut para = Paragraph::new(Text::from(p.lines)).scroll((skip, 0));
-            let hovered = hover.is_some_and(|(x, y)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+            let hovered = hover.is_some_and(|(x, y)| {
+                x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
+            });
             if p.pid.is_some() && p.pid == sel {
                 para = para.style(Style::new().bg(self.pal.selection));
             } else if p.pid.is_some() && hovered {
@@ -2030,7 +2650,9 @@ impl App {
             return None;
         }
         if sh.focus_live && self.usage_view.is_none() {
-            let title = sh.live_title(&self.sessions).unwrap_or_else(|| "the session".into());
+            let title = sh
+                .live_title(&self.sessions)
+                .unwrap_or_else(|| "the session".into());
             Some(format!("keys → {title}"))
         } else {
             Some("keys → the list".into())
@@ -2043,10 +2665,17 @@ impl App {
         let mut right: Option<(String, Cmd)> = None;
         if let Mode::Sweep(list) = &self.mode {
             let n = list.iter().filter(|(_, on)| *on).count();
-            left.push(Span::styled(format!("sweep · closing {n} of {}", list.len()), Style::new().fg(p.text)));
+            left.push(Span::styled(
+                format!("sweep · closing {n} of {}", list.len()),
+                Style::new().fg(p.text),
+            ));
         } else if self.filter.is_empty() {
             let typing_here = self.shell.as_ref().is_none_or(|sh| !sh.focus_live);
-            let hint = if typing_here { "type to filter" } else { "alt-s to filter" };
+            let hint = if typing_here {
+                "type to filter"
+            } else {
+                "alt-s to filter"
+            };
             left.push(Span::styled(hint, Style::new().fg(p.muted)));
             right = Some((self.group.label().to_string(), Cmd::Group));
         } else {
@@ -2062,7 +2691,15 @@ impl App {
             let gw = label.width();
             if lw + gw + 3 <= r.width as usize {
                 let x = r.x + r.width - gw as u16 - 1;
-                self.cmd_hits.push((Rect { x, y: r.y, width: gw as u16, height: 1 }, cmd));
+                self.cmd_hits.push((
+                    Rect {
+                        x,
+                        y: r.y,
+                        width: gw as u16,
+                        height: 1,
+                    },
+                    cmd,
+                ));
                 left.push(Span::raw(" ".repeat(r.width as usize - lw - gw - 1)));
                 left.push(Span::styled(label, Style::new().fg(p.muted)));
             }
@@ -2073,7 +2710,10 @@ impl App {
     fn item_lines(&self, s: &Session, w: usize, now: i64, selected: bool) -> Vec<Line<'static>> {
         let p = &self.pal;
         let sweep = match &self.mode {
-            Mode::Sweep(list) => list.iter().find(|(pid, _)| *pid == s.pid).map(|(_, on)| *on),
+            Mode::Sweep(list) => list
+                .iter()
+                .find(|(pid, _)| *pid == s.pid)
+                .map(|(_, on)| *on),
             _ => None,
         };
         let live_focus = self.shell.as_ref().is_some_and(|sh| sh.focus_live);
@@ -2083,7 +2723,14 @@ impl App {
             None if s.dormant => ("○", p.muted),
             // In-flight work breathes, gently, while you're looking at the list.
             None if s.state == St::Working && live_focus => ("●", p.working),
-            None if s.state == St::Working => ("●", breathe(p.working, if selected { p.selection } else { p.base }, self.epoch)),
+            None if s.state == St::Working => (
+                "●",
+                breathe(
+                    p.working,
+                    if selected { p.selection } else { p.base },
+                    self.epoch,
+                ),
+            ),
             None => p.state(s.state),
         };
         let noticed = self.notices.iter().any(|n| n.pid == s.pid);
@@ -2097,20 +2744,32 @@ impl App {
         let time = time.unwrap_or_default();
         let right_w = if time.is_empty() { 0 } else { time.width() + 1 };
         let first_w = w.saturating_sub(5 + right_w + 1).max(12);
-        let head_lines = wrap_spans(&[(s.title.clone(), title_style)], first_w, w.saturating_sub(5));
+        let head_lines = wrap_spans(
+            &[(s.title.clone(), title_style)],
+            first_w,
+            w.saturating_sub(5),
+        );
 
         // The detail line: the state word, then parts that give way, least
         // important first, when the line would otherwise wrap. A limit keeps
         // when it lifts; a queued move always shows.
         // A limit keeps when it lifts, a failed handover keeps why.
-        let limited = s.limit.is_some() || matches!(s.handover, Some(crate::handover::Phase::Failed(_)));
+        let limited =
+            s.limit.is_some() || matches!(s.handover, Some(crate::handover::Phase::Failed(_)));
         let mut parts: Vec<(u8, String, Style)> = Vec::new();
         if let Some(r) = rest {
             parts.push((if limited { 1 } else { 3 }, r, Style::new().fg(p.muted)));
         }
-        parts.push((2, s.account_name(&self.cfg).to_string(), Style::new().fg(p.muted)));
+        parts.push((
+            2,
+            s.account_name(&self.cfg).to_string(),
+            Style::new().fg(p.muted),
+        ));
         // The folder only when it tells two same-named sessions apart.
-        let twins = self.sessions.iter().any(|x| x.pid != s.pid && x.title.eq_ignore_ascii_case(&s.title) && x.cwd != s.cwd);
+        let twins = self
+            .sessions
+            .iter()
+            .any(|x| x.pid != s.pid && x.title.eq_ignore_ascii_case(&s.title) && x.cwd != s.cwd);
         if twins {
             parts.push((4, short_place(&s.place()), Style::new().fg(p.muted)));
         }
@@ -2119,7 +2778,11 @@ impl App {
         }
         // A voyage stays in view: the one thing this session is for.
         if let Some(q) = self.voyages.get(&s.id) {
-            parts.push((0, format!("◎ {}", q.chip(now)), Style::new().fg(self.voyage_tone(q))));
+            parts.push((
+                0,
+                format!("◎ {}", q.chip(now)),
+                Style::new().fg(self.voyage_tone(q)),
+            ));
             // Where the ship would be: the judge's estimate, until it's met.
             if let Some(pc) = q.progress.filter(|_| q.status.open()) {
                 parts.push((0, format!("{pc}% there"), Style::new().fg(p.muted)));
@@ -2136,13 +2799,25 @@ impl App {
         };
         let fits = |d: &[(String, Style)]| d.iter().map(|(t, _)| t.width()).sum::<usize>() <= room;
         while !fits(&assemble(&parts)) {
-            let Some(worst) = parts.iter().enumerate().filter(|(_, x)| x.0 > 0).max_by_key(|(i, x)| (x.0, *i)).map(|(i, _)| i) else { break };
+            let Some(worst) = parts
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| x.0 > 0)
+                .max_by_key(|(i, x)| (x.0, *i))
+                .map(|(i, _)| i)
+            else {
+                break;
+            };
             parts.remove(worst);
         }
         let detail = assemble(&parts);
         let detail_lines = wrap_chips(&detail, w.saturating_sub(5), w.saturating_sub(5));
 
-        let bar = if selected { Span::styled("▎", Style::new().fg(p.accent)) } else { Span::raw(" ") };
+        let bar = if selected {
+            Span::styled("▎", Style::new().fg(p.accent))
+        } else {
+            Span::raw(" ")
+        };
         let mut lines = Vec::new();
         for (n, spans) in head_lines.into_iter().enumerate() {
             let mut l = if n == 0 {
@@ -2150,7 +2825,13 @@ impl App {
                     Some(n) => Span::styled((n + 1).to_string(), Style::new().fg(p.accent)),
                     None => Span::raw(" "),
                 };
-                vec![bar.clone(), slot, Span::raw(" "), Span::styled(glyph, Style::new().fg(color)), Span::raw(" ")]
+                vec![
+                    bar.clone(),
+                    slot,
+                    Span::raw(" "),
+                    Span::styled(glyph, Style::new().fg(color)),
+                    Span::raw(" "),
+                ]
             } else {
                 vec![bar.clone(), Span::raw("    ")]
             };
@@ -2182,15 +2863,35 @@ impl App {
 
     /// The selected session's voyage, for the detail pane: its chip, the
     /// outcome, the last check, and its scene.
-    fn voyage_block(&self, q: &crate::voyage::Voyage, w: usize, now: i64) -> Vec<Vec<Span<'static>>> {
+    fn voyage_block(
+        &self,
+        q: &crate::voyage::Voyage,
+        w: usize,
+        now: i64,
+    ) -> Vec<Vec<Span<'static>>> {
         let p = &self.pal;
         let mut out: Vec<Vec<Span<'static>>> = vec![Vec::new()];
-        let mut chip = vec![(format!("◎ {}", q.chip(now)), Style::new().fg(self.voyage_tone(q)))];
+        let mut chip = vec![(
+            format!("◎ {}", q.chip(now)),
+            Style::new().fg(self.voyage_tone(q)),
+        )];
         let sep = || (" · ".to_string(), Style::new().fg(p.muted));
         if q.status == crate::voyage::Status::Met {
-            chip.extend([sep(), (format!("after {}", crate::voyage::turns_taken(q)), Style::new().fg(p.muted))]);
+            chip.extend([
+                sep(),
+                (
+                    format!("after {}", crate::voyage::turns_taken(q)),
+                    Style::new().fg(p.muted),
+                ),
+            ]);
         } else if let Some(pc) = q.progress {
-            chip.extend([sep(), (format!("about {pc}% there, by the judge"), Style::new().fg(p.muted))]);
+            chip.extend([
+                sep(),
+                (
+                    format!("about {pc}% there, by the judge"),
+                    Style::new().fg(p.muted),
+                ),
+            ]);
         }
         if q.spent_usd > 0.0 {
             let spent = match q.budget_usd {
@@ -2200,14 +2901,31 @@ impl App {
             chip.extend([sep(), (spent, Style::new().fg(p.muted))]);
         }
         out.extend(wrap_chips(&chip, w, w));
-        out.extend(wrap_spans(&[(q.outcome.clone(), Style::new().fg(p.text))], w, w).into_iter().take(3));
+        out.extend(
+            wrap_spans(&[(q.outcome.clone(), Style::new().fg(p.text))], w, w)
+                .into_iter()
+                .take(3),
+        );
         let said = match (&q.why, &q.last) {
-            (Some(w), _) if q.status == crate::voyage::Status::Paused => Some(("waiting on you: ", w)),
+            (Some(w), _) if q.status == crate::voyage::Status::Paused => {
+                Some(("waiting on you: ", w))
+            }
             (_, Some(l)) => Some(("last check: ", l)),
             _ => None,
         };
         if let Some((label, l)) = said {
-            out.extend(wrap_spans(&[(label.to_string(), Style::new().fg(p.muted)), (l.clone(), Style::new().fg(p.dim))], w, w).into_iter().take(2));
+            out.extend(
+                wrap_spans(
+                    &[
+                        (label.to_string(), Style::new().fg(p.muted)),
+                        (l.clone(), Style::new().fg(p.dim)),
+                    ],
+                    w,
+                    w,
+                )
+                .into_iter()
+                .take(2),
+            );
         }
         if self.cfg.voyage_scene && w >= crate::scene::MIN_WIDTH {
             out.push(Vec::new());
@@ -2222,14 +2940,31 @@ impl App {
         if matches!(s.state, St::Working) || s.dormant || s.limit.is_some() || s.since_ms <= 0 {
             return None;
         }
-        let info = self.info.get(&s.id).filter(|i| now - i.at_ms < 6 * 3_600_000)?;
+        let info = self
+            .info
+            .get(&s.id)
+            .filter(|i| now - i.at_ms < 6 * 3_600_000)?;
         let t = info.tokens?;
         let left = CACHE_MS - (now - s.since_ms);
         Some(if left > 0 {
-            (format!("cache warm · {} left", ago(left)), if left < 10 * 60_000 { self.pal.working } else { self.pal.muted })
+            (
+                format!("cache warm · {} left", ago(left)),
+                if left < 10 * 60_000 {
+                    self.pal.working
+                } else {
+                    self.pal.muted
+                },
+            )
         } else {
             let price = crate::price::of(info.model_id.as_deref().unwrap_or(""), false);
-            (format!("cache cold · the next prompt writes {}k again (${:.2})", t / 1000, t as f64 * price.write_1h()), self.pal.muted)
+            (
+                format!(
+                    "cache cold · the next prompt writes {}k again (${:.2})",
+                    t / 1000,
+                    t as f64 * price.write_1h()
+                ),
+                self.pal.muted,
+            )
         })
     }
 
@@ -2242,25 +2977,41 @@ impl App {
     fn draw_preview(&mut self, f: &mut Frame, area: Rect) {
         let p = &self.pal;
         f.render_widget(Block::new().style(Style::new().bg(p.well)), area);
-        let Some(s) = self.selected().cloned() else { return };
+        let Some(s) = self.selected().cloned() else {
+            return;
+        };
         let now = now_ms();
         let (_, color) = p.state(s.state);
-        let inner = Rect { x: area.x + 2, width: area.width.saturating_sub(4), ..area };
+        let inner = Rect {
+            x: area.x + 2,
+            width: area.width.saturating_sub(4),
+            ..area
+        };
         let w = inner.width as usize;
         let sep = || (" · ".to_string(), Style::new().fg(p.muted));
 
         let mut head: Vec<Vec<Span<'static>>> = Vec::new();
         // Bold stays on the list's selection; the preview title is plain.
-        head.extend(wrap_spans(&[(s.title.clone(), Style::new().fg(p.text))], w, w));
+        head.extend(wrap_spans(
+            &[(s.title.clone(), Style::new().fg(p.text))],
+            w,
+            w,
+        ));
         if let Some(t) = &s.topic {
             head.extend(wrap_spans(&[(t.clone(), Style::new().fg(p.dim))], w, w));
         }
         let mut place = path_segments(&tilde(&s.cwd), Style::new().fg(p.dim));
         place.extend([
             sep(),
-            (s.account_name(&self.cfg).to_string(), Style::new().fg(p.dim)),
+            (
+                s.account_name(&self.cfg).to_string(),
+                Style::new().fg(p.dim),
+            ),
             sep(),
-            (format!("started {} ago", ago(now - s.started_ms)), Style::new().fg(p.muted)),
+            (
+                format!("started {} ago", ago(now - s.started_ms)),
+                Style::new().fg(p.muted),
+            ),
         ]);
         head.extend(wrap_chips(&place, w, w));
         let noticed = self.notices.iter().any(|n| n.pid == s.pid);
@@ -2271,29 +3022,51 @@ impl App {
             status.extend([sep(), (part, Style::new().fg(p.muted))]);
         }
         if let Some(q) = &s.queued {
-            status.extend([sep(), (format!("moves to {q} when idle"), Style::new().fg(p.accent))]);
+            status.extend([
+                sep(),
+                (format!("moves to {q} when idle"), Style::new().fg(p.accent)),
+            ]);
         }
         if let Some((chip, tone)) = self.cache_chip(&s, now) {
             status.extend([sep(), (chip, Style::new().fg(tone))]);
         }
-        let info = self.info.get(&s.id).filter(|i| now - i.at_ms < 6 * 3_600_000);
+        let info = self
+            .info
+            .get(&s.id)
+            .filter(|i| now - i.at_ms < 6 * 3_600_000);
         head.extend(wrap_chips(&status, w, w));
         if let Some(hint) = self.room_elsewhere(&s) {
             head.extend(wrap_chips(&hint, w, w));
         }
         let mut whereabouts = match (&s.pane, &s.tty) {
-            (Some(pane), _) => vec![(format!("tmux {}:{}", pane.session, pane.window_index), Style::new().fg(p.muted))],
-            (None, Some(t)) => vec![(format!("outside tmux on {}", t.trim_start_matches("/dev/")), Style::new().fg(p.muted))],
+            (Some(pane), _) => vec![(
+                format!("tmux {}:{}", pane.session, pane.window_index),
+                Style::new().fg(p.muted),
+            )],
+            (None, Some(t)) => vec![(
+                format!("outside tmux on {}", t.trim_start_matches("/dev/")),
+                Style::new().fg(p.muted),
+            )],
             (None, None) => vec![("no terminal".to_string(), Style::new().fg(p.muted))],
         };
         if let Some(info) = info {
             if let Some(m) = &info.model {
                 whereabouts.extend([sep(), (m.to_lowercase(), Style::new().fg(p.muted))]);
             }
-            let near = |t: u64| self.cfg.handover_tokens > 0 && t * 4 >= self.cfg.handover_tokens * 3;
+            let near =
+                |t: u64| self.cfg.handover_tokens > 0 && t * 4 >= self.cfg.handover_tokens * 3;
             match (info.tokens, info.context) {
-                (Some(t), _) => whereabouts.extend([sep(), (format!("{}k context", t / 1000), Style::new().fg(if near(t) { p.working } else { p.muted }))]),
-                (None, Some(c)) => whereabouts.extend([sep(), (format!("context {c:.0}%"), Style::new().fg(p.muted))]),
+                (Some(t), _) => whereabouts.extend([
+                    sep(),
+                    (
+                        format!("{}k context", t / 1000),
+                        Style::new().fg(if near(t) { p.working } else { p.muted }),
+                    ),
+                ]),
+                (None, Some(c)) => whereabouts.extend([
+                    sep(),
+                    (format!("context {c:.0}%"), Style::new().fg(p.muted)),
+                ]),
                 _ => {}
             }
             if let Some(c) = self.cost_so_far(&s) {
@@ -2301,9 +3074,21 @@ impl App {
             }
         }
         if let Some((repo, n)) = &s.pr {
-            whereabouts.extend([sep(), (format!("pr {}#{n}", repo.rsplit('/').next().unwrap_or(repo)), Style::new().fg(p.muted))]);
+            whereabouts.extend([
+                sep(),
+                (
+                    format!("pr {}#{n}", repo.rsplit('/').next().unwrap_or(repo)),
+                    Style::new().fg(p.muted),
+                ),
+            ]);
         }
-        whereabouts.extend([sep(), (s.id[..8.min(s.id.len())].to_string(), Style::new().fg(p.muted))]);
+        whereabouts.extend([
+            sep(),
+            (
+                s.id[..8.min(s.id.len())].to_string(),
+                Style::new().fg(p.muted),
+            ),
+        ]);
         head.extend(wrap_chips(&whereabouts, w, w));
         if let Some(q) = self.voyages.get(&s.id) {
             head.extend(self.voyage_block(q, w, now));
@@ -2312,13 +3097,27 @@ impl App {
         let head: Vec<Line> = head.into_iter().map(Line::from).collect();
         let head_h = head.len() as u16;
         // The session's particulars on a raised band; its live terminal below.
-        let band = Rect { height: (head_h + 2).min(area.height), ..area };
+        let band = Rect {
+            height: (head_h + 2).min(area.height),
+            ..area
+        };
         f.render_widget(Block::new().style(Style::new().bg(p.raised)), band);
-        f.render_widget(Paragraph::new(Text::from(head)), Rect { y: inner.y + 1, height: head_h.min(inner.height.saturating_sub(1)), ..inner });
+        f.render_widget(
+            Paragraph::new(Text::from(head)),
+            Rect {
+                y: inner.y + 1,
+                height: head_h.min(inner.height.saturating_sub(1)),
+                ..inner
+            },
+        );
         if area.height <= band.height + 3 {
             return;
         }
-        let body = Rect { y: band.y + band.height + 1, height: area.height - band.height - 1, ..inner };
+        let body = Rect {
+            y: band.y + band.height + 1,
+            height: area.height - band.height - 1,
+            ..inner
+        };
         let text = self.preview_text(&s, body);
         f.render_widget(Paragraph::new(text), body);
         if let Some((pid, t)) = self.fade {
@@ -2342,21 +3141,34 @@ impl App {
                 (!m.limited && m.used < 90.0).then_some((j, 100.0 - m.used))
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))?;
-        let limited = self.sessions.iter().filter(|x| !x.dormant && x.limit.is_some() && x.account == s.account).count();
+        let limited = self
+            .sessions
+            .iter()
+            .filter(|x| !x.dormant && x.limit.is_some() && x.account == s.account)
+            .count();
         let u = &self.usage[j];
         let figures: Vec<String> = [("5h", &u.five), ("wk", &u.week)]
             .into_iter()
             .filter_map(|(l, m)| m.as_ref().map(|m| format!("{l} {:.0}%", m.used)))
             .collect();
         let _ = left;
-        let mut out = vec![(format!("{} has room", self.cfg.accounts[j].name), Style::new().fg(p.accent))];
+        let mut out = vec![(
+            format!("{} has room", self.cfg.accounts[j].name),
+            Style::new().fg(p.accent),
+        )];
         if !figures.is_empty() {
-            out.push((format!(" ({})", figures.join(" · ")), Style::new().fg(p.muted)));
+            out.push((
+                format!(" ({})", figures.join(" · ")),
+                Style::new().fg(p.muted),
+            ));
         }
         out.push((" · ".to_string(), Style::new().fg(p.muted)));
         out.push(("^a moves it".to_string(), Style::new().fg(p.dim)));
         if limited > 1 {
-            out.push((format!(", then a moves all {limited}"), Style::new().fg(p.dim)));
+            out.push((
+                format!(", then a moves all {limited}"),
+                Style::new().fg(p.dim),
+            ));
         }
         Some(out)
     }
@@ -2367,17 +3179,41 @@ impl App {
         let now = now_ms();
         f.render_widget(Block::new().style(Style::new().bg(p.well)), area);
         let pad = if self.sidebar { 1 } else { 2 };
-        let inner = Rect { x: area.x + pad, width: area.width.saturating_sub(pad * 2), ..area };
+        let inner = Rect {
+            x: area.x + pad,
+            width: area.width.saturating_sub(pad * 2),
+            ..area
+        };
         let w = inner.width as usize;
-        let mut title = vec![Line::from(Span::styled("usage", Style::new().fg(p.text).add_modifier(Modifier::BOLD)))];
+        let mut title = vec![Line::from(Span::styled(
+            "usage",
+            Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+        ))];
         title.extend(
-            wrap_spans(&[("each account's 5-hour and weekly limits".to_string(), Style::new().fg(p.muted))], w, w)
-                .into_iter()
-                .map(Line::from),
+            wrap_spans(
+                &[(
+                    "each account's 5-hour and weekly limits".to_string(),
+                    Style::new().fg(p.muted),
+                )],
+                w,
+                w,
+            )
+            .into_iter()
+            .map(Line::from),
         );
-        let band = Rect { height: (title.len() as u16 + 2).min(area.height), ..area };
+        let band = Rect {
+            height: (title.len() as u16 + 2).min(area.height),
+            ..area
+        };
         f.render_widget(Block::new().style(Style::new().bg(p.raised)), band);
-        f.render_widget(Paragraph::new(Text::from(title)), Rect { y: inner.y + 1, height: band.height.saturating_sub(2), ..inner });
+        f.render_widget(
+            Paragraph::new(Text::from(title)),
+            Rect {
+                y: inner.y + 1,
+                height: band.height.saturating_sub(2),
+                ..inner
+            },
+        );
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut marks: Vec<(usize, usize)> = Vec::new(); // (first line, last line) of the focused account
@@ -2395,10 +3231,17 @@ impl App {
                         crate::usage::Source::Fetched => "looked up",
                         crate::usage::Source::Transcript => "from a session that hit it",
                     };
-                    if now - t < 90_000 { format!("{how}, just now") } else { format!("{how}, {} ago", ago(now - t)) }
+                    if now - t < 90_000 {
+                        format!("{how}, just now")
+                    } else {
+                        format!("{how}, {} ago", ago(now - t))
+                    }
                 }
             };
-            let mut head = vec![(a.name.clone(), Style::new().fg(p.text).add_modifier(Modifier::BOLD))];
+            let mut head = vec![(
+                a.name.clone(),
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            )];
             if let Some(plan) = self.plans.get(i).cloned().flatten() {
                 head.push((format!("  {plan}"), Style::new().fg(p.muted)));
             }
@@ -2406,7 +3249,11 @@ impl App {
             head.push((when, Style::new().fg(p.muted)));
             lines.extend(wrap_chips(&head, w, w).into_iter().map(Line::from));
             if let Some(problem) = &u.problem {
-                lines.extend(wrap_spans(&[(problem.clone(), Style::new().fg(p.muted))], w, w).into_iter().map(Line::from));
+                lines.extend(
+                    wrap_spans(&[(problem.clone(), Style::new().fg(p.muted))], w, w)
+                        .into_iter()
+                        .map(Line::from),
+                );
             }
             for (label, m) in [("5-hour", &u.five), ("weekly", &u.week)] {
                 lines.push(Line::raw(""));
@@ -2417,37 +3264,66 @@ impl App {
                     ]));
                     continue;
                 };
-                let tone = if u.stale(now) { p.muted } else { p.usage_tone(m.used, m.limited) };
-                let figure = if m.limited { "at the limit".to_string() } else { format!("{:.0}%", m.used) };
+                let tone = if u.stale(now) {
+                    p.muted
+                } else {
+                    p.usage_tone(m.used, m.limited)
+                };
+                let figure = if m.limited {
+                    "at the limit".to_string()
+                } else {
+                    format!("{:.0}%", m.used)
+                };
                 let gap = w.saturating_sub(label.width() + figure.width());
                 lines.push(Line::from(vec![
                     Span::styled(label, Style::new().fg(p.dim)),
                     Span::raw(" ".repeat(gap)),
                     Span::styled(figure, Style::new().fg(tone).add_modifier(Modifier::BOLD)),
                 ]));
-                lines.push(Line::from(self.bar_spans(if m.limited { 100.0 } else { m.used }, w, tone)));
+                lines.push(Line::from(self.bar_spans(
+                    if m.limited { 100.0 } else { m.used },
+                    w,
+                    tone,
+                )));
                 let mut detail: Vec<(String, Style)> = Vec::new();
                 if m.resets_ms > now {
-                    let at = chrono::DateTime::from_timestamp_millis(m.resets_ms).map(|t| t.with_timezone(&chrono::Local));
+                    let at = chrono::DateTime::from_timestamp_millis(m.resets_ms)
+                        .map(|t| t.with_timezone(&chrono::Local));
                     let clock = at.map(|t| {
-                        let fmt = if m.resets_ms - now < 20 * 3_600_000 { "%-I:%M %P" } else { "%a %-I:%M %P" };
+                        let fmt = if m.resets_ms - now < 20 * 3_600_000 {
+                            "%-I:%M %P"
+                        } else {
+                            "%a %-I:%M %P"
+                        };
                         t.format(fmt).to_string().to_lowercase()
                     });
-                    detail.push((format!("resets in {}", registry::duration(m.resets_ms - now)), Style::new().fg(p.dim)));
+                    detail.push((
+                        format!("resets in {}", registry::duration(m.resets_ms - now)),
+                        Style::new().fg(p.dim),
+                    ));
                     if let Some(c) = clock {
                         detail.push((format!(", {c}"), Style::new().fg(p.muted)));
                     }
                 } else {
-                    detail.push(("a fresh window starts with the next message".into(), Style::new().fg(p.muted)));
+                    detail.push((
+                        "a fresh window starts with the next message".into(),
+                        Style::new().fg(p.muted),
+                    ));
                 }
                 match m.pace {
                     Some(crate::usage::Pace::LimitIn(ms)) => {
                         detail.push((" · ".into(), Style::new().fg(p.muted)));
-                        detail.push((format!("at this pace the limit comes in {}", registry::duration(ms)), Style::new().fg(p.working)));
+                        detail.push((
+                            format!("at this pace the limit comes in {}", registry::duration(ms)),
+                            Style::new().fg(p.working),
+                        ));
                     }
                     Some(crate::usage::Pace::EndsAt(x)) if x >= m.used + 1.0 => {
                         detail.push((" · ".into(), Style::new().fg(p.muted)));
-                        detail.push((format!("on pace to end near {x:.0}%"), Style::new().fg(p.muted)));
+                        detail.push((
+                            format!("on pace to end near {x:.0}%"),
+                            Style::new().fg(p.muted),
+                        ));
                     }
                     _ => {}
                 }
@@ -2455,14 +3331,24 @@ impl App {
             }
             if u.trend.len() > 1 {
                 lines.push(Line::raw(""));
-                let (lo, hi) = u.trend.iter().fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)));
-                let label = format!("week, past day  {lo:.0}% → {:.0}%", u.trend.last().copied().unwrap_or(hi));
+                let (lo, hi) = u
+                    .trend
+                    .iter()
+                    .fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+                let label = format!(
+                    "week, past day  {lo:.0}% → {:.0}%",
+                    u.trend.last().copied().unwrap_or(hi)
+                );
                 lines.push(Line::from(Span::styled(label, Style::new().fg(p.muted))));
                 for row in sparkline(&u.trend, w.min(72)) {
                     lines.push(Line::from(Span::styled(row, Style::new().fg(p.dim))));
                 }
             }
-            let mine: Vec<&Session> = self.sessions.iter().filter(|s| s.account == Some(i) && !s.dormant).collect();
+            let mine: Vec<&Session> = self
+                .sessions
+                .iter()
+                .filter(|s| s.account == Some(i) && !s.dormant)
+                .collect();
             if !mine.is_empty() {
                 lines.push(Line::raw(""));
                 let count = |st: &[St]| mine.iter().filter(|s| st.contains(&s.state)).count();
@@ -2482,10 +3368,20 @@ impl App {
                 }
                 lines.extend(wrap_chips(&segs, w, w).into_iter().map(Line::from));
                 let stuck = mine.iter().filter(|s| s.limit.is_some()).count();
-                if let Some(hint) = mine.iter().find(|s| s.limit.is_some()).and_then(|s| self.room_elsewhere(s)) {
+                if let Some(hint) = mine
+                    .iter()
+                    .find(|s| s.limit.is_some())
+                    .and_then(|s| self.room_elsewhere(s))
+                {
                     let mut hint = hint;
                     if stuck > 1 {
-                        hint.insert(0, (format!("{stuck} stopped at the limit · "), Style::new().fg(p.dim)));
+                        hint.insert(
+                            0,
+                            (
+                                format!("{stuck} stopped at the limit · "),
+                                Style::new().fg(p.dim),
+                            ),
+                        );
                     }
                     lines.extend(wrap_chips(&hint, w, w).into_iter().map(Line::from));
                 }
@@ -2494,7 +3390,11 @@ impl App {
                 marks.push((start + usize::from(i > 0), lines.len()));
             }
         }
-        let body = Rect { y: band.y + band.height + 1, height: area.height.saturating_sub(band.height + 1), ..inner };
+        let body = Rect {
+            y: band.y + band.height + 1,
+            height: area.height.saturating_sub(band.height + 1),
+            ..inner
+        };
         f.render_widget(Paragraph::new(Text::from(lines)), body);
         // A hairline at the edge marks the account you came from.
         if pad > 0 && self.cfg.accounts.len() > 1 {
@@ -2517,17 +3417,25 @@ impl App {
             None => Duration::from_secs(2),
         };
         if let Some(pv) = &self.preview
-            && pv.pid == s.pid && pv.at.elapsed() < fresh && pv.size == (area.width, area.height) {
-                return pv.text.clone();
-            }
+            && pv.pid == s.pid
+            && pv.at.elapsed() < fresh
+            && pv.size == (area.width, area.height)
+        {
+            return pv.text.clone();
+        }
         let h = area.height as usize;
         let w = area.width as usize;
         let text = match &s.pane {
             Some(pane) => {
-                let raw = tmux::capture(&pane.id, area.height.saturating_mul(2)).unwrap_or_default();
+                let raw =
+                    tmux::capture(&pane.id, area.height.saturating_mul(2)).unwrap_or_default();
                 let t = raw.into_text().unwrap_or_default();
-                let mut lines: Vec<Line<'static>> = t.lines.into_iter().flat_map(|l| reflow(l, w)).collect();
-                while lines.last().is_some_and(|l| l.spans.iter().all(|s| s.content.trim().is_empty())) {
+                let mut lines: Vec<Line<'static>> =
+                    t.lines.into_iter().flat_map(|l| reflow(l, w)).collect();
+                while lines
+                    .last()
+                    .is_some_and(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
+                {
                     lines.pop();
                 }
                 let skip = lines.len().saturating_sub(h);
@@ -2535,7 +3443,12 @@ impl App {
             }
             None => self.transcript_text(s, w, h),
         };
-        self.preview = Some(Preview { pid: s.pid, at: Instant::now(), size: (area.width, area.height), text: text.clone() });
+        self.preview = Some(Preview {
+            pid: s.pid,
+            at: Instant::now(),
+            size: (area.width, area.height),
+            text: text.clone(),
+        });
         text
     }
 
@@ -2554,7 +3467,10 @@ impl App {
             lines.extend(markdown(&t.text, w.saturating_sub(1), p));
             lines.push(Line::raw(""));
         }
-        let note = Line::from(Span::styled("last exchanges · ctrl-o brings it into tmux for a live view", Style::new().fg(p.muted)));
+        let note = Line::from(Span::styled(
+            "last exchanges · ctrl-o brings it into tmux for a live view",
+            Style::new().fg(p.muted),
+        ));
         let skip = lines.len().saturating_sub(h.saturating_sub(2));
         let mut out = vec![note, Line::raw("")];
         out.extend(lines.into_iter().skip(skip));
@@ -2570,24 +3486,52 @@ impl App {
             let age = at.elapsed().as_secs_f32();
             if age < 5.8 && matches!(self.mode, Mode::Normal) {
                 // Settles into the band over its last moments instead of vanishing.
-                let color = mix(*color, p.raised, ((age - 4.8) / 1.0).clamp(0.0, 1.0), *color);
-                let lines = wrap_spans(&[(msg.clone(), Style::new().fg(color))], w.saturating_sub(2), w.saturating_sub(2));
+                let color = mix(
+                    *color,
+                    p.raised,
+                    ((age - 4.8) / 1.0).clamp(0.0, 1.0),
+                    *color,
+                );
+                let lines = wrap_spans(
+                    &[(msg.clone(), Style::new().fg(color))],
+                    w.saturating_sub(2),
+                    w.saturating_sub(2),
+                );
                 return (lines.into_iter().map(|l| pad(l)).collect(), Vec::new());
             }
         }
         if let Some(job) = &self.working_on {
             let color = breathe(p.working, p.raised, self.epoch);
-            let lines = wrap_spans(&[(format!("{job}…"), Style::new().fg(color))], w.saturating_sub(2), w.saturating_sub(2));
+            let lines = wrap_spans(
+                &[(format!("{job}…"), Style::new().fg(color))],
+                w.saturating_sub(2),
+                w.saturating_sub(2),
+            );
             return (lines.into_iter().map(|l| pad(l)).collect(), Vec::new());
         }
         let (lead, hints): (Option<String>, Vec<(String, String, Cmd)>) = match &self.mode {
             Mode::Help => (None, vec![("esc".into(), "close".into(), Cmd::No)]),
-            Mode::Menu(_) => (None, vec![("enter".into(), "choose".into(), Cmd::No), ("esc".into(), "close".into(), Cmd::No)]),
+            Mode::Menu(_) => (
+                None,
+                vec![
+                    ("enter".into(), "choose".into(), Cmd::No),
+                    ("esc".into(), "close".into(), Cmd::No),
+                ],
+            ),
             Mode::Rename(buf) => (
                 Some(format!("name  {buf}▏")),
-                vec![("enter".into(), "save".into(), Cmd::Yes), ("esc".into(), "cancel".into(), Cmd::No)],
+                vec![
+                    ("enter".into(), "save".into(), Cmd::Yes),
+                    ("esc".into(), "cancel".into(), Cmd::No),
+                ],
             ),
-            Mode::Confirm(prompt, _) => (Some(prompt.clone()), vec![("enter".into(), "yes".into(), Cmd::Yes), ("esc".into(), "no".into(), Cmd::No)]),
+            Mode::Confirm(prompt, _) => (
+                Some(prompt.clone()),
+                vec![
+                    ("enter".into(), "yes".into(), Cmd::Yes),
+                    ("esc".into(), "no".into(), Cmd::No),
+                ],
+            ),
             Mode::Offer(prompt, _, label, _) => (
                 Some(prompt.clone()),
                 vec![
@@ -2612,14 +3556,27 @@ impl App {
                 Some("move to".into()),
                 opts.iter()
                     .enumerate()
-                    .map(|(n, &a)| ((n + 1).to_string(), self.cfg.accounts[a].name.clone(), Cmd::Pick(n)))
-                    .chain(std::iter::once(("esc".to_string(), "cancel".to_string(), Cmd::No)))
+                    .map(|(n, &a)| {
+                        (
+                            (n + 1).to_string(),
+                            self.cfg.accounts[a].name.clone(),
+                            Cmd::Pick(n),
+                        )
+                    })
+                    .chain(std::iter::once((
+                        "esc".to_string(),
+                        "cancel".to_string(),
+                        Cmd::No,
+                    )))
                     .collect(),
             ),
             Mode::New(flow) => match &flow.folder {
                 None => (
                     None,
-                    vec![("enter".into(), "choose".into(), Cmd::Yes), ("esc".into(), "cancel".into(), Cmd::No)],
+                    vec![
+                        ("enter".into(), "choose".into(), Cmd::Yes),
+                        ("esc".into(), "cancel".into(), Cmd::No),
+                    ],
                 ),
                 Some((folder, suggested, why)) => {
                     let leaf = folder.rsplit('/').find(|x| !x.is_empty()).unwrap_or(folder);
@@ -2629,11 +3586,19 @@ impl App {
                         .iter()
                         .enumerate()
                         .map(|(n, a)| {
-                            let label = if n == *suggested { format!("{} ({why})", a.name) } else { a.name.clone() };
+                            let label = if n == *suggested {
+                                format!("{} ({why})", a.name)
+                            } else {
+                                a.name.clone()
+                            };
                             ((n + 1).to_string(), label, Cmd::Pick(n))
                         })
                         .collect();
-                    h.push(("enter".into(), self.cfg.accounts[*suggested].name.clone(), Cmd::Yes));
+                    h.push((
+                        "enter".into(),
+                        self.cfg.accounts[*suggested].name.clone(),
+                        Cmd::Yes,
+                    ));
                     h.push(("esc".into(), "back".into(), Cmd::No));
                     (Some(format!("start in {leaf} on")), h)
                 }
@@ -2661,7 +3626,12 @@ impl App {
                     h.push(("alt-j".into(), "go there", Cmd::GoThere, 1));
                 }
                 if !dormant {
-                    h.push(("^a".into(), if queued { "cancel move" } else { "move" }, Cmd::Account, 1));
+                    h.push((
+                        "^a".into(),
+                        if queued { "cancel move" } else { "move" },
+                        Cmd::Account,
+                        1,
+                    ));
                 }
                 if outside {
                     h.push(("^o".into(), "into tmux", Cmd::Adopt, 1));
@@ -2681,25 +3651,47 @@ impl App {
                     h.push(("esc".into(), "quit", Cmd::Quit, 0));
                 }
                 let fits = |h: &[(String, &str, Cmd, u8)]| {
-                    h.iter().map(|(k, l, _, _)| k.chars().count() + l.chars().count() + 4).sum::<usize>() < width as usize
+                    h.iter()
+                        .map(|(k, l, _, _)| k.chars().count() + l.chars().count() + 4)
+                        .sum::<usize>()
+                        < width as usize
                 };
                 while !fits(&h) {
-                    let Some(worst) = h.iter().enumerate().max_by_key(|(i, x)| (x.3, *i)).map(|(i, _)| i) else { break };
+                    let Some(worst) = h
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(i, x)| (x.3, *i))
+                        .map(|(i, _)| i)
+                    else {
+                        break;
+                    };
                     if h[worst].3 == 0 {
                         break;
                     }
                     h.remove(worst);
                 }
-                (None, h.into_iter().map(|(k, l, c, _)| (k, l.to_string(), c)).collect())
+                (
+                    None,
+                    h.into_iter()
+                        .map(|(k, l, c, _)| (k, l.to_string(), c))
+                        .collect(),
+                )
             }
         };
-        let hints: Vec<(String, String, Cmd)> = if self.sidebar && matches!(self.mode, Mode::Normal) {
-            hints.into_iter().filter(|(_, _, c)| !matches!(c, Cmd::Quit | Cmd::Group)).collect()
+        let hints: Vec<(String, String, Cmd)> = if self.sidebar && matches!(self.mode, Mode::Normal)
+        {
+            hints
+                .into_iter()
+                .filter(|(_, _, c)| !matches!(c, Cmd::Quit | Cmd::Group))
+                .collect()
         } else {
             hints
         };
         let mut lines = Vec::new();
-        let hint_w: usize = hints.iter().map(|(k, l, _)| k.chars().count() + l.chars().count() + 4).sum();
+        let hint_w: usize = hints
+            .iter()
+            .map(|(k, l, _)| k.chars().count() + l.chars().count() + 4)
+            .sum();
         let mut spans = vec![Span::raw(" ")];
         let mut x = 1u16;
         if let Some(l) = lead {
@@ -2710,7 +3702,11 @@ impl App {
                 x += lw as u16 + 3;
             } else {
                 // Too long to share a line with the hints: wrap it above them.
-                for chunk in wrap_spans(&[(l, Style::new().fg(p.text))], w.saturating_sub(2), w.saturating_sub(2)) {
+                for chunk in wrap_spans(
+                    &[(l, Style::new().fg(p.text))],
+                    w.saturating_sub(2),
+                    w.saturating_sub(2),
+                ) {
                     lines.push(pad(chunk));
                 }
             }
@@ -2738,520 +3734,6 @@ impl App {
 }
 
 /// A hairline graph two rows tall in braille dots, scaled to its own range.
-fn sparkline(values: &[f64], cols: usize) -> [String; 2] {
-    let n = cols.max(2) * 2;
-    let (lo, hi) = values.iter().fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)));
-    let span = (hi - lo).max(1e-9);
-    let at = |i: usize| {
-        let x = i as f64 / (n - 1) as f64 * (values.len() - 1) as f64;
-        let (a, b) = (x.floor() as usize, (x.ceil() as usize).min(values.len() - 1));
-        let v = values[a] + (values[b] - values[a]) * (x - a as f64);
-        (((v - lo) / span) * 7.0).round() as usize
-    };
-    // Dot bits by (column side, row from the top) in a braille cell.
-    const BITS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
-    let mut cells = [vec![0u32; cols.max(2)], vec![0u32; cols.max(2)]];
-    for i in 0..n {
-        let level = at(i);
-        let (row, y) = if level >= 4 { (0, 7 - level) } else { (1, 3 - level) };
-        cells[row][i / 2] |= BITS[i % 2][y];
-    }
-    cells.map(|r| r.iter().map(|&b| char::from_u32(0x2800 + b).unwrap_or(' ')).collect())
-}
-
-/// A horizontal hairline across `r`, with junctions where it meets other
-/// lines: `joins` are (x, glyph) pairs such as a divider's ┬ or the frame's ├.
-fn hrule(f: &mut Frame, r: Rect, fg: Color, bg: Color, joins: &[(u16, &str)]) {
-    let buf = f.buffer_mut();
-    for x in r.x..r.x + r.width {
-        if let Some(c) = buf.cell_mut((x, r.y)) {
-            c.set_symbol("─").set_fg(fg).set_bg(bg);
-        }
-    }
-    for (x, g) in joins {
-        if let Some(c) = buf.cell_mut((*x, r.y)) {
-            c.set_symbol(g).set_fg(fg).set_bg(bg);
-        }
-    }
-}
-
-/// A vertical hairline between two surfaces.
-/// A voyage's scene as spans, cells of one look run together.
-fn scene_spans(rows: Vec<Vec<crate::scene::Cell>>) -> Vec<Vec<Span<'static>>> {
-    let rgb = |c: crate::scene::Rgb| Color::Rgb(c[0], c[1], c[2]);
-    rows.into_iter()
-        .map(|row| {
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            let mut run = String::new();
-            let mut look: Option<(crate::scene::Rgb, crate::scene::Rgb)> = None;
-            for c in row {
-                // A blank cell shows only its background: any foreground will do.
-                let key = (if c.ch == ' ' { look.map_or(c.fg, |l| l.0) } else { c.fg }, c.bg);
-                if look.is_some_and(|l| l != key) {
-                    let (fg, bg) = look.unwrap_or(key);
-                    spans.push(Span::styled(std::mem::take(&mut run), Style::new().fg(rgb(fg)).bg(rgb(bg))));
-                }
-                look = Some(key);
-                run.push(c.ch);
-            }
-            if let Some((fg, bg)) = look {
-                spans.push(Span::styled(run, Style::new().fg(rgb(fg)).bg(rgb(bg))));
-            }
-            spans
-        })
-        .collect()
-}
-
-fn divider(f: &mut Frame, r: Rect, fg: Color, bg: Color) {
-    let buf = f.buffer_mut();
-    for y in r.y..r.y + r.height {
-        if let Some(c) = buf.cell_mut((r.x, y)) {
-            c.set_symbol("│").set_fg(fg).set_bg(bg);
-        }
-    }
-}
-
-fn pad(mut spans: Vec<Span<'static>>) -> Line<'static> {
-    spans.insert(0, Span::raw(" "));
-    Line::from(spans)
-}
-
-/// Light markdown for transcript previews: headings and **bold** get weight,
-/// code fences and link targets disappear, bullets become dots.
-fn markdown(src: &str, w: usize, p: &Palette) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut fenced = false;
-    let mut table: Vec<Vec<String>> = Vec::new();
-    let lines: Vec<&str> = src.lines().chain(std::iter::once("")).collect();
-    for raw in lines {
-        let t = raw.trim_end();
-        let row = t.trim_start();
-        if !fenced && row.starts_with('|') {
-            if !row.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
-                table.push(row.trim_matches('|').split('|').map(|c| c.trim().replace("**", "").replace('`', "")).collect());
-            }
-            continue;
-        }
-        if !table.is_empty() {
-            out.extend(render_table(std::mem::take(&mut table), w, p));
-        }
-        if t.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced {
-            for chunk in wrap_spans(&[(format!("  {t}"), Style::new().fg(p.dim))], w, w) {
-                out.push(Line::from(chunk));
-            }
-            continue;
-        }
-        if t.trim().is_empty() {
-            if out.last().is_some_and(|l: &Line| !l.spans.is_empty()) {
-                out.push(Line::raw(""));
-            }
-            continue;
-        }
-        let indent = t.len() - t.trim_start().len();
-        let mut body = t.trim_start();
-        let mut lead = " ".repeat(indent.min(6));
-        let mut base = Style::new().fg(p.text);
-        if let Some(h) = body.strip_prefix("### ").or(body.strip_prefix("## ")).or(body.strip_prefix("# ")) {
-            body = h;
-            base = base.add_modifier(Modifier::BOLD);
-        } else if let Some(b) = body.strip_prefix("- ").or(body.strip_prefix("* ")) {
-            body = b;
-            lead.push_str("· ");
-        }
-        let mut segs = vec![(lead.clone(), base)];
-        segs.extend(inline_md(body, base, p));
-        let rest = w.saturating_sub(lead.width());
-        for (n, chunk) in wrap_spans(&segs, w, rest).into_iter().enumerate() {
-            let mut l = chunk;
-            if n > 0 {
-                l.insert(0, Span::raw(" ".repeat(lead.width())));
-            }
-            out.push(Line::from(l));
-        }
-    }
-    while out.last().is_some_and(|l| l.spans.is_empty()) {
-        out.pop();
-    }
-    out
-}
-
-/// Markdown table rows as aligned columns with faint rules. Columns that
-/// don't fit fall back to one "header: value" line per cell.
-fn render_table(rows: Vec<Vec<String>>, w: usize, p: &Palette) -> Vec<Line<'static>> {
-    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let widths: Vec<usize> =
-        (0..cols).map(|c| rows.iter().filter_map(|r| r.get(c)).map(|x| x.width()).max().unwrap_or(0)).collect();
-    let total: usize = widths.iter().sum::<usize>() + 3 * cols.saturating_sub(1);
-    let mut out = Vec::new();
-    if total <= w {
-        for (n, r) in rows.iter().enumerate() {
-            let mut spans = Vec::new();
-            for (c, width) in widths.iter().enumerate() {
-                if c > 0 {
-                    spans.push(Span::styled(" │ ", Style::new().fg(p.faint)));
-                }
-                let cell = r.get(c).cloned().unwrap_or_default();
-                let pad = if c + 1 == cols { 0 } else { width - cell.width() };
-                let style = if n == 0 { Style::new().fg(p.dim) } else { Style::new().fg(p.text) };
-                spans.push(Span::styled(format!("{cell}{}", " ".repeat(pad)), style));
-            }
-            out.push(Line::from(spans));
-            if n == 0 && rows.len() > 1 {
-                let rule: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
-                out.push(Line::from(Span::styled(rule.join("─┼─"), Style::new().fg(p.faint))));
-            }
-        }
-    } else {
-        let head = rows.first().cloned().unwrap_or_default();
-        for r in rows.iter().skip(1) {
-            for (c, cell) in r.iter().enumerate() {
-                let segs = [
-                    (format!("{}: ", head.get(c).map(String::as_str).unwrap_or("")), Style::new().fg(p.dim)),
-                    (cell.clone(), Style::new().fg(p.text)),
-                ];
-                out.extend(wrap_spans(&segs, w, w).into_iter().map(Line::from));
-            }
-            out.push(Line::raw(""));
-        }
-    }
-    out
-}
-
-fn inline_md(s: &str, base: Style, p: &Palette) -> Vec<(String, Style)> {
-    let mut out: Vec<(String, Style)> = Vec::new();
-    let mut cur = String::new();
-    let (mut bold, mut code) = (false, false);
-    let style = |bold: bool, code: bool| {
-        let mut st = base;
-        if bold {
-            st = st.add_modifier(Modifier::BOLD);
-        }
-        if code {
-            st = st.fg(p.accent);
-        }
-        st
-    };
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '`' => {
-                out.push((std::mem::take(&mut cur), style(bold, code)));
-                code = !code;
-            }
-            '*' if !code && chars.peek() == Some(&'*') => {
-                chars.next();
-                out.push((std::mem::take(&mut cur), style(bold, code)));
-                bold = !bold;
-            }
-            '[' if !code => {
-                // [text](url) -> text
-                let rest: String = chars.clone().collect();
-                if let Some(close) = rest.find("](")
-                    && let Some(end) = rest[close..].find(')') {
-                        cur.push_str(&rest[..close]);
-                        for _ in 0..rest[..close + end + 1].chars().count() {
-                            chars.next();
-                        }
-                        continue;
-                    }
-                cur.push(c);
-            }
-            _ => cur.push(c),
-        }
-    }
-    out.push((cur, style(bold, code)));
-    out.retain(|(t, _)| !t.is_empty());
-    out
-}
-
-/// Word-wrap styled segments. The first line may be narrower than the rest
-/// (it shares its row with a right-aligned column).
-fn wrap_spans(segs: &[(String, Style)], first: usize, rest: usize) -> Vec<Vec<Span<'static>>> {
-    wrap_segments(segs, first, rest, false)
-}
-
-/// Like `wrap_spans`, but each segment ("idle 3m", "outside tmux") moves to
-/// the next line whole rather than breaking inside, when it can fit on one.
-fn wrap_chips(segs: &[(String, Style)], first: usize, rest: usize) -> Vec<Vec<Span<'static>>> {
-    wrap_segments(segs, first, rest, true)
-}
-
-fn wrap_segments(segs: &[(String, Style)], first: usize, rest: usize, atomic: bool) -> Vec<Vec<Span<'static>>> {
-    let mut out: Vec<Vec<Span<'static>>> = vec![Vec::new()];
-    let mut used = 0usize;
-    let width = |n: usize| if n == 0 { first.max(8) } else { rest.max(8) };
-    for (text, style) in segs {
-        // Split into words, keeping each word's leading spaces with it.
-        let mut words: Vec<String> = Vec::new();
-        let mut cur = String::new();
-        let whole = atomic && text.width() <= first.min(rest).max(8);
-        for ch in text.chars() {
-            if whole {
-                cur.push(ch);
-                continue;
-            }
-            if ch == ' ' && !cur.is_empty() && !cur.ends_with(' ') {
-                words.push(std::mem::take(&mut cur));
-            }
-            cur.push(ch);
-        }
-        if !cur.is_empty() {
-            words.push(cur);
-        }
-        for word in words {
-            let wlen = word.width();
-            let limit = width(out.len() - 1);
-            let word = if used > 0 && used + wlen > limit {
-                out.push(Vec::new());
-                used = 0;
-                word.trim_start().to_string()
-            } else {
-                word
-            };
-            let mut word = word;
-            // Words longer than a whole line are split.
-            while word.width() > width(out.len() - 1) - used {
-                let room = width(out.len() - 1) - used;
-                let (head, tail) = split_at_width(&word, room);
-                if head.is_empty() {
-                    break;
-                }
-                out.last_mut().unwrap().push(Span::styled(head, *style));
-                out.push(Vec::new());
-                used = 0;
-                word = tail;
-            }
-            used += word.width();
-            out.last_mut().unwrap().push(Span::styled(word, *style));
-        }
-    }
-    // A line break replaces a separator: never end on " ·" or start on spaces.
-    for l in out.iter_mut() {
-        while l.last().is_some_and(|s| matches!(s.content.trim(), "" | "·")) {
-            l.pop();
-        }
-    }
-    for l in out.iter_mut().skip(1) {
-        while l.first().is_some_and(|s| matches!(s.content.trim(), "" | "·")) {
-            l.remove(0);
-        }
-        if let Some(first) = l.first_mut() {
-            let t = first.content.trim_start().to_string();
-            first.content = t.into();
-        }
-    }
-    out.retain(|l| !l.is_empty());
-    if out.is_empty() {
-        out.push(Vec::new());
-    }
-    out
-}
-
-fn split_at_width(s: &str, w: usize) -> (String, String) {
-    let mut acc = 0;
-    for (i, ch) in s.char_indices() {
-        let cw = ch.width().unwrap_or(0);
-        if acc + cw > w {
-            return (s[..i].to_string(), s[i..].to_string());
-        }
-        acc += cw;
-    }
-    (s.to_string(), String::new())
-}
-
-/// Reflow a captured terminal line to a narrower width, the way a narrower
-/// terminal would. Horizontal rules are clipped rather than wrapped.
-fn reflow(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
-    let width = width.max(8);
-    let mut spans = line.spans;
-    while spans.last().is_some_and(|s| s.content.trim_end().is_empty()) {
-        spans.pop();
-    }
-    if let Some(last) = spans.last_mut() {
-        let t = last.content.trim_end().to_string();
-        last.content = t.into();
-    }
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    if text.width() <= width {
-        return vec![Line::from(spans)];
-    }
-    // Left and right-aligned parts (status bars, hints): close the gap
-    // between them instead of wrapping, if that's enough to fit.
-    if let Some(squeezed) = squeeze_gap(&spans, text.width() - width) {
-        return vec![Line::from(squeezed)];
-    }
-    let is_rule = |c: char| matches!(c, '─' | '━' | '═' | '-' | '╌' | '┄');
-    let rule = text.trim().chars().all(is_rule);
-    let cells: Vec<(char, Style)> = spans.iter().flat_map(|s| s.content.chars().map(move |c| (c, s.style))).collect();
-    let clip = |cells: &[(char, Style)], width: usize| -> Vec<(char, Style)> {
-        let mut w = 0;
-        cells
-            .iter()
-            .copied()
-            .take_while(|(c, _)| {
-                w += c.width().unwrap_or(0);
-                w <= width
-            })
-            .collect()
-    };
-    if rule {
-        return vec![Line::from(regroup(&clip(&cells, width)))];
-    }
-    // A box (a dialog, a prompt frame) is drawn narrower, as a narrower
-    // terminal would: its borders clipped to fit, its text wrapped inside.
-    let lead = text.chars().take_while(|c| *c == ' ').count();
-    let body = &cells[lead..];
-    if let (Some(&(open, os)), Some(&(close, cs))) = (body.first(), body.last())
-        && body.len() > 2
-        && "╭╰┌└├╔╚│┃║".contains(open)
-        && "╮╯┐┘┤╗╝│┃║".contains(close)
-        && width > lead + 6
-    {
-        let inner = &body[1..body.len() - 1];
-        if inner.iter().all(|(c, _)| is_rule(*c)) {
-            let mut kept = cells[..lead].to_vec();
-            kept.push((open, os));
-            kept.extend(clip(inner, width - lead - 2));
-            kept.push((close, cs));
-            return vec![Line::from(regroup(&kept))];
-        }
-        if matches!(open, '│' | '┃' | '║') && open == close {
-            let room = width - lead - 4;
-            let words = Line::from(regroup(inner.strip_prefix(&[(' ', inner[0].1)][..]).unwrap_or(inner)));
-            return reflow(words, room)
-                .into_iter()
-                .map(|l| {
-                    let pad = room.saturating_sub(l.width());
-                    let mut v = vec![Span::raw(" ".repeat(lead)), Span::styled(format!("{open} "), os)];
-                    v.extend(l.spans);
-                    v.push(Span::raw(" ".repeat(pad)));
-                    v.push(Span::styled(format!(" {close}"), cs));
-                    Line::from(v)
-                })
-                .collect();
-        }
-    }
-    // Continuation lines hang under the text, past any indent and bullet.
-    let bullet = text.trim_start().chars().next().is_some_and(|c| "●○◐◆⎿∗✻*-·•›❯⏺".contains(c))
-        && text.trim_start().chars().nth(1) == Some(' ');
-    let hang = (lead + if bullet { 2 } else { 0 }).min(width / 3);
-    let mut out: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut start = 0;
-    while start < cells.len() {
-        let room = if out.is_empty() { width } else { width - hang };
-        let (mut end, mut used) = (start, 0);
-        while end < cells.len() {
-            let cw = cells[end].0.width().unwrap_or(0);
-            if used + cw > room {
-                break;
-            }
-            used += cw;
-            end += 1;
-        }
-        let mut next = end;
-        if end < cells.len() {
-            // Break at the last space that keeps a reasonable line length.
-            if let Some(b) = (start..=end).rev().find(|&i| cells[i].0 == ' ').filter(|&b| b > start + (end - start) / 3) {
-                end = b;
-                next = b + 1;
-            }
-        }
-        if end == start {
-            end = start + 1;
-            next = end;
-        }
-        let mut line = if out.is_empty() { Vec::new() } else { vec![Span::raw(" ".repeat(hang))] };
-        line.extend(regroup(&cells[start..end]));
-        out.push(line);
-        start = next;
-        while !out.is_empty() && start < cells.len() && cells[start].0 == ' ' && end != start {
-            start += 1;
-        }
-    }
-    out.into_iter().map(Line::from).collect()
-}
-
-/// Runs of same-styled characters back into spans.
-fn regroup(cells: &[(char, Style)]) -> Vec<Span<'static>> {
-    let mut out: Vec<Span<'static>> = Vec::new();
-    let mut cur = String::new();
-    let mut style = None;
-    for &(c, st) in cells {
-        if style != Some(st) && !cur.is_empty() {
-            out.push(Span::styled(std::mem::take(&mut cur), style.unwrap_or_default()));
-        }
-        style = Some(st);
-        cur.push(c);
-    }
-    if !cur.is_empty() {
-        out.push(Span::styled(cur, style.unwrap_or_default()));
-    }
-    out
-}
-
-/// A path as wrap segments that break after each "/", never inside a name.
-fn path_segments(path: &str, style: Style) -> Vec<(String, Style)> {
-    let mut out: Vec<(String, Style)> = Vec::new();
-    for part in path.split_inclusive('/') {
-        out.push((part.to_string(), style));
-    }
-    out
-}
-
-/// A list-sized path: first and last parts of a deep path. The preview shows
-/// it in full.
-fn short_place(place: &str) -> String {
-    let parts: Vec<&str> = place.split('/').collect();
-    if parts.len() <= 3 || place.chars().count() <= 32 {
-        return place.to_string();
-    }
-    let first = if parts[0].is_empty() { format!("/{}", parts[1]) } else { parts[0].to_string() };
-    format!("{first}/…/{}", parts[parts.len() - 1])
-}
-
-/// Remove `excess` columns from the widest run of spaces inside a line,
-/// keeping at least two. None if the line has no gap that wide.
-fn squeeze_gap(spans: &[Span<'static>], excess: usize) -> Option<Vec<Span<'static>>> {
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    let (mut best, mut run_start, mut run) = ((0usize, 0usize), 0usize, 0usize);
-    for (i, ch) in text.char_indices() {
-        if ch == ' ' {
-            if run == 0 {
-                run_start = i;
-            }
-            run += 1;
-            if run > best.1 {
-                best = (run_start, run);
-            }
-        } else {
-            run = 0;
-        }
-    }
-    let (start, len) = best;
-    if len < excess + 2 {
-        return None;
-    }
-    // Cut `excess` spaces from the byte range [start, start + excess).
-    let (cut_from, cut_to) = (start, start + excess);
-    let mut out = Vec::new();
-    let mut at = 0usize;
-    for sp in spans {
-        let c = sp.content.as_ref();
-        let (s0, s1) = (at, at + c.len());
-        at = s1;
-        let (a, b) = (cut_from.clamp(s0, s1) - s0, cut_to.clamp(s0, s1) - s0);
-        let kept = format!("{}{}", &c[..a], &c[b..]);
-        if !kept.is_empty() {
-            out.push(Span::styled(kept, sp.style));
-        }
-    }
-    Some(out)
-}
-
 /// Running sessions plus pinned conversations that aren't running.
 fn load_all(cfg: &Config) -> Vec<Session> {
     let mut all = registry::load(cfg);
@@ -3278,8 +3760,8 @@ fn watch(cfg: &Config, tx: Sender<()>) -> Option<notify::RecommendedWatcher> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn session(pid: i32, title: &str, state: St, account: usize) -> Session {
         let now = now_ms();
@@ -3314,8 +3796,14 @@ mod tests {
     fn cfg() -> Config {
         let mut c = Config::default();
         c.accounts = vec![
-            crate::config::Account { name: "work".into(), config_dir: "/nonexistent/a".into() },
-            crate::config::Account { name: "home".into(), config_dir: "/nonexistent/b".into() },
+            crate::config::Account {
+                name: "work".into(),
+                config_dir: "/nonexistent/a".into(),
+            },
+            crate::config::Account {
+                name: "home".into(),
+                config_dir: "/nonexistent/b".into(),
+            },
         ];
         c
     }
@@ -3325,7 +3813,13 @@ mod tests {
         term.draw(|f| app.draw(f)).unwrap();
         let buf = term.backend().buffer().clone();
         (0..h)
-            .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string())
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -3343,7 +3837,14 @@ mod tests {
         let mut dormant = session(-1, "Rotate Watson MySQL root", St::Idle, 0);
         dormant.dormant = true;
         dormant.pin = Some(0);
-        vec![limited, named, queued, session(4, "Add to list", St::Idle, 1), pinned, dormant]
+        vec![
+            limited,
+            named,
+            queued,
+            session(4, "Add to list", St::Idle, 1),
+            pinned,
+            dormant,
+        ]
     }
 
     /// The buffer as truecolor ANSI, for rendering review screenshots.
@@ -3356,23 +3857,43 @@ mod tests {
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
                 let c = &buf[(x, y)];
-                let bold = if c.modifier.contains(Modifier::BOLD) { "\x1b[1m" } else { "" };
-                out.push_str(&format!("\x1b[0m{}{}{bold}{}", code(c.fg, false), code(c.bg, true), c.symbol()));
+                let bold = if c.modifier.contains(Modifier::BOLD) {
+                    "\x1b[1m"
+                } else {
+                    ""
+                };
+                out.push_str(&format!(
+                    "\x1b[0m{}{}{bold}{}",
+                    code(c.fg, false),
+                    code(c.bg, true),
+                    c.symbol()
+                ));
             }
             out.push_str("\x1b[0m\n");
         }
         out
     }
 
-    fn meter(used: f64, hours: i64, pace: Option<crate::usage::Pace>) -> Option<crate::usage::Meter> {
-        Some(crate::usage::Meter { used, resets_ms: now_ms() + hours * 3_600_000, limited: used >= 100.0, pace })
+    fn meter(
+        used: f64,
+        hours: i64,
+        pace: Option<crate::usage::Pace>,
+    ) -> Option<crate::usage::Meter> {
+        Some(crate::usage::Meter {
+            used,
+            resets_ms: now_ms() + hours * 3_600_000,
+            limited: used >= 100.0,
+            pace,
+        })
     }
 
     /// Writes review renders to $TOOMUX_SHOTS: cargo test shots -- --ignored
     #[test]
     #[ignore]
     fn shots() {
-        let Some(dir) = std::env::var_os("TOOMUX_SHOTS") else { return };
+        let Some(dir) = std::env::var_os("TOOMUX_SHOTS") else {
+            return;
+        };
         let dir = std::path::PathBuf::from(dir);
         let now = now_ms();
         let usage = || {
@@ -3402,7 +3923,11 @@ mod tests {
             setup(&mut app);
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| app.draw(f)).unwrap();
-            std::fs::write(dir.join(format!("{name}.ansi")), ansi(term.backend().buffer())).unwrap();
+            std::fs::write(
+                dir.join(format!("{name}.ansi")),
+                ansi(term.backend().buffer()),
+            )
+            .unwrap();
         };
         shoot("usage", 170, 44, &|a| a.usage_view = Some(0));
         shoot("menu", 170, 44, &|a| {
@@ -3423,7 +3948,9 @@ mod tests {
             }
         });
         shoot("sidebar", 36, 48, &|a| a.sidebar = true);
-        shoot("voyage", 170, 44, &|a| sail(a, "Oli & Studio", "hard", 58, 0));
+        shoot("voyage", 170, 44, &|a| {
+            sail(a, "Oli & Studio", "hard", 58, 0)
+        });
         shoot("sidebar-voyage", 36, 48, &|a| {
             a.sidebar = true;
             sail(a, "Oli & Studio", "relentless", 74, 1);
@@ -3439,13 +3966,28 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         let out = render(&mut app, 230, 30);
         assert!(out.contains("needs you  1"), "{out}");
-        assert!(!out.contains("needs you  1 ─"), "sections are separated by space, not rules:\n{out}");
+        assert!(
+            !out.contains("needs you  1 ─"),
+            "sections are separated by space, not rules:\n{out}"
+        );
         assert!(out.contains("Northwind cloud AWS cost optimization"));
-        assert!(out.contains("limit · back"), "a limit reads as its word and when it lifts:\n{out}");
+        assert!(
+            out.contains("limit · back"),
+            "a limit reads as its word and when it lifts:\n{out}"
+        );
         assert!(out.contains("moves to home"));
-        assert!(!out.contains("outside tmux") && !out.contains("northwind-studio#536"), "particulars live on the band, not the list:\n{out}");
-        assert!(!out.contains("handle-"), "registry handles must not leak into the list:\n{out}");
-        assert!(out.contains("3 ○ Resume session with Opus 5.5"), "pin slot shows in the gutter:\n{out}");
+        assert!(
+            !out.contains("outside tmux") && !out.contains("northwind-studio#536"),
+            "particulars live on the band, not the list:\n{out}"
+        );
+        assert!(
+            !out.contains("handle-"),
+            "registry handles must not leak into the list:\n{out}"
+        );
+        assert!(
+            out.contains("3 ○ Resume session with Opus 5.5"),
+            "pin slot shows in the gutter:\n{out}"
+        );
         assert!(out.contains("pinned · not running"));
         assert!(out.contains("1 ○ Rotate Watson MySQL root"));
     }
@@ -3456,48 +3998,99 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
         let buf = term.backend().buffer().clone();
-        let row = |y: u16| (0..200).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
-        let y = (0..30).find(|&y| row(y).contains("Oli & Studio")).expect("listed");
-        assert!(row(y + 1).trim_start().starts_with("working · work"), "{}", row(y + 1));
-        assert!(!row(y + 2).contains("/nonexistent"), "no third line: {}", row(y + 2));
+        let row = |y: u16| {
+            (0..200)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        let y = (0..30)
+            .find(|&y| row(y).contains("Oli & Studio"))
+            .expect("listed");
+        assert!(
+            row(y + 1).trim_start().starts_with("working · work"),
+            "{}",
+            row(y + 1)
+        );
+        assert!(
+            !row(y + 2).contains("/nonexistent"),
+            "no third line: {}",
+            row(y + 2)
+        );
         let x = row(y + 1).find("working").unwrap() as u16;
         let word = buf[(x, y + 1)].fg;
         let rest = buf[(x + 10, y + 1)].fg;
         assert_eq!(word, app.pal.working_word);
-        assert_eq!(rest, app.pal.muted, "the account after the word stays neutral");
-        assert!(!row(y).contains("OLI runs token efficiency"), "the topic is on the band, not the list");
+        assert_eq!(
+            rest, app.pal.muted,
+            "the account after the word stays neutral"
+        );
+        assert!(
+            !row(y).contains("OLI runs token efficiency"),
+            "the topic is on the band, not the list"
+        );
     }
 
     #[test]
     fn a_limited_session_shows_its_limit_before_a_failed_handover() {
         let mut sessions = sample();
-        let i = sessions.iter().position(|s| s.title == "Oli & Studio").unwrap();
-        sessions[i].handover = Some(crate::handover::Phase::Failed("waiting for the limit to reset".into()));
+        let i = sessions
+            .iter()
+            .position(|s| s.title == "Oli & Studio")
+            .unwrap();
+        sessions[i].handover = Some(crate::handover::Phase::Failed(
+            "waiting for the limit to reset".into(),
+        ));
         sessions[i].limit = Some("You've hit your limit · resets 5pm".into());
         let (word, rest, _) = sessions[i].state_parts(crate::registry::now_ms());
         assert_eq!(word, "limit");
-        assert!(rest.as_deref().is_some_and(|r| r.starts_with("back ") && r.ends_with(" · hands over then")), "{rest:?}");
+        assert!(
+            rest.as_deref()
+                .is_some_and(|r| r.starts_with("back ") && r.ends_with(" · hands over then")),
+            "{rest:?}"
+        );
     }
 
     #[test]
     fn a_failed_handover_says_why_in_the_attention_colour() {
         let mut sessions = sample();
-        let i = sessions.iter().position(|s| s.title == "Oli & Studio").unwrap();
-        sessions[i].handover = Some(crate::handover::Phase::Failed("your prompt had text".into()));
+        let i = sessions
+            .iter()
+            .position(|s| s.title == "Oli & Studio")
+            .unwrap();
+        sessions[i].handover = Some(crate::handover::Phase::Failed(
+            "your prompt had text".into(),
+        ));
         let mut app = App::with(cfg(), sessions);
         let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
         let buf = term.backend().buffer().clone();
-        let row = |y: u16| (0..200).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
-        let y = (0..30).find(|&y| row(y).contains("Oli & Studio")).expect("listed");
-        assert!(row(y + 1).trim_start().starts_with("handover failed · your prompt had text"), "{}", row(y + 1));
+        let row = |y: u16| {
+            (0..200)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        let y = (0..30)
+            .find(|&y| row(y).contains("Oli & Studio"))
+            .expect("listed");
+        assert!(
+            row(y + 1)
+                .trim_start()
+                .starts_with("handover failed · your prompt had text"),
+            "{}",
+            row(y + 1)
+        );
         let x = row(y + 1).find("handover").unwrap() as u16;
         assert_eq!(buf[(x, y + 1)].fg, app.pal.attention_word);
     }
 
     /// Puts a voyage on the session titled `title`, and selects it.
     fn sail(app: &mut App, title: &str, tier: &str, progress: u8, laps: u32) {
-        let s = app.sessions.iter().find(|s| s.title == title).unwrap().clone();
+        let s = app
+            .sessions
+            .iter()
+            .find(|s| s.title == title)
+            .unwrap()
+            .clone();
         let q: crate::voyage::Voyage = serde_json::from_value(serde_json::json!({
             "id": "ab12cd34", "outcome": "the studio build passes, with every page rendering", "cwd": "/w", "sessions": [s.id],
             "started_ms": crate::registry::now_ms() - 80 * 60_000, "status": "active", "persistence": tier,
@@ -3511,8 +4104,19 @@ mod tests {
 
     /// How many rows hold a scene: rows of sextant blocks.
     fn scene_rows(buf: &ratatui::buffer::Buffer) -> usize {
-        let sextant = |s: &str| s.chars().next().is_some_and(|c| ('\u{1FB00}'..='\u{1FB3B}').contains(&c));
-        (0..buf.area.height).filter(|&y| (0..buf.area.width).filter(|&x| sextant(buf[(x, y)].symbol())).count() > 10).count()
+        let sextant = |s: &str| {
+            s.chars()
+                .next()
+                .is_some_and(|c| ('\u{1FB00}'..='\u{1FB3B}').contains(&c))
+        };
+        (0..buf.area.height)
+            .filter(|&y| {
+                (0..buf.area.width)
+                    .filter(|&x| sextant(buf[(x, y)].symbol()))
+                    .count()
+                    > 10
+            })
+            .count()
     }
 
     #[test]
@@ -3520,28 +4124,51 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         sail(&mut app, "Oli & Studio", "hard", 58, 0);
         let out = render(&mut app, 170, 44);
-        assert!(out.contains("◎ hard voyage 1h 20m · about 58% there, by the judge · $3.20 of $20"), "{out}");
-        assert!(out.contains("last check: the gallery page still 404s"), "{out}");
+        assert!(
+            out.contains("◎ hard voyage 1h 20m · about 58% there, by the judge · $3.20 of $20"),
+            "{out}"
+        );
+        assert!(
+            out.contains("last check: the gallery page still 404s"),
+            "{out}"
+        );
         let mut term = Terminal::new(TestBackend::new(170, 44)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
-        assert!(scene_rows(term.backend().buffer()) >= crate::scene::ROWS, "the full scene in the detail pane");
+        assert!(
+            scene_rows(term.backend().buffer()) >= crate::scene::ROWS,
+            "the full scene in the detail pane"
+        );
 
         let mut app = App::with(cfg(), sample());
         app.sidebar = true;
         sail(&mut app, "Oli & Studio", "relentless", 74, 1);
         let out = render(&mut app, 36, 48);
-        assert!(out.contains("◎ relentless voyage,") && out.contains("proof lap 1 of 2"), "{out}");
-        assert!(out.contains("74% there"), "the judge's estimate stands in for the ship: {out}");
+        assert!(
+            out.contains("◎ relentless voyage,") && out.contains("proof lap 1 of 2"),
+            "{out}"
+        );
+        assert!(
+            out.contains("74% there"),
+            "the judge's estimate stands in for the ship: {out}"
+        );
         let mut term = Terminal::new(TestBackend::new(36, 48)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
-        assert_eq!(scene_rows(term.backend().buffer()), 0, "no scene in the sidebar");
+        assert_eq!(
+            scene_rows(term.backend().buffer()),
+            0,
+            "no scene in the sidebar"
+        );
 
         let mut app = App::with(cfg(), sample());
         app.cfg.voyage_scene = false;
         sail(&mut app, "Oli & Studio", "hard", 58, 0);
         let mut term = Terminal::new(TestBackend::new(170, 44)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
-        assert_eq!(scene_rows(term.backend().buffer()), 0, "voyage_scene = false keeps it to the chip");
+        assert_eq!(
+            scene_rows(term.backend().buffer()),
+            0,
+            "voyage_scene = false keeps it to the chip"
+        );
     }
 
     #[test]
@@ -3559,11 +4186,26 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(70, 30)).unwrap();
         term.draw(|f| app.draw(f)).unwrap();
         let buf = term.backend().buffer().clone();
-        let row = |y: u16| (0..70).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
-        let y = (0..30).find(|&y| row(y).contains("Oli & Studio")).expect("listed");
-        let detail = (y + 1..y + 3).map(row).find(|r| r.contains('◎')).unwrap_or_else(|| panic!("{}\n{}", row(y + 1), row(y + 2)));
+        let row = |y: u16| {
+            (0..70)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        let y = (0..30)
+            .find(|&y| row(y).contains("Oli & Studio"))
+            .expect("listed");
+        let detail = (y + 1..y + 3)
+            .map(row)
+            .find(|r| r.contains('◎'))
+            .unwrap_or_else(|| panic!("{}\n{}", row(y + 1), row(y + 2)));
         assert!(detail.contains("◎ steady voyage 1h 20m"), "{detail}");
-        let (x, yy) = (detail.find('◎').map(|b| detail[..b].chars().count()).unwrap() as u16, (y + 1..y + 3).find(|&r| row(r).contains('◎')).unwrap());
+        let (x, yy) = (
+            detail
+                .find('◎')
+                .map(|b| detail[..b].chars().count())
+                .unwrap() as u16,
+            (y + 1..y + 3).find(|&r| row(r).contains('◎')).unwrap(),
+        );
         assert_eq!(buf[(x, yy)].fg, app.pal.accent);
     }
 
@@ -3604,15 +4246,30 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         let wide = render(&mut app, 200, 20);
         let foot = wide.lines().last().unwrap();
-        assert!(foot.contains("enter jump") && foot.contains("^a move") && foot.contains("? keys") && foot.contains("esc quit"), "{foot}");
-        assert!(!foot.contains("rename") && !foot.contains("sweep") && !foot.contains("tab group"), "the rest is under ?: {foot}");
+        assert!(
+            foot.contains("enter jump")
+                && foot.contains("^a move")
+                && foot.contains("? keys")
+                && foot.contains("esc quit"),
+            "{foot}"
+        );
+        assert!(
+            !foot.contains("rename") && !foot.contains("sweep") && !foot.contains("tab group"),
+            "the rest is under ?: {foot}"
+        );
         let narrow = render(&mut app, 40, 20);
         let foot = narrow.lines().last().unwrap();
-        assert!(foot.contains("enter jump") && foot.contains("esc quit"), "{foot}");
+        assert!(
+            foot.contains("enter jump") && foot.contains("esc quit"),
+            "{foot}"
+        );
         app.sel = Some(-1);
         let out = render(&mut app, 200, 20);
         let foot = out.lines().last().unwrap();
-        assert!(foot.contains("enter reopen") && !foot.contains("^a"), "{foot}");
+        assert!(
+            foot.contains("enter reopen") && !foot.contains("^a"),
+            "{foot}"
+        );
     }
 
     #[test]
@@ -3620,13 +4277,21 @@ mod tests {
         for sidebar in [false, true] {
             let mut app = App::with(cfg(), sample());
             app.sidebar = sidebar;
-            let mut term = Terminal::new(TestBackend::new(if sidebar { 36 } else { 160 }, 30)).unwrap();
+            let mut term =
+                Terminal::new(TestBackend::new(if sidebar { 36 } else { 160 }, 30)).unwrap();
             term.draw(|f| app.draw(f)).unwrap();
             let buf = term.backend().buffer().clone();
             let sel_bg = app.pal.selection;
             let rows: Vec<u16> = (0..30).filter(|&y| buf[(2, y)].bg == sel_bg).collect();
-            assert!(rows.len() >= 2, "sidebar={sidebar}: highlighted rows {rows:?}");
-            assert_eq!(rows.last().unwrap() - rows[0] + 1, rows.len() as u16, "contiguous");
+            assert!(
+                rows.len() >= 2,
+                "sidebar={sidebar}: highlighted rows {rows:?}"
+            );
+            assert_eq!(
+                rows.last().unwrap() - rows[0] + 1,
+                rows.len() as u16,
+                "contiguous"
+            );
         }
     }
 
@@ -3635,10 +4300,16 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         app.sidebar = true;
         let out = render(&mut app, 36, 40);
-        assert!(!out.contains("outside tmux") && !out.contains("esc quit"), "{out}");
+        assert!(
+            !out.contains("outside tmux") && !out.contains("esc quit"),
+            "{out}"
+        );
         assert!(out.lines().all(|l| l.chars().count() <= 36));
         assert!(out.contains("Northwind cloud AWS cost"));
-        assert!(out.contains("type to filter"), "the list carries its own filter line:\n{out}");
+        assert!(
+            out.contains("type to filter"),
+            "the list carries its own filter line:\n{out}"
+        );
     }
 
     #[test]
@@ -3652,10 +4323,24 @@ mod tests {
         let out = render(&mut app, 36, 40);
         let lines: Vec<&str> = out.lines().collect();
         let i = lines.iter().position(|l| l.contains("Fork agent")).unwrap();
-        assert!(lines[i + 1].contains("needs you · home"), "account kept, the generic detail gave way: {}", lines[i + 1]);
-        assert!(!lines[i + 2].trim().starts_with("home"), "no third line: {}", lines[i + 2]);
-        let j = lines.iter().position(|l| l.contains("Northwind cloud AWS")).unwrap();
-        assert!(lines[j..j + 3].iter().any(|l| l.contains("limit · back")), "a limit keeps when it lifts:\n{out}");
+        assert!(
+            lines[i + 1].contains("needs you · home"),
+            "account kept, the generic detail gave way: {}",
+            lines[i + 1]
+        );
+        assert!(
+            !lines[i + 2].trim().starts_with("home"),
+            "no third line: {}",
+            lines[i + 2]
+        );
+        let j = lines
+            .iter()
+            .position(|l| l.contains("Northwind cloud AWS"))
+            .unwrap();
+        assert!(
+            lines[j..j + 3].iter().any(|l| l.contains("limit · back")),
+            "a limit keeps when it lifts:\n{out}"
+        );
     }
 
     #[test]
@@ -3663,7 +4348,13 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         app.exec(Cmd::Rename);
         let out = render(&mut app, 160, 20);
-        assert!(out.lines().last().unwrap().contains("name  Northwind cloud AWS cost optimization▏"), "{out}");
+        assert!(
+            out.lines()
+                .last()
+                .unwrap()
+                .contains("name  Northwind cloud AWS cost optimization▏"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -3677,7 +4368,10 @@ mod tests {
         app.exec(Cmd::Account);
         let out = render(&mut app, 200, 20);
         let foot = out.lines().last().unwrap();
-        assert!(foot.contains("enter this one") && foot.contains("a all 2 limited"), "{foot}");
+        assert!(
+            foot.contains("enter this one") && foot.contains("a all 2 limited"),
+            "{foot}"
+        );
     }
 
     #[test]
@@ -3690,11 +4384,17 @@ mod tests {
         app.exec(Cmd::Sweep);
         let out = render(&mut app, 200, 20);
         assert!(out.contains("✕ Mouse button workspace navigation"), "{out}");
-        assert!(!out.contains("Oli & Studio"), "working sessions are never swept:\n{out}");
+        assert!(
+            !out.contains("Oli & Studio"),
+            "working sessions are never swept:\n{out}"
+        );
         assert!(out.contains("sweep · closing 1 of 1"));
         app.exec(Cmd::Toggle);
         let out = render(&mut app, 200, 20);
-        assert!(out.lines().last().unwrap().contains("enter close 0"), "{out}");
+        assert!(
+            out.lines().last().unwrap().contains("enter close 0"),
+            "{out}"
+        );
         app.exec(Cmd::No);
         assert!(render(&mut app, 200, 50).contains("Oli & Studio"));
     }
@@ -3704,7 +4404,10 @@ mod tests {
         let mut app = App::with(cfg(), sample());
         app.exec(Cmd::Close);
         let out = render(&mut app, 160, 20);
-        assert!(out.contains("close Northwind cloud AWS cost optimization?"), "{out}");
+        assert!(
+            out.contains("close Northwind cloud AWS cost optimization?"),
+            "{out}"
+        );
         assert!(out.contains("enter yes"));
     }
 
@@ -3715,7 +4418,11 @@ mod tests {
     #[test]
     fn wrap_drops_separators_at_breaks() {
         let st = Style::new();
-        let segs = [("idle 3m".to_string(), st), (" · ".to_string(), st), ("tasks running".to_string(), st)];
+        let segs = [
+            ("idle 3m".to_string(), st),
+            (" · ".to_string(), st),
+            ("tasks running".to_string(), st),
+        ];
         let lines = wrap_spans(&segs, 10, 10);
         let got: Vec<String> = lines.iter().map(|l| text(l)).collect();
         assert_eq!(got, vec!["idle 3m", "tasks", "running"]);
@@ -3734,7 +4441,10 @@ mod tests {
         let out = reflow(status, 30);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].width(), 30);
-        assert!(text(&out[0].spans).starts_with("left part ") && text(&out[0].spans).ends_with(" right part"));
+        assert!(
+            text(&out[0].spans).starts_with("left part ")
+                && text(&out[0].spans).ends_with(" right part")
+        );
 
         let rule = Line::from("─".repeat(200));
         let out = reflow(rule, 30);
@@ -3750,11 +4460,21 @@ mod tests {
         let out = reflow(top, 30);
         assert_eq!(out.len(), 1);
         assert_eq!(text(&out[0].spans), format!("╭{}╮", "─".repeat(28)));
-        let side = Line::from(format!("│ Do you want to make this edit to invoice.rs?{} │", " ".repeat(33)));
+        let side = Line::from(format!(
+            "│ Do you want to make this edit to invoice.rs?{} │",
+            " ".repeat(33)
+        ));
         let out: Vec<String> = reflow(side, 30).iter().map(|l| text(&l.spans)).collect();
         assert!(out.len() > 1, "{out:?}");
-        assert!(out.iter().all(|l| l.starts_with("│ ") && l.ends_with(" │") && l.width() == 30), "{out:?}");
-        assert!(out[0].contains("Do you want") && out[1].contains("invoice.rs?"), "{out:?}");
+        assert!(
+            out.iter()
+                .all(|l| l.starts_with("│ ") && l.ends_with(" │") && l.width() == 30),
+            "{out:?}"
+        );
+        assert!(
+            out[0].contains("Do you want") && out[1].contains("invoice.rs?"),
+            "{out:?}"
+        );
     }
 
     fn with_usage() -> App {
@@ -3767,7 +4487,12 @@ mod tests {
                 source: Some(crate::usage::Source::Live),
                 ..Default::default()
             },
-            crate::usage::Usage { week: meter(100.0, 95, None), at_ms: now_ms(), source: Some(crate::usage::Source::Fetched), ..Default::default() },
+            crate::usage::Usage {
+                week: meter(100.0, 95, None),
+                at_ms: now_ms(),
+                source: Some(crate::usage::Source::Fetched),
+                ..Default::default()
+            },
         ];
         app
     }
@@ -3777,17 +4502,39 @@ mod tests {
         let mut app = with_usage();
         // A limit that just hit is news: rose, with its bar.
         let fresh = render(&mut app, 200, 20);
-        assert!(fresh.lines().next().unwrap().contains("home  wk ━━━━━━━━━━ limit · back"), "{fresh}");
+        assert!(
+            fresh
+                .lines()
+                .next()
+                .unwrap()
+                .contains("home  wk ━━━━━━━━━━ limit · back"),
+            "{fresh}"
+        );
         // Hours later it's a settled fact.
-        app.sessions.iter_mut().filter(|s| s.limit.is_some()).for_each(|s| s.since_ms = now_ms() - 2 * 3_600_000);
+        app.sessions
+            .iter_mut()
+            .filter(|s| s.limit.is_some())
+            .for_each(|s| s.since_ms = now_ms() - 2 * 3_600_000);
         let wide = render(&mut app, 200, 20);
         let head = wide.lines().next().unwrap();
-        assert!(head.contains("work  5h ━") && head.contains("91%") && head.contains("wk ━"), "{head}");
-        assert!(head.contains("home  wk at limit · back"), "a settled limit is quiet: {head}");
-        assert!(!head.contains("◆") && !head.contains("by attention"), "counts are the list's, the filter is the list's: {head}");
+        assert!(
+            head.contains("work  5h ━") && head.contains("91%") && head.contains("wk ━"),
+            "{head}"
+        );
+        assert!(
+            head.contains("home  wk at limit · back"),
+            "a settled limit is quiet: {head}"
+        );
+        assert!(
+            !head.contains("◆") && !head.contains("by attention"),
+            "counts are the list's, the filter is the list's: {head}"
+        );
         let narrow = render(&mut app, 70, 20);
         let head = narrow.lines().next().unwrap();
-        assert!(head.contains("5h 91%") && head.contains("at limit"), "numbers survive without bars: {head}");
+        assert!(
+            head.contains("5h 91%") && head.contains("at limit"),
+            "numbers survive without bars: {head}"
+        );
     }
 
     #[test]
@@ -3802,22 +4549,42 @@ mod tests {
         app.usage_view = None;
         app.sel = Some(1);
         let out = render(&mut app, 180, 44);
-        assert!(out.contains("work has room (5h 30% · wk 40%) · ^a moves it"), "limited session points at the account with room:\n{out}");
+        assert!(
+            out.contains("work has room (5h 30% · wk 40%) · ^a moves it"),
+            "limited session points at the account with room:\n{out}"
+        );
         app.exec(Cmd::UsageToggle);
         app.step(1);
-        assert!(app.usage_view.is_none(), "moving through sessions leaves the usage view");
+        assert!(
+            app.usage_view.is_none(),
+            "moving through sessions leaves the usage view"
+        );
     }
 
     #[test]
     fn right_click_offers_the_session_actions() {
         let mut app = App::with(cfg(), sample());
         render(&mut app, 160, 30);
-        let (r, pid) = app.list_hits.iter().find(|(_, p)| *p == 2).copied().unwrap();
+        let (r, pid) = app
+            .list_hits
+            .iter()
+            .find(|(_, p)| *p == 2)
+            .copied()
+            .unwrap();
         app.menu_at(r.x + 3, r.y);
         let out = render(&mut app, 160, 30);
-        assert!(out.contains("jump to it") && out.contains("move to home") && out.contains("^x"), "{out}");
-        let Mode::Menu(m) = &app.mode else { panic!("menu should be open") };
-        let pin = m.items.iter().position(|(_, c)| matches!(c, Cmd::Pin)).unwrap();
+        assert!(
+            out.contains("jump to it") && out.contains("move to home") && out.contains("^x"),
+            "{out}"
+        );
+        let Mode::Menu(m) = &app.mode else {
+            panic!("menu should be open")
+        };
+        let pin = m
+            .items
+            .iter()
+            .position(|(_, c)| matches!(c, Cmd::Pin))
+            .unwrap();
         assert_eq!(m.pid, pid);
         let _ = pin; // executing would write real pin state; the mapping is what matters here
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -3829,9 +4596,20 @@ mod tests {
         let line = Line::from("● Agent terminated early due to an API error while working on it");
         let out: Vec<String> = reflow(line, 24).iter().map(|l| text(&l.spans)).collect();
         assert_eq!(out[0], "● Agent terminated early");
-        assert!(out[1..].iter().all(|l| l.starts_with("  ") && !l.starts_with("   ")), "{out:?}");
+        assert!(
+            out[1..]
+                .iter()
+                .all(|l| l.starts_with("  ") && !l.starts_with("   ")),
+            "{out:?}"
+        );
         assert!(out.iter().all(|l| l.width() <= 24));
-        assert_eq!(out.join(" ").split_whitespace().collect::<Vec<_>>().join(" "), "● Agent terminated early due to an API error while working on it");
+        assert_eq!(
+            out.join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            "● Agent terminated early due to an API error while working on it"
+        );
     }
 
     #[test]
@@ -3840,7 +4618,11 @@ mod tests {
             let Color::Rgb(r, g, b) = c else { panic!() };
             let f = |x: u8| {
                 let x = x as f64 / 255.0;
-                if x <= 0.03928 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+                if x <= 0.03928 {
+                    x / 12.92
+                } else {
+                    ((x + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
         }
@@ -3849,22 +4631,40 @@ mod tests {
             (x.max(y) + 0.05) / (x.min(y) + 0.05)
         };
         let p = Palette::new(&cfg());
-        for (name, ground) in [("base", p.base), ("raised", p.raised), ("well", p.well), ("overlay", p.overlay), ("selection", p.selection)] {
+        for (name, ground) in [
+            ("base", p.base),
+            ("raised", p.raised),
+            ("well", p.well),
+            ("overlay", p.overlay),
+            ("selection", p.selection),
+        ] {
             assert!(ratio(p.text, ground) >= 7.0, "text on {name}");
             assert!(ratio(p.dim, ground) >= 4.5, "dim on {name}");
             assert!(ratio(p.muted, ground) >= 3.0, "muted on {name}");
-            for (s, c) in [("accent", p.accent), ("working", p.working), ("attention", p.attention), ("finished", p.finished)] {
+            for (s, c) in [
+                ("accent", p.accent),
+                ("working", p.working),
+                ("attention", p.attention),
+                ("finished", p.finished),
+            ] {
                 assert!(ratio(c, ground) >= 4.5, "{s} on {name}");
             }
         }
-        assert!(ratio(p.muted, p.base) >= 4.0, "tertiary words stay readable on the list");
+        assert!(
+            ratio(p.muted, p.base) >= 4.0,
+            "tertiary words stay readable on the list"
+        );
     }
 
     #[test]
     fn markdown_tables_align() {
         let p = Palette::new(&cfg());
-        let md = "| Check | Result |\n|---|---|\n| Full suite | 5,008 / 5,008 |\n| Fuzz | 2 failing |";
-        let lines: Vec<String> = markdown(md, 80, &p).iter().map(|l| text(&l.spans)).collect();
+        let md =
+            "| Check | Result |\n|---|---|\n| Full suite | 5,008 / 5,008 |\n| Fuzz | 2 failing |";
+        let lines: Vec<String> = markdown(md, 80, &p)
+            .iter()
+            .map(|l| text(&l.spans))
+            .collect();
         assert_eq!(lines[0], "Check      │ Result");
         assert!(lines[1].starts_with("───"));
         assert_eq!(lines[2], "Full suite │ 5,008 / 5,008");

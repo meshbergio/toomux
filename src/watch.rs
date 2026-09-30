@@ -48,7 +48,10 @@ pub fn dir() -> PathBuf {
 }
 
 fn load() -> Book {
-    std::fs::read_to_string(dir().join("watch.json")).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+    std::fs::read_to_string(dir().join("watch.json"))
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default()
 }
 
 /// Current notices, for the UI.
@@ -73,11 +76,9 @@ fn visible_panes() -> Vec<String> {
 pub fn update(cfg: &Config, sessions: &[Session], now: i64) -> Vec<Notice> {
     let _ = std::fs::create_dir_all(dir());
     // Several status lines can run at once (one per tmux client); serialise.
-    let lock = std::fs::OpenOptions::new().create(true).append(true).open(dir().join("watch.lock"));
-    let _guard = lock.as_ref().ok().inspect(|f| {
-        use std::os::fd::AsRawFd;
-        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
-    });
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("watch.lock")) else {
+        return Vec::new();
+    };
 
     let mut book = load();
     let first_run = book.seen.is_empty();
@@ -96,7 +97,9 @@ pub fn update(cfg: &Config, sessions: &[Session], now: i64) -> Vec<Notice> {
             let took = p.busy_from.map(|b| now - b).unwrap_or(0);
             let kind = match (p.state, s.state) {
                 (a, State::NeedsYou) if a != State::NeedsYou => Some(Kind::NeedsYou),
-                (State::Working, State::Finished | State::Idle | State::Background) if took >= threshold => {
+                (State::Working, State::Finished | State::Idle | State::Background)
+                    if took >= threshold =>
+                {
                     Some(Kind::Finished)
                 }
                 _ => None,
@@ -104,17 +107,33 @@ pub fn update(cfg: &Config, sessions: &[Session], now: i64) -> Vec<Notice> {
             let on_screen = s.pane.as_ref().is_some_and(|p| visible.contains(&p.id));
             if let Some(kind) = kind.filter(|_| !on_screen && !first_run) {
                 book.notices.retain(|n| n.pid != s.pid);
-                let n = Notice { pid: s.pid, id: s.id.clone(), title: s.title.clone(), kind, took_ms: took, at_ms: now };
+                let n = Notice {
+                    pid: s.pid,
+                    id: s.id.clone(),
+                    title: s.title.clone(),
+                    kind,
+                    took_ms: took,
+                    at_ms: now,
+                };
                 book.notices.push(n.clone());
                 fresh.push(n);
             }
         }
-        book.seen.insert(s.pid, Seen { state: s.state, busy_from });
+        book.seen.insert(
+            s.pid,
+            Seen {
+                state: s.state,
+                busy_from,
+            },
+        );
     }
 
-    book.seen.retain(|pid, _| sessions.iter().any(|s| s.pid == *pid));
+    book.seen
+        .retain(|pid, _| sessions.iter().any(|s| s.pid == *pid));
     book.notices.retain(|n| {
-        let Some(s) = sessions.iter().find(|s| s.pid == n.pid) else { return false };
+        let Some(s) = sessions.iter().find(|s| s.pid == n.pid) else {
+            return false;
+        };
         let on_screen = s.pane.as_ref().is_some_and(|p| visible.contains(&p.id));
         let back_at_work = s.state == State::Working;
         let resolved = n.kind == Kind::NeedsYou && s.state != State::NeedsYou;
@@ -153,11 +172,25 @@ pub fn announce_text(cfg: &Config, msg: &str, kind: &str, title: &str, id: &str)
     for sv in tmux::servers() {
         if let Ok(clients) = tmux::run_on(&sv, &["list-clients", "-F", "#{client_name}"]) {
             for c in clients.lines() {
-                let _ = tmux::run_on(&sv, &["display-message", "-c", c, "-d", "4000", &format!("toomux · {msg}")]);
+                let _ = tmux::run_on(
+                    &sv,
+                    &[
+                        "display-message",
+                        "-c",
+                        c,
+                        "-d",
+                        "4000",
+                        &format!("toomux · {msg}"),
+                    ],
+                );
             }
         }
     }
-    if let Some(cmd) = cfg.notify_command.as_deref().filter(|c| !c.trim().is_empty()) {
+    if let Some(cmd) = cfg
+        .notify_command
+        .as_deref()
+        .filter(|c| !c.trim().is_empty())
+    {
         let spawned = std::process::Command::new("sh")
             .args(["-c", cmd])
             .env("TOOMUX_MESSAGE", msg)
@@ -171,5 +204,39 @@ pub fn announce_text(cfg: &Config, msg: &str, kind: &str, title: &str, id: &str)
         if let Err(e) = spawned {
             let _ = writeln!(std::io::stderr(), "notify_command: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_notice_state_is_ignored() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-watch-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(dir().join("watch.json"), "{broken").unwrap();
+        assert!(notices().is_empty());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn notice_messages_keep_the_session_title() {
+        let n = Notice {
+            pid: 1,
+            id: "s".into(),
+            title: "Deploy".into(),
+            kind: Kind::NeedsYou,
+            took_ms: 0,
+            at_ms: 0,
+        };
+        assert_eq!(message(&n), "Deploy needs you");
+        let mut finished = n;
+        finished.kind = Kind::Finished;
+        finished.took_ms = 90_000;
+        assert_eq!(message(&finished), "Deploy finished after 1m");
     }
 }

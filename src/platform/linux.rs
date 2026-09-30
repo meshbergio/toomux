@@ -26,7 +26,12 @@ pub fn is_zombie(pid: i32) -> bool {
 
 fn nul_split(path: String) -> Vec<String> {
     std::fs::read(path)
-        .map(|b| b.split(|c| *c == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect())
+        .map(|b| {
+            b.split(|c| *c == 0)
+                .filter(|s| !s.is_empty())
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -47,10 +52,17 @@ pub fn stdin(pid: i32) -> Option<PathBuf> {
 
 /// Every process's current folder.
 pub fn folders_in_use() -> Vec<PathBuf> {
-    std::fs::read_dir("/proc").into_iter().flatten().flatten().filter_map(|p| std::fs::read_link(p.path().join("cwd")).ok()).collect()
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|p| std::fs::read_link(p.path().join("cwd")).ok())
+        .collect()
 }
 
 /// Changes at every boot: how toomux tells a restart from a lost tmux server.
 pub fn boot_id() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map(|s| s.trim().to_string()).unwrap_or_default()
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }

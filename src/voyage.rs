@@ -12,10 +12,10 @@
 
 use crate::config::Config;
 use crate::registry::{self, Session, State as St};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::io::{Read, Seek, SeekFrom, Write};
+use serde_json::{Value, json};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,12 @@ deleted, stubs, TODOs, hard-coded or special-cased results, errors or warnings p
 addressed. Say impossible or needs_you only when nothing the agent could do would get round it.";
 
 impl Persistence {
-    pub const ALL: [Persistence; 4] = [Persistence::Light, Persistence::Steady, Persistence::Hard, Persistence::Relentless];
+    pub const ALL: [Persistence; 4] = [
+        Persistence::Light,
+        Persistence::Steady,
+        Persistence::Hard,
+        Persistence::Relentless,
+    ];
 
     pub fn word(self) -> &'static str {
         match self {
@@ -90,15 +95,53 @@ impl Persistence {
     }
 
     pub fn parse(s: &str) -> Option<Persistence> {
-        Persistence::ALL.into_iter().find(|p| p.word() == s.trim().to_lowercase())
+        Persistence::ALL
+            .into_iter()
+            .find(|p| p.word() == s.trim().to_lowercase())
     }
 
     pub fn rules(self) -> Rules {
         match self {
-            Persistence::Light => Rules { idle_turns: 2, failures: 2, judge_rules: LENIENT, proof_laps: 0, review: false, stall_after: None, stall_stop: Some(4), push_backs: 0 },
-            Persistence::Steady => Rules { idle_turns: 4, failures: 3, judge_rules: "", proof_laps: 0, review: false, stall_after: Some(4), stall_stop: Some(8), push_backs: 0 },
-            Persistence::Hard => Rules { idle_turns: 6, failures: 4, judge_rules: STRICT, proof_laps: 1, review: false, stall_after: Some(3), stall_stop: Some(12), push_backs: 1 },
-            Persistence::Relentless => Rules { idle_turns: 8, failures: 5, judge_rules: STRICT, proof_laps: 2, review: true, stall_after: Some(2), stall_stop: Some(20), push_backs: 2 },
+            Persistence::Light => Rules {
+                idle_turns: 2,
+                failures: 2,
+                judge_rules: LENIENT,
+                proof_laps: 0,
+                review: false,
+                stall_after: None,
+                stall_stop: Some(4),
+                push_backs: 0,
+            },
+            Persistence::Steady => Rules {
+                idle_turns: 4,
+                failures: 3,
+                judge_rules: "",
+                proof_laps: 0,
+                review: false,
+                stall_after: Some(4),
+                stall_stop: Some(8),
+                push_backs: 0,
+            },
+            Persistence::Hard => Rules {
+                idle_turns: 6,
+                failures: 4,
+                judge_rules: STRICT,
+                proof_laps: 1,
+                review: false,
+                stall_after: Some(3),
+                stall_stop: Some(12),
+                push_backs: 1,
+            },
+            Persistence::Relentless => Rules {
+                idle_turns: 8,
+                failures: 5,
+                judge_rules: STRICT,
+                proof_laps: 2,
+                review: true,
+                stall_after: Some(2),
+                stall_stop: Some(20),
+                push_backs: 2,
+            },
         }
     }
 
@@ -116,11 +159,15 @@ impl Persistence {
     fn told(self) -> &'static str {
         match self {
             Persistence::Light | Persistence::Steady => "",
-            Persistence::Hard => " Persistence is hard: the judge counts only evidence from these turns, you'll be asked for a proof \
-                lap before it counts as done, and before it stops for the user or gives up you'll be asked to try once more.",
-            Persistence::Relentless => " Persistence is relentless: the judge counts only evidence from these turns, you'll be asked \
+            Persistence::Hard => {
+                " Persistence is hard: the judge counts only evidence from these turns, you'll be asked for a proof \
+                lap before it counts as done, and before it stops for the user or gives up you'll be asked to try once more."
+            }
+            Persistence::Relentless => {
+                " Persistence is relentless: the judge counts only evidence from these turns, you'll be asked \
                 for two proof laps, a sceptical reviewer reads every change since the voyage began before it counts as done, and \
-                before it stops for the user or gives up you'll be asked to try twice more.",
+                before it stops for the user or gives up you'll be asked to try twice more."
+            }
         }
     }
 }
@@ -225,8 +272,15 @@ impl Voyage {
         let tier = self.persistence.word();
         match self.status {
             Status::Active if self.at_limit => format!("{tier} voyage waits for the limit"),
-            Status::Active if self.laps > 0 => format!("{tier} voyage, proof lap {} of {}", self.laps, self.persistence.rules().proof_laps),
-            Status::Active => format!("{tier} voyage {}", registry::duration(now - self.started_ms)),
+            Status::Active if self.laps > 0 => format!(
+                "{tier} voyage, proof lap {} of {}",
+                self.laps,
+                self.persistence.rules().proof_laps
+            ),
+            Status::Active => format!(
+                "{tier} voyage {}",
+                registry::duration(now - self.started_ms)
+            ),
             s => format!("{tier} voyage {}", s.word()),
         }
     }
@@ -240,7 +294,11 @@ impl Voyage {
             _ if self.at_limit => Sea::Anchored,
             _ => Sea::Sailing,
         };
-        crate::scene::Scene { progress: f64::from(self.progress.unwrap_or(0)) / 100.0, sea, frame: (now / 1000) as u64 }
+        crate::scene::Scene {
+            progress: f64::from(self.progress.unwrap_or(0)) / 100.0,
+            sea,
+            frame: (now / 1000) as u64,
+        }
     }
 }
 
@@ -265,7 +323,10 @@ pub fn landed_for(session: &str, now: i64) -> Option<Voyage> {
 
 /// Every voyage met in the last few minutes, for the toomux list.
 pub fn landed(now: i64) -> Vec<Voyage> {
-    read_dir(&dir().join("landed")).into_iter().filter(|q| now - q.ended_ms.unwrap_or(0) <= LANDED_MS).collect()
+    read_dir(&dir().join("landed"))
+        .into_iter()
+        .filter(|q| now - q.ended_ms.unwrap_or(0) <= LANDED_MS)
+        .collect()
 }
 
 pub fn dir() -> PathBuf {
@@ -311,7 +372,11 @@ fn read_dir(d: &Path) -> Vec<Voyage> {
 
 fn log(q: &Voyage, what: &str, reason: &str) {
     let line = json!({"at_ms": registry::now_ms(), "turn": q.turns, "session": q.session(), "what": what, "reason": reason});
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_file(&q.id)) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file(&q.id))
+    {
         let _ = writeln!(f, "{line}");
     }
 }
@@ -326,7 +391,10 @@ pub fn all() -> Vec<Voyage> {
 
 /// The voyages still going (or paused), newest first.
 pub fn open() -> Vec<Voyage> {
-    let mut out: Vec<Voyage> = read_dir(&dir()).into_iter().filter(|q| q.status.open()).collect();
+    let mut out: Vec<Voyage> = read_dir(&dir())
+        .into_iter()
+        .filter(|q| q.status.open())
+        .collect();
     out.sort_by_key(|q: &Voyage| std::cmp::Reverse(q.started_ms));
     out
 }
@@ -338,10 +406,16 @@ pub fn open_for(session: &str) -> Option<Voyage> {
 
 fn find(target: &str) -> Result<Voyage> {
     let all = all();
-    if let Some(q) = all.iter().find(|q| q.id == target || (target.len() >= 4 && q.id.starts_with(target))) {
+    if let Some(q) = all
+        .iter()
+        .find(|q| q.id == target || (target.len() >= 4 && q.id.starts_with(target)))
+    {
         return Ok(q.clone());
     }
-    if let Some(q) = all.iter().find(|q| q.status.open() && target.len() >= 4 && q.session().starts_with(target)) {
+    if let Some(q) = all
+        .iter()
+        .find(|q| q.status.open() && target.len() >= 4 && q.session().starts_with(target))
+    {
         return Ok(q.clone());
     }
     bail!("no voyage {target}")
@@ -349,7 +423,12 @@ fn find(target: &str) -> Result<Voyage> {
 
 fn new_id() -> String {
     use sha2::{Digest, Sha256};
-    let seed = format!("{}{}{:?}", registry::now_ms(), std::process::id(), Instant::now());
+    let seed = format!(
+        "{}{}{:?}",
+        registry::now_ms(),
+        std::process::id(),
+        Instant::now()
+    );
     let h = Sha256::digest(seed.as_bytes());
     h.iter().take(4).map(|b| format!("{b:02x}")).collect()
 }
@@ -362,7 +441,12 @@ pub enum Ask {
     Show,
     Clear,
     Resume,
-    Set { outcome: String, check: Option<String>, budget: Option<f64>, persistence: Option<Persistence> },
+    Set {
+        outcome: String,
+        check: Option<String>,
+        budget: Option<f64>,
+        persistence: Option<Persistence>,
+    },
 }
 
 /// `/voyage` arguments: an outcome with optional `--check "<command>"`,
@@ -384,7 +468,10 @@ pub fn parse(args: &str) -> Result<Ask> {
     // Flags come after the outcome; take them off the end, last first.
     while let Some(i) = outcome.rfind(" --") {
         let tail = outcome[i + 3..].to_string();
-        let (flag, value) = tail.split_once(char::is_whitespace).map(|(f, v)| (f.to_string(), v.trim().to_string())).unwrap_or((tail.clone(), String::new()));
+        let (flag, value) = tail
+            .split_once(char::is_whitespace)
+            .map(|(f, v)| (f.to_string(), v.trim().to_string()))
+            .unwrap_or((tail.clone(), String::new()));
         match flag.as_str() {
             "check" => {
                 let v = unquote(&value);
@@ -395,14 +482,19 @@ pub fn parse(args: &str) -> Result<Ask> {
             }
             "budget" => {
                 let v = value.trim_start_matches('$').replace(',', "");
-                let n: f64 = v.parse().map_err(|_| anyhow::anyhow!("--budget takes dollars, e.g. --budget 40"))?;
+                let n: f64 = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--budget takes dollars, e.g. --budget 40"))?;
                 if n <= 0.0 {
                     bail!("--budget takes dollars above 0");
                 }
                 budget = Some(n);
             }
             "persistence" | "persist" => {
-                persistence = Some(Persistence::parse(&value).context("--persistence is light, steady, hard or relentless")?);
+                persistence = Some(
+                    Persistence::parse(&value)
+                        .context("--persistence is light, steady, hard or relentless")?,
+                );
             }
             _ => break,
         }
@@ -415,7 +507,12 @@ pub fn parse(args: &str) -> Result<Ask> {
     if outcome.chars().count() > OUTCOME_CHARS {
         bail!("an outcome is at most {OUTCOME_CHARS} characters");
     }
-    Ok(Ask::Set { outcome, check, budget, persistence })
+    Ok(Ask::Set {
+        outcome,
+        check,
+        budget,
+        persistence,
+    })
 }
 
 fn unquote(s: &str) -> String {
@@ -429,7 +526,14 @@ fn unquote(s: &str) -> String {
 }
 
 /// Start a voyage in this conversation (any open one there ends).
-pub fn start(session: &str, cwd: &str, outcome: String, check: Option<String>, budget: Option<f64>, persistence: Persistence) -> Voyage {
+pub fn start(
+    session: &str,
+    cwd: &str,
+    outcome: String,
+    check: Option<String>,
+    budget: Option<f64>,
+    persistence: Persistence,
+) -> Voyage {
     if let Some(mut old) = open_for(session) {
         end(&mut old, Status::Cleared, "a new voyage took its place");
     }
@@ -453,7 +557,11 @@ pub fn start(session: &str, cwd: &str, outcome: String, check: Option<String>, b
         at_limit: false,
         progress: None,
         persistence,
-        base: if persistence.rules().review { head_commit(cwd) } else { None },
+        base: if persistence.rules().review {
+            head_commit(cwd)
+        } else {
+            None
+        },
         laps: 0,
         pushed: 0,
         best: 0,
@@ -500,12 +608,24 @@ fn resume(q: &mut Voyage) {
 pub fn describe(q: &Voyage, now: i64) -> String {
     let mut s = format!("voyage {} · {}\n  {}\n", q.id, q.status.word(), q.outcome);
     let took = registry::duration(q.ended_ms.unwrap_or(now) - q.started_ms);
-    let mut facts = vec![took, turns(q.turns), format!("{} persistence", q.persistence.word())];
+    let mut facts = vec![
+        took,
+        turns(q.turns),
+        format!("{} persistence", q.persistence.word()),
+    ];
     if q.status == Status::Active && q.laps > 0 {
-        facts.push(format!("proof lap {} of {}", q.laps, q.persistence.rules().proof_laps));
+        facts.push(format!(
+            "proof lap {} of {}",
+            q.laps,
+            q.persistence.rules().proof_laps
+        ));
     }
     if q.handovers() > 0 {
-        facts.push(format!("{} handover{}", q.handovers(), if q.handovers() == 1 { "" } else { "s" }));
+        facts.push(format!(
+            "{} handover{}",
+            q.handovers(),
+            if q.handovers() == 1 { "" } else { "s" }
+        ));
     }
     if q.spent_usd > 0.0 {
         facts.push(match q.budget_usd {
@@ -520,7 +640,14 @@ pub fn describe(q: &Voyage, now: i64) -> String {
         s.push_str(&format!("  done only when `{c}` passes\n"));
     }
     if let Some(w) = &q.why {
-        s.push_str(&format!("  {}: {w}\n", if q.status.open() { "waiting on you" } else { "why" }));
+        s.push_str(&format!(
+            "  {}: {w}\n",
+            if q.status.open() {
+                "waiting on you"
+            } else {
+                "why"
+            }
+        ));
     } else if let Some(l) = &q.last {
         s.push_str(&format!("  last check: {l}\n"));
     }
@@ -531,10 +658,17 @@ pub fn describe(q: &Voyage, now: i64) -> String {
 /// Show, clear and resume answer at once without a model turn; setting one
 /// lets the prompt through, so the session starts on it.
 pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
-    let prompt = v.get("prompt").and_then(Value::as_str).unwrap_or("").trim_start();
+    let prompt = v
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim_start();
     let session = v.get("session_id").and_then(Value::as_str)?;
     let block = |reason: String| Some(json!({"decision": "block", "reason": reason}).to_string());
-    let Some(rest) = prompt.strip_prefix("/voyage").filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)) else {
+    let Some(rest) = prompt
+        .strip_prefix("/voyage")
+        .filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))
+    else {
         // Anything you say to a voyage that stopped for you carries it on,
         // unless it was the budget: that takes /voyage resume.
         if !prompt.starts_with('/')
@@ -643,17 +777,32 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
     if let Some(b) = q.budget_usd
         && q.spent_usd >= b
     {
-        let why = format!("budget of ${b:.0} spent (${:.2}). /voyage resume carries on without one", q.spent_usd);
+        let why = format!(
+            "budget of ${b:.0} spent (${:.2}). /voyage resume carries on without one",
+            q.spent_usd
+        );
         pause(&mut q, &why);
-        announce(cfg, &q, &format!("voyage paused, its ${b:.0} budget is spent"));
-        return say(format!("toomux voyage paused: ${:.2} spent of its ${b:.0} budget. /voyage resume carries on without a budget.", q.spent_usd));
+        announce(
+            cfg,
+            &q,
+            &format!("voyage paused, its ${b:.0} budget is spent"),
+        );
+        return say(format!(
+            "toomux voyage paused: ${:.2} spent of its ${b:.0} budget. /voyage resume carries on without a budget.",
+            q.spent_usd
+        ));
     }
     let rules = q.persistence.rules();
     if q.idle >= rules.idle_turns {
         let n = rules.idle_turns;
-        pause(&mut q, &format!("{n} turns in a row without doing anything"));
+        pause(
+            &mut q,
+            &format!("{n} turns in a row without doing anything"),
+        );
         announce(cfg, &q, "voyage paused, it stopped making progress");
-        return say(format!("toomux voyage paused: {n} turns without a tool call. Say what to do next and it carries on."));
+        return say(format!(
+            "toomux voyage paused: {n} turns without a tool call. Say what to do next and it carries on."
+        ));
     }
 
     let evidence = evidence(&transcript, turn.start, EVIDENCE_CHARS);
@@ -661,12 +810,23 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
         q.failures += 1;
         log(q, "unchecked", &e.to_string());
         if q.failures >= rules.failures {
-            pause(q, &format!("couldn't be checked {} times in a row ({e})", rules.failures));
+            pause(
+                q,
+                &format!(
+                    "couldn't be checked {} times in a row ({e})",
+                    rules.failures
+                ),
+            );
             announce(cfg, q, "voyage paused, it couldn't be checked");
-            return say(format!("toomux voyage paused: couldn't check it ({e}). /voyage resume tries again."));
+            return say(format!(
+                "toomux voyage paused: couldn't check it ({e}). /voyage resume tries again."
+            ));
         }
         save(q);
-        block(q, &format!("toomux couldn't check this turn ({e}), so keep going"))
+        block(
+            q,
+            &format!("toomux couldn't check this turn ({e}), so keep going"),
+        )
     };
     let (mut verdict, mut reason) = match judge(cfg, &q, &evidence) {
         Ok((v, r, progress, usd)) => {
@@ -733,11 +893,16 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
             if let Some(n) = rules.stall_stop
                 && q.flat >= n
             {
-                let why = format!("{n} checks in a row with no headway, stuck at about {}%", q.best);
+                let why = format!(
+                    "{n} checks in a row with no headway, stuck at about {}%",
+                    q.best
+                );
                 q.flat = 0;
                 pause(&mut q, &why);
                 announce(cfg, &q, "voyage paused, it's stuck");
-                return say(format!("toomux voyage paused: {why}. Say how to get past it and it carries on."));
+                return say(format!(
+                    "toomux voyage paused: {why}. Say how to get past it and it carries on."
+                ));
             }
             if let Some(n) = rules.stall_after
                 && q.flat > 0
@@ -753,7 +918,10 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
             end(&mut q, Status::Met, &reason);
             let took = registry::duration(registry::now_ms() - q.started_ms);
             announce(cfg, &q, &format!("voyage done after {took}"));
-            say(format!("toomux voyage done after {took}, {}: {reason}", turns(q.turns)))
+            say(format!(
+                "toomux voyage done after {took}, {}: {reason}",
+                turns(q.turns)
+            ))
         }
         Verdict::Impossible => {
             end(&mut q, Status::Impossible, &reason);
@@ -763,7 +931,9 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
         Verdict::NeedsYou => {
             pause(&mut q, &reason);
             announce(cfg, &q, "voyage needs you");
-            say(format!("toomux voyage waiting on you: {reason}. Your next message carries it on."))
+            say(format!(
+                "toomux voyage waiting on you: {reason}. Your next message carries it on."
+            ))
         }
     }
 }
@@ -778,7 +948,9 @@ fn proof_lap(lap: u32, laps: u32, reason: &str) -> String {
         "try to break it. Test the edge cases and failure paths the outcome implies, use it end to end the way a user \
          would, and show the output. Fix what you find"
     };
-    format!("the judge says it's done ({reason}), but before it counts, prove it. Proof lap {lap} of {laps}: {task}")
+    format!(
+        "the judge says it's done ({reason}), but before it counts, prove it. Proof lap {lap} of {laps}: {task}"
+    )
 }
 
 /// Before a voyage stops for you or gives up, the session tries once more.
@@ -827,7 +999,11 @@ fn block(q: &Voyage, why: &str) -> Option<String> {
 
 /// "1h 20m, 5 turns": what a voyage took.
 pub fn turns_taken(q: &Voyage) -> String {
-    format!("{}, {}", registry::duration(q.ended_ms.unwrap_or_else(registry::now_ms) - q.started_ms), turns(q.turns))
+    format!(
+        "{}, {}",
+        registry::duration(q.ended_ms.unwrap_or_else(registry::now_ms) - q.started_ms),
+        turns(q.turns)
+    )
 }
 
 fn turns(n: u32) -> String {
@@ -835,8 +1011,18 @@ fn turns(n: u32) -> String {
 }
 
 fn announce(cfg: &Config, q: &Voyage, msg: &str) {
-    let title = crate::state::State::load().names.get(q.session()).cloned().unwrap_or_else(|| short(&q.outcome, 50));
-    crate::watch::announce_text(cfg, &format!("{title}: {msg}"), "voyage", &title, q.session());
+    let title = crate::state::State::load()
+        .names
+        .get(q.session())
+        .cloned()
+        .unwrap_or_else(|| short(&q.outcome, 50));
+    crate::watch::announce_text(
+        cfg,
+        &format!("{title}: {msg}"),
+        "voyage",
+        &title,
+        q.session(),
+    );
 }
 
 fn short(s: &str, n: usize) -> String {
@@ -849,332 +1035,20 @@ fn short(s: &str, n: usize) -> String {
 
 /// What the chain has cost at list prices since the voyage began.
 fn spent(cfg: &Config, q: &Voyage) -> f64 {
-    q.sessions.iter().map(|s| crate::tokens::report(cfg, q.started_ms, Some(s)).all().cost()).sum()
-}
-
-// ---- reading the turn --------------------------------------------------------
-
-pub struct TurnInfo {
-    /// Index (among the tail's entries) where the turn began.
-    pub start: usize,
-    pub tools: usize,
-}
-
-/// The transcript's tail as entries, oldest first.
-fn tail_entries(transcript: &Path) -> Vec<Value> {
-    const TAIL: u64 = 1024 * 1024;
-    let Ok(mut f) = std::fs::File::open(transcript) else { return Vec::new() };
-    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
-    let from = len.saturating_sub(TAIL);
-    let mut bytes = Vec::new();
-    if f.seek(SeekFrom::Start(from)).is_err() || f.read_to_end(&mut bytes).is_err() {
-        return Vec::new();
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    text.lines()
-        .skip(usize::from(from > 0))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| matches!(v.get("type").and_then(Value::as_str), Some("user" | "assistant")))
-        .filter(|v| v.get("isSidechain").and_then(Value::as_bool) != Some(true))
-        .collect()
-}
-
-/// A user entry that starts a turn: your prompt, or a Stop hook sending the
-/// session back (not a tool result).
-fn starts_turn(v: &Value) -> bool {
-    if v.get("type").and_then(Value::as_str) != Some("user") {
-        return false;
-    }
-    match v.pointer("/message/content") {
-        Some(Value::String(_)) => true,
-        Some(Value::Array(a)) => a.iter().all(|b| b.get("type").and_then(Value::as_str) != Some("tool_result")),
-        _ => false,
-    }
-}
-
-pub fn last_turn(transcript: &Path) -> TurnInfo {
-    let e = tail_entries(transcript);
-    let start = e.iter().rposition(starts_turn).unwrap_or(0);
-    let tools = e[start..]
+    q.sessions
         .iter()
-        .filter_map(|v| v.pointer("/message/content").and_then(Value::as_array))
-        .flatten()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .count();
-    TurnInfo { start, tools }
+        .map(|s| {
+            crate::tokens::report(cfg, q.started_ms, Some(s))
+                .all()
+                .cost()
+        })
+        .sum()
 }
 
-fn clip(s: &str, head: usize, tail: usize) -> String {
-    let n = s.chars().count();
-    if n <= head + tail + 20 {
-        return s.to_string();
-    }
-    let a: String = s.chars().take(head).collect();
-    let b: String = s.chars().skip(n - tail).collect();
-    format!("{a} … [{} chars] … {b}", n - head - tail)
-}
-
-fn result_text(b: &Value) -> String {
-    match b.get("content") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(a)) => a.iter().filter_map(|x| x.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
-        _ => String::new(),
-    }
-}
-
-/// The conversation's end as the judge reads it: this turn, and the one
-/// before when there's room, newest kept when it must be cut.
-pub fn evidence(transcript: &Path, turn_start: usize, max: usize) -> String {
-    let e = tail_entries(transcript);
-    let from = e[..turn_start.min(e.len())].iter().rposition(starts_turn).unwrap_or(turn_start.min(e.len()));
-    let mut lines: Vec<String> = Vec::new();
-    for v in &e[from..] {
-        let user = v.get("type").and_then(Value::as_str) == Some("user");
-        match v.pointer("/message/content") {
-            Some(Value::String(s)) => {
-                let who = if s.starts_with("Stop hook feedback") { "toomux" } else { "user" };
-                lines.push(format!("[{who}] {}", clip(s.trim(), 1200, 300)));
-            }
-            Some(Value::Array(a)) => {
-                for b in a {
-                    match b.get("type").and_then(Value::as_str) {
-                        Some("text") => {
-                            let t = b.get("text").and_then(Value::as_str).unwrap_or("").trim();
-                            if !t.is_empty() {
-                                lines.push(format!("[{}] {}", if user { "user" } else { "claude" }, clip(t, 2500, 800)));
-                            }
-                        }
-                        Some("tool_use") => {
-                            let name = b.get("name").and_then(Value::as_str).unwrap_or("tool");
-                            let input = b.get("input").cloned().unwrap_or(Value::Null);
-                            let what = input
-                                .get("command")
-                                .or_else(|| input.get("file_path"))
-                                .or_else(|| input.get("prompt"))
-                                .or_else(|| input.get("pattern"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .unwrap_or_else(|| input.to_string());
-                            lines.push(format!("[tool {name}] {}", clip(&what, 300, 100)));
-                        }
-                        Some("tool_result") => {
-                            let err = b.get("is_error").and_then(Value::as_bool) == Some(true);
-                            lines.push(format!("[result{}] {}", if err { ", error" } else { "" }, clip(result_text(b).trim(), 400, 600)));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    // Newest first into the budget, then back in order.
-    let mut kept = Vec::new();
-    let mut used = 0;
-    for l in lines.iter().rev() {
-        if used + l.len() > max && !kept.is_empty() {
-            kept.push("[… earlier in the conversation, cut]".to_string());
-            break;
-        }
-        used += l.len() + 1;
-        kept.push(l.clone());
-    }
-    kept.reverse();
-    kept.join("\n")
-}
-
-// ---- the judge ---------------------------------------------------------------
-
-const JUDGE: &str = "You check whether a coding agent has reached an outcome it was given. You see the outcome and the end of \
-its conversation: its messages, the tools it called, and their results. Judge from evidence shown, not from claims alone: \
-\"tests pass\" with no output showing it is not enough, and neither is work that was planned but not done. Reply with one line \
-of JSON and nothing else: {\"verdict\": \"met\" | \"not_yet\" | \"impossible\" | \"needs_you\", \"reason\": \"...\", \
-\"progress\": 0-100}. progress is your rough estimate of how much of the outcome is done, from the evidence. met: the \
-evidence shows the outcome is reached. not_yet: it isn't yet; the reason says in a sentence or two what is missing or what to \
-do next. impossible: it can't be reached at all (it contradicts itself, or needs something the agent can never have). \
-needs_you: the agent has stopped at a decision, access or information only the user can give; the reason says what, in a \
-sentence. Write reasons plainly, to the agent.";
-
-pub fn parse_verdict(text: &str) -> Result<(Verdict, String)> {
-    let (a, b) = (text.find('{'), text.rfind('}'));
-    let (Some(a), Some(b)) = (a, b) else { bail!("the judge didn't answer in JSON") };
-    let v: Value = serde_json::from_str(&text[a..=b]).context("the judge's JSON didn't parse")?;
-    let reason = v.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let verdict = match v.get("verdict").and_then(Value::as_str).unwrap_or("").to_lowercase().replace([' ', '-'], "_").as_str() {
-        "met" | "done" => Verdict::Met,
-        "not_yet" | "not_met" => Verdict::NotYet,
-        "impossible" => Verdict::Impossible,
-        "needs_you" | "needs_user" => Verdict::NeedsYou,
-        other => bail!("the judge said {other:?}"),
-    };
-    Ok((verdict, if reason.is_empty() { "no reason given".into() } else { reason }))
-}
-
-/// The judge's estimate of how much is done, in percent, if it gave one.
-pub fn parse_progress(text: &str) -> Option<u8> {
-    let (a, b) = (text.find('{')?, text.rfind('}')?);
-    let v: Value = serde_json::from_str(text.get(a..=b)?).ok()?;
-    let p = v.get("progress")?;
-    let n = p.as_f64().or_else(|| p.as_str()?.trim().trim_end_matches('%').parse().ok())?;
-    Some(n.clamp(0.0, 100.0).round() as u8)
-}
-
-/// A small model's verdict on the turn, with its estimate of how much is
-/// done and what it cost.
-fn judge(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(Verdict, String, Option<u8>, f64)> {
-    let mut ask = format!("The outcome:\n{}\n", q.outcome);
-    if let Some(c) = &q.check {
-        ask.push_str(&format!("(Once you say met, toomux also runs `{c}`, which must pass.)\n"));
-    }
-    ask.push_str(&format!("\nThis is turn {} of the voyage", q.turns));
-    if q.handovers() > 0 {
-        ask.push_str(&format!(", in its {} conversation (the earlier ones handed their work on)", ordinal(q.sessions.len())));
-    }
-    ask.push_str(".\n");
-    if let Some(l) = &q.last {
-        ask.push_str(&format!("Your last verdict's reason: {l}\n"));
-    }
-    let rules = q.persistence.rules();
-    if q.laps > 0 {
-        ask.push_str(&format!(
-            "You said met last time, so the agent was sent on proof lap {} of {}. Say met again only if this turn did the lap \
-             (fresh output shown, not the earlier run) and it holds up; anything it found and didn't fix is not_yet.\n",
-            q.laps, rules.proof_laps
-        ));
-    }
-    ask.push_str(&format!("\nThe end of the conversation:\n{evidence}\n"));
-    let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), &format!("{JUDGE}{}", rules.judge_rules), &ask)?;
-    let (verdict, reason) = parse_verdict(&text)?;
-    Ok((verdict, reason, parse_progress(&text), usd))
-}
-
-const REVIEW: &str = "You are a sceptical reviewer. A coding agent says it has reached an outcome, and a judge agreed. Your \
-job is to find any reason it isn't done. You see the outcome, the end of the conversation, and every change in the folder \
-since the work began. Look for parts of the outcome not addressed; tests skipped, disabled, weakened or deleted; stubs, \
-TODOs and placeholders; hard-coded or special-cased results; errors or warnings passed over; and claims the output doesn't \
-back. Reply with one line of JSON and nothing else: {\"verdict\": \"met\" | \"not_yet\", \"reason\": \"...\"}. met only if \
-you find nothing that matters; otherwise not_yet, and the reason says plainly, to the agent, what to fix.";
-
-/// Relentless: a second model reads every change since the voyage began,
-/// looking for why it isn't done. (passed, reason, cost)
-fn review(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(bool, String, f64)> {
-    let mut ask = format!("The outcome:\n{}\n\nThe end of the conversation:\n{evidence}\n\n", q.outcome);
-    ask.push_str(&changes(&q.cwd, q.base.as_deref()));
-    let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), REVIEW, &ask)?;
-    let (verdict, reason) = parse_verdict(&text)?;
-    Ok((verdict == Verdict::Met, reason, usd))
-}
-
-/// The commit a folder is at, if it's a git repository.
-fn head_commit(cwd: &str) -> Option<String> {
-    let out = std::process::Command::new("git").args(["-C", cwd, "rev-parse", "HEAD"]).stderr(std::process::Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Every change in the folder since `base`, committed or not, for the review.
-fn changes(cwd: &str, base: Option<&str>) -> String {
-    const MAX: usize = 40_000;
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(["-C", cwd])
-            .args(args)
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    };
-    let Some(status) = git(&["status", "--short"]) else {
-        return "Changes: none to show (the folder isn't a git repository). Judge from the conversation.\n".into();
-    };
-    let diff = git(&["diff", base.unwrap_or("HEAD")]).unwrap_or_default();
-    let diff = if diff.chars().count() > MAX { format!("{}\n[… the rest of the diff, cut]", diff.chars().take(MAX).collect::<String>()) } else { diff };
-    format!("Files changed or new (git status):\n{status}\nThe diff since the voyage began:\n{diff}\n")
-}
-
-/// One `claude -p` answer from a model with no tools: its text and cost.
-fn ask_model(cfg: &Config, q: &Voyage, model: &str, system: &str, ask: &str) -> Result<(String, f64)> {
-    let mut cmd = std::process::Command::new(crate::config::expand(&cfg.claude_bin));
-    cmd.args(["-p", "--model", model, "--tools", "", "--setting-sources", "", "--strict-mcp-config"])
-        .args(["--no-session-persistence", "--output-format", "json", "--system-prompt", system])
-        .current_dir(if Path::new(&q.cwd).is_dir() { q.cwd.as_str() } else { "/" })
-        .env(JUDGE_ENV, "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    let (out, _) = run_with_timeout(cmd, Some(ask.as_bytes()), JUDGE_TIMEOUT)?;
-    let v: Value = serde_json::from_str(out.trim()).context("the judge's run gave no result")?;
-    if v.get("is_error").and_then(Value::as_bool) == Some(true) {
-        bail!("{}", short(v.get("result").and_then(Value::as_str).unwrap_or("the judge's run failed"), 120));
-    }
-    let usd = v.get("total_cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
-    Ok((v.get("result").and_then(Value::as_str).unwrap_or("").to_string(), usd))
-}
-
-fn ordinal(n: usize) -> String {
-    let suffix = match (n % 10, n % 100) {
-        (1, x) if x != 11 => "st",
-        (2, x) if x != 12 => "nd",
-        (3, x) if x != 13 => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
-}
-
-/// Run a command to its end or the timeout: stdout, and whether it exited 0.
-fn run_with_timeout(mut cmd: std::process::Command, input: Option<&[u8]>, limit: Duration) -> Result<(String, bool)> {
-    use std::os::unix::process::CommandExt;
-    cmd.process_group(0);
-    let mut child = cmd.spawn().context("couldn't start it")?;
-    if let (Some(data), Some(mut stdin)) = (input, child.stdin.take()) {
-        let data = data.to_vec();
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(&data);
-        });
-    }
-    let mut stdout = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        if let Some(o) = stdout.as_mut() {
-            let _ = o.read_to_string(&mut s);
-        }
-        s
-    });
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let out = reader.join().unwrap_or_default();
-            return Ok((out, status.success()));
-        }
-        if start.elapsed() > limit {
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            let _ = child.wait();
-            bail!("it took longer than {} seconds", limit.as_secs());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// The voyage's own check: Ok when it exits 0, else the end of its output.
-fn run_check(check: &str, cwd: &str) -> std::result::Result<(), String> {
-    let mut cmd = std::process::Command::new("sh");
-    cmd.args(["-c", &format!("{check} 2>&1")])
-        .current_dir(cwd)
-        .env(JUDGE_ENV, "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    match run_with_timeout(cmd, None, CHECK_TIMEOUT) {
-        Ok((_, true)) => Ok(()),
-        Ok((out, false)) => {
-            let tail: Vec<&str> = out.lines().rev().filter(|l| !l.trim().is_empty()).take(12).collect();
-            Err(clip(&tail.into_iter().rev().collect::<Vec<_>>().join("\n"), 0, 1200))
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
+mod evaluate;
+use evaluate::{evidence, head_commit, judge, last_turn, review, run_check};
+#[cfg(test)]
+use evaluate::{parse_progress, parse_verdict};
 
 // ---- across handovers and limits --------------------------------------------
 
@@ -1190,7 +1064,11 @@ pub fn pass_on(old: &str, new: &str) {
 /// For the fresh session's first prompt.
 pub fn for_successor(session: &str) -> Option<String> {
     let q = open_for(session)?;
-    let state = if q.status == Status::Paused { " It was paused, waiting on the user; don't pick it up until they say so." } else { "" };
+    let state = if q.status == Status::Paused {
+        " It was paused, waiting on the user; don't pick it up until they say so."
+    } else {
+        ""
+    };
     Some(format!(
         " A voyage carries on with you: {}. toomux checks it after every turn and keeps you at it until it's done.{state}",
         brief_line(&q)
@@ -1202,14 +1080,19 @@ pub const BRIEF_HEADING: &str = "\n\n## Voyage carried over by toomux";
 
 pub fn brief_section(session: &str) -> Option<String> {
     let q = open_for(session)?;
-    Some(format!("{BRIEF_HEADING}\n\n{}", describe(&q, registry::now_ms())))
+    Some(format!(
+        "{BRIEF_HEADING}\n\n{}",
+        describe(&q, registry::now_ms())
+    ))
 }
 
 /// From the status tick: a voyage whose session stopped at a usage limit
 /// carries on once the limit lifts.
 pub fn tick(sessions: &[Session], now: i64) {
     for mut q in open().into_iter().filter(|q| q.status == Status::Active) {
-        let Some(s) = sessions.iter().find(|s| s.id == q.session() && !s.dormant) else { continue };
+        let Some(s) = sessions.iter().find(|s| s.id == q.session() && !s.dormant) else {
+            continue;
+        };
         if s.limit.is_some() {
             if !q.at_limit {
                 q.at_limit = true;
@@ -1218,17 +1101,30 @@ pub fn tick(sessions: &[Session], now: i64) {
             }
             continue;
         }
-        if !q.at_limit || s.state != St::Idle || now - s.since_ms < RESUME_AFTER_MS || crate::handover::requested(&s.id) {
+        if !q.at_limit
+            || s.state != St::Idle
+            || now - s.since_ms < RESUME_AFTER_MS
+            || crate::handover::requested(&s.id)
+        {
             continue;
         }
-        let Some(pane) = s.pane.as_ref().map(|p| p.id.clone()) else { continue };
+        let Some(pane) = s.pane.as_ref().map(|p| p.id.clone()) else {
+            continue;
+        };
         if !crate::actions::prompt_empty(&pane) {
             continue;
         }
         q.at_limit = false;
         save(&q);
         log(&q, "limit lifted", "");
-        let _ = crate::actions::type_prompt(&pane, &format!("[toomux voyage {}] The usage limit has lifted: carry on. {}", q.id, brief_line(&q)));
+        let _ = crate::actions::type_prompt(
+            &pane,
+            &format!(
+                "[toomux voyage {}] The usage limit has lifted: carry on. {}",
+                q.id,
+                brief_line(&q)
+            ),
+        );
     }
 }
 
@@ -1250,7 +1146,14 @@ pub fn list(now: i64) -> String {
         s.push_str("ended\n");
         for q in ended.iter().take(10) {
             let took = registry::duration(q.ended_ms.unwrap_or(now) - q.started_ms);
-            s.push_str(&format!("  {}  {:10} {:>7} ago  {:>6}  {}\n", q.id, q.status.word(), registry::ago(now - q.ended_ms.unwrap_or(now)), took, short(&q.outcome, 60)));
+            s.push_str(&format!(
+                "  {}  {:10} {:>7} ago  {:>6}  {}\n",
+                q.id,
+                q.status.word(),
+                registry::ago(now - q.ended_ms.unwrap_or(now)),
+                took,
+                short(&q.outcome, 60)
+            ));
         }
     }
     s
@@ -1261,7 +1164,10 @@ pub fn list(now: i64) -> String {
 pub fn show(target: &str, now: i64, scene: Option<usize>) -> Result<String> {
     let q = find(target)?;
     let mut s = String::new();
-    if let Some(w) = scene.filter(|w| *w >= crate::scene::MIN_WIDTH && matches!(q.status, Status::Active | Status::Paused | Status::Met)) {
+    if let Some(w) = scene.filter(|w| {
+        *w >= crate::scene::MIN_WIDTH
+            && matches!(q.status, Status::Active | Status::Paused | Status::Met)
+    }) {
         for l in crate::scene::render(w.min(crate::scene::MAX_WIDTH), &q.scene(now)) {
             s.push_str(&l);
             s.push('\n');
@@ -1272,13 +1178,24 @@ pub fn show(target: &str, now: i64, scene: Option<usize>) -> Result<String> {
     s.push('\n');
     let raw = std::fs::read_to_string(log_file(&q.id)).unwrap_or_default();
     for l in raw.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
         let at = v.get("at_ms").and_then(Value::as_i64).unwrap_or(0);
-        let when = chrono::DateTime::from_timestamp_millis(at).map(|t| t.with_timezone(&chrono::Local).format("%a %H:%M").to_string()).unwrap_or_default();
+        let when = chrono::DateTime::from_timestamp_millis(at)
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("%a %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
         let what = v.get("what").and_then(Value::as_str).unwrap_or("");
         let turn = v.get("turn").and_then(Value::as_u64).unwrap_or(0);
         let reason = v.get("reason").and_then(Value::as_str).unwrap_or("");
-        s.push_str(&format!("  {when}  turn {turn:<3} {what:<12} {}\n", short(reason, 110)));
+        s.push_str(&format!(
+            "  {when}  turn {turn:<3} {what:<12} {}\n",
+            short(reason, 110)
+        ));
     }
     Ok(s)
 }
@@ -1286,18 +1203,46 @@ pub fn show(target: &str, now: i64, scene: Option<usize>) -> Result<String> {
 /// `toomux voyage set <session> <outcome>`: from outside the session. It
 /// starts on it at once if it's at rest at an empty prompt.
 pub fn set_from_outside(cfg: &Config, target: &str, words: &str) -> Result<String> {
-    let Ask::Set { outcome, check, budget, persistence } = parse(words)? else { bail!("say what done looks like") };
+    let Ask::Set {
+        outcome,
+        check,
+        budget,
+        persistence,
+    } = parse(words)?
+    else {
+        bail!("say what done looks like")
+    };
     let all = registry::load(cfg);
     let s = registry::find(&all, target)?;
-    let q = start(&s.id, &s.cwd, outcome, check, budget, persistence.unwrap_or_else(|| cfg.persistence()));
+    let q = start(
+        &s.id,
+        &s.cwd,
+        outcome,
+        check,
+        budget,
+        persistence.unwrap_or_else(|| cfg.persistence()),
+    );
     let pane = s.pane.as_ref().map(|p| p.id.clone());
     match pane {
         // Finished is at rest too: a turn ended and nobody has answered yet.
-        Some(p) if matches!(s.state, St::Idle | St::Finished | St::Background) && crate::actions::prompt_empty(&p) => {
-            crate::actions::type_prompt(&p, &format!("[toomux voyage {}] You have a voyage. {} Work toward it now and keep going; toomux checks after every turn.", q.id, brief_line(&q)))?;
+        Some(p)
+            if matches!(s.state, St::Idle | St::Finished | St::Background)
+                && crate::actions::prompt_empty(&p) =>
+        {
+            crate::actions::type_prompt(
+                &p,
+                &format!(
+                    "[toomux voyage {}] You have a voyage. {} Work toward it now and keep going; toomux checks after every turn.",
+                    q.id,
+                    brief_line(&q)
+                ),
+            )?;
             Ok(format!("voyage {} set on {} and started", q.id, s.title))
         }
-        _ => Ok(format!("voyage {} set on {}: it's checked from the end of its next turn", q.id, s.title)),
+        _ => Ok(format!(
+            "voyage {} set on {}: it's checked from the end of its next turn",
+            q.id, s.title
+        )),
     }
 }
 
@@ -1321,17 +1266,40 @@ mod tests {
         assert_eq!(parse("resume").unwrap(), Ask::Resume);
         assert_eq!(
             parse("all tests in auth pass --check \"cargo test auth\" --budget $40").unwrap(),
-            Ask::Set { outcome: "all tests in auth pass".into(), check: Some("cargo test auth".into()), budget: Some(40.0), persistence: None }
+            Ask::Set {
+                outcome: "all tests in auth pass".into(),
+                check: Some("cargo test auth".into()),
+                budget: Some(40.0),
+                persistence: None
+            }
         );
         assert_eq!(
             parse("the site builds --budget 25").unwrap(),
-            Ask::Set { outcome: "the site builds".into(), check: None, budget: Some(25.0), persistence: None }
+            Ask::Set {
+                outcome: "the site builds".into(),
+                check: None,
+                budget: Some(25.0),
+                persistence: None
+            }
         );
         // A double dash inside the outcome that isn't a flag stays.
-        assert_eq!(parse("rename --verbose to --loud").unwrap(), Ask::Set { outcome: "rename --verbose to --loud".into(), check: None, budget: None, persistence: None });
+        assert_eq!(
+            parse("rename --verbose to --loud").unwrap(),
+            Ask::Set {
+                outcome: "rename --verbose to --loud".into(),
+                check: None,
+                budget: None,
+                persistence: None
+            }
+        );
         assert_eq!(
             parse("the parser reads every table --persistence Relentless --budget 60").unwrap(),
-            Ask::Set { outcome: "the parser reads every table".into(), check: None, budget: Some(60.0), persistence: Some(Persistence::Relentless) }
+            Ask::Set {
+                outcome: "the parser reads every table".into(),
+                check: None,
+                budget: Some(60.0),
+                persistence: Some(Persistence::Relentless)
+            }
         );
         assert!(parse("x --persistence stubborn").is_err());
         assert!(parse("x --budget lots").is_err());
@@ -1340,18 +1308,42 @@ mod tests {
 
     #[test]
     fn the_judges_estimate_is_read_whatever_its_shape() {
-        assert_eq!(parse_progress(r#"{"verdict":"not_yet","reason":"x","progress":45}"#), Some(45));
-        assert_eq!(parse_progress(r#"{"verdict":"not_yet","reason":"x","progress":"60%"}"#), Some(60));
-        assert_eq!(parse_progress(r#"{"verdict":"met","reason":"x","progress":130}"#), Some(100));
-        assert_eq!(parse_progress(r#"{"verdict":"not_yet","reason":"x"}"#), None);
+        assert_eq!(
+            parse_progress(r#"{"verdict":"not_yet","reason":"x","progress":45}"#),
+            Some(45)
+        );
+        assert_eq!(
+            parse_progress(r#"{"verdict":"not_yet","reason":"x","progress":"60%"}"#),
+            Some(60)
+        );
+        assert_eq!(
+            parse_progress(r#"{"verdict":"met","reason":"x","progress":130}"#),
+            Some(100)
+        );
+        assert_eq!(
+            parse_progress(r#"{"verdict":"not_yet","reason":"x"}"#),
+            None
+        );
     }
 
     #[test]
     fn verdicts_parse_from_what_the_judge_says() {
-        let (v, r) = parse_verdict("```json\n{\"verdict\":\"not_yet\",\"reason\":\"2 tests fail\"}\n```").unwrap();
+        let (v, r) =
+            parse_verdict("```json\n{\"verdict\":\"not_yet\",\"reason\":\"2 tests fail\"}\n```")
+                .unwrap();
         assert_eq!((v, r.as_str()), (Verdict::NotYet, "2 tests fail"));
-        assert_eq!(parse_verdict("{\"verdict\":\"met\",\"reason\":\"ok\"}").unwrap().0, Verdict::Met);
-        assert_eq!(parse_verdict("{\"verdict\":\"needs you\",\"reason\":\"which db\"}").unwrap().0, Verdict::NeedsYou);
+        assert_eq!(
+            parse_verdict("{\"verdict\":\"met\",\"reason\":\"ok\"}")
+                .unwrap()
+                .0,
+            Verdict::Met
+        );
+        assert_eq!(
+            parse_verdict("{\"verdict\":\"needs you\",\"reason\":\"which db\"}")
+                .unwrap()
+                .0,
+            Verdict::NeedsYou
+        );
         assert!(parse_verdict("sure, looks done").is_err());
     }
 
@@ -1366,34 +1358,70 @@ mod tests {
         let t = dir.join("t.jsonl");
         let mut s = String::new();
         s += &line(json!({"type": "user", "message": {"content": "make the tests pass"}}));
-        s += &line(json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "on it"}, {"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}}]}}));
-        s += &line(json!({"type": "user", "message": {"content": [{"type": "tool_result", "content": "2 failed", "is_error": true}]}}));
-        s += &line(json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "two fail"}]}}));
-        s += &line(json!({"type": "user", "isMeta": true, "message": {"content": "Stop hook feedback:\n[toomux voyage ab] not done yet"}}));
-        s += &line(json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "thinking"}]}}));
+        s += &line(
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "on it"}, {"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}}]}}),
+        );
+        s += &line(
+            json!({"type": "user", "message": {"content": [{"type": "tool_result", "content": "2 failed", "is_error": true}]}}),
+        );
+        s += &line(
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "two fail"}]}}),
+        );
+        s += &line(
+            json!({"type": "user", "isMeta": true, "message": {"content": "Stop hook feedback:\n[toomux voyage ab] not done yet"}}),
+        );
+        s += &line(
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "thinking"}]}}),
+        );
         std::fs::write(&t, &s).unwrap();
         let turn = last_turn(&t);
-        assert_eq!((turn.start, turn.tools), (4, 0), "the stop hook started the last turn, which called nothing");
+        assert_eq!(
+            (turn.start, turn.tools),
+            (4, 0),
+            "the stop hook started the last turn, which called nothing"
+        );
         let e = evidence(&t, turn.start, 10_000);
-        assert!(e.starts_with("[user] make the tests pass"), "the turn before comes too: {e}");
-        assert!(e.contains("[tool Bash] cargo test") && e.contains("[result, error] 2 failed") && e.contains("[toomux] Stop hook feedback"), "{e}");
+        assert!(
+            e.starts_with("[user] make the tests pass"),
+            "the turn before comes too: {e}"
+        );
+        assert!(
+            e.contains("[tool Bash] cargo test")
+                && e.contains("[result, error] 2 failed")
+                && e.contains("[toomux] Stop hook feedback"),
+            "{e}"
+        );
         let cut = evidence(&t, turn.start, 40);
-        assert!(cut.ends_with("[claude] thinking") && cut.contains("cut"), "{cut}");
+        assert!(
+            cut.ends_with("[claude] thinking") && cut.contains("cut"),
+            "{cut}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_met_voyage_lands_on_its_status_line_for_a_while() {
         let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join(format!("toomux-voyage-landed-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("toomux-voyage-landed-{}", std::process::id()));
         unsafe { std::env::set_var("XDG_STATE_HOME", &root) };
-        let mut q = start("s9", "/tmp", "the docs build".into(), None, None, Persistence::Steady);
+        let mut q = start(
+            "s9",
+            "/tmp",
+            "the docs build".into(),
+            None,
+            None,
+            Persistence::Steady,
+        );
         q.progress = Some(70);
         assert_eq!(q.scene(0).sea, crate::scene::Sea::Sailing);
         end(&mut q, Status::Met, "built");
         let now = registry::now_ms();
         let landed = landed_for("s9", now).unwrap();
-        assert_eq!((landed.progress, landed.scene(now).sea), (Some(100), crate::scene::Sea::Landed));
+        assert_eq!(
+            (landed.progress, landed.scene(now).sea),
+            (Some(100), crate::scene::Sea::Landed)
+        );
         assert!(landed_for("s9", now + LANDED_MS + 1).is_none());
         assert!(!landed_file("s9").exists(), "an old landing is tidied away");
         let _ = std::fs::remove_dir_all(root);
@@ -1403,7 +1431,10 @@ mod tests {
     /// notes the model each call asked for.
     fn fake_judge(dir: &Path, answers: &[&str]) -> Config {
         std::fs::create_dir_all(dir).unwrap();
-        let lines: Vec<String> = answers.iter().map(|a| json!({"result": a, "total_cost_usd": 0.01}).to_string()).collect();
+        let lines: Vec<String> = answers
+            .iter()
+            .map(|a| json!({"result": a, "total_cost_usd": 0.01}).to_string())
+            .collect();
         std::fs::write(dir.join("answers"), lines.join("\n") + "\n").unwrap();
         let bin = dir.join("claude");
         let d = dir.display();
@@ -1412,7 +1443,10 @@ mod tests {
         )).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Config { claude_bin: bin.display().to_string(), ..Config::default() }
+        Config {
+            claude_bin: bin.display().to_string(),
+            ..Config::default()
+        }
     }
 
     fn verdict(v: &str, reason: &str, progress: u8) -> String {
@@ -1430,80 +1464,230 @@ mod tests {
         std::fs::write(&t, line(json!({"type": "user", "message": {"content": "go"}}))
             + &line(json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}}]}}))).unwrap();
         let stop = |cfg: &Config, id: &str| -> Value {
-            serde_json::from_str(&stop_hook(cfg, &json!({"session_id": id, "transcript_path": t.display().to_string()})).unwrap()).unwrap()
+            serde_json::from_str(
+                &stop_hook(
+                    cfg,
+                    &json!({"session_id": id, "transcript_path": t.display().to_string()}),
+                )
+                .unwrap(),
+            )
+            .unwrap()
         };
 
         // Steady: the judge's met is the end of it.
         let cfg = fake_judge(&root.join("steady"), &[&verdict("met", "tests pass", 100)]);
-        start("st", "/tmp", "tests pass".into(), None, None, Persistence::Steady);
-        assert!(stop(&cfg, "st")["systemMessage"].as_str().unwrap().contains("done"));
+        start(
+            "st",
+            "/tmp",
+            "tests pass".into(),
+            None,
+            None,
+            Persistence::Steady,
+        );
+        assert!(
+            stop(&cfg, "st")["systemMessage"]
+                .as_str()
+                .unwrap()
+                .contains("done")
+        );
 
         // Hard: its own model judges, a met is sent back for one proof lap,
         // and a "needs you" gets one push back before it stops.
         let hard = root.join("hard");
-        let mut cfg = fake_judge(&hard, &[
-            &verdict("met", "tests pass", 95),
-            &verdict("not_yet", "a test was skipped", 80),
-            &verdict("needs_you", "which database?", 80),
-            &verdict("needs_you", "still which database", 80),
-        ]);
+        let mut cfg = fake_judge(
+            &hard,
+            &[
+                &verdict("met", "tests pass", 95),
+                &verdict("not_yet", "a test was skipped", 80),
+                &verdict("needs_you", "which database?", 80),
+                &verdict("needs_you", "still which database", 80),
+            ],
+        );
         cfg.voyage_hard_model = "claude-sonnet-5-5".into();
-        start("hd", "/tmp", "tests pass".into(), None, None, Persistence::Hard);
+        start(
+            "hd",
+            "/tmp",
+            "tests pass".into(),
+            None,
+            None,
+            Persistence::Hard,
+        );
         let lap = stop(&cfg, "hd");
-        assert!(lap["reason"].as_str().unwrap().contains("Proof lap 1 of 1"), "{lap}");
-        assert!(open_for("hd").unwrap().chip(registry::now_ms()).contains("hard voyage, proof lap 1 of 1"));
+        assert!(
+            lap["reason"].as_str().unwrap().contains("Proof lap 1 of 1"),
+            "{lap}"
+        );
+        assert!(
+            open_for("hd")
+                .unwrap()
+                .chip(registry::now_ms())
+                .contains("hard voyage, proof lap 1 of 1")
+        );
         let back = stop(&cfg, "hd");
-        assert!(back["reason"].as_str().unwrap().contains("a test was skipped"), "{back}");
+        assert!(
+            back["reason"]
+                .as_str()
+                .unwrap()
+                .contains("a test was skipped"),
+            "{back}"
+        );
         let ask = std::fs::read_to_string(hard.join("ask2")).unwrap();
-        assert!(ask.contains("sent on proof lap 1 of 1"), "the judge knows a lap was asked for: {ask}");
-        assert_eq!(open_for("hd").unwrap().laps, 0, "a not yet means the lap starts over");
+        assert!(
+            ask.contains("sent on proof lap 1 of 1"),
+            "the judge knows a lap was asked for: {ask}"
+        );
+        assert_eq!(
+            open_for("hd").unwrap().laps,
+            0,
+            "a not yet means the lap starts over"
+        );
         let pushed = stop(&cfg, "hd");
-        assert!(pushed["reason"].as_str().unwrap().contains("settle it yourself"), "{pushed}");
+        assert!(
+            pushed["reason"]
+                .as_str()
+                .unwrap()
+                .contains("settle it yourself"),
+            "{pushed}"
+        );
         assert_eq!(open_for("hd").unwrap().status, Status::Active);
-        assert!(stop(&cfg, "hd")["systemMessage"].as_str().unwrap().contains("waiting on you"));
+        assert!(
+            stop(&cfg, "hd")["systemMessage"]
+                .as_str()
+                .unwrap()
+                .contains("waiting on you")
+        );
         assert_eq!(open_for("hd").unwrap().status, Status::Paused);
-        assert!(std::fs::read_to_string(hard.join("models")).unwrap().lines().all(|m| m == "claude-sonnet-5-5"), "voyage_hard_model judges");
+        assert!(
+            std::fs::read_to_string(hard.join("models"))
+                .unwrap()
+                .lines()
+                .all(|m| m == "claude-sonnet-5-5"),
+            "voyage_hard_model judges"
+        );
 
         // A check runs before any proof lap: a met that fails it is not yet.
         let cfg = fake_judge(&root.join("checked"), &[&verdict("met", "tests pass", 95)]);
-        start("ck", "/tmp", "tests pass".into(), Some("false".into()), None, Persistence::Hard);
+        start(
+            "ck",
+            "/tmp",
+            "tests pass".into(),
+            Some("false".into()),
+            None,
+            Persistence::Hard,
+        );
         let failed = stop(&cfg, "ck");
-        assert!(failed["reason"].as_str().unwrap().contains("`false` didn't pass"), "{failed}");
+        assert!(
+            failed["reason"]
+                .as_str()
+                .unwrap()
+                .contains("`false` didn't pass"),
+            "{failed}"
+        );
         assert_eq!(open_for("ck").unwrap().laps, 0);
 
         // Steady: a nudge after 4 checks with no headway, a pause after 8.
-        let flat: Vec<String> = (0..9).map(|_| verdict("not_yet", "the parser still fails", 30)).collect();
-        let cfg = fake_judge(&root.join("stuck"), &flat.iter().map(String::as_str).collect::<Vec<_>>());
-        start("sk", "/tmp", "the parser works".into(), None, None, Persistence::Steady);
+        let flat: Vec<String> = (0..9)
+            .map(|_| verdict("not_yet", "the parser still fails", 30))
+            .collect();
+        let cfg = fake_judge(
+            &root.join("stuck"),
+            &flat.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        start(
+            "sk",
+            "/tmp",
+            "the parser works".into(),
+            None,
+            None,
+            Persistence::Steady,
+        );
         let said: Vec<Value> = (0..9).map(|_| stop(&cfg, "sk")).collect();
-        assert!(said[4]["reason"].as_str().unwrap().contains("stuck at about 30% for 4 checks"), "{}", said[4]);
+        assert!(
+            said[4]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("stuck at about 30% for 4 checks"),
+            "{}",
+            said[4]
+        );
         assert!(!said[3]["reason"].as_str().unwrap().contains("stuck"));
-        assert!(said[8]["systemMessage"].as_str().unwrap().contains("paused: 8 checks in a row with no headway"), "{}", said[8]);
+        assert!(
+            said[8]["systemMessage"]
+                .as_str()
+                .unwrap()
+                .contains("paused: 8 checks in a row with no headway"),
+            "{}",
+            said[8]
+        );
         assert_eq!(open_for("sk").unwrap().status, Status::Paused);
 
         // Relentless: opus, two proof laps, then a sceptical review that
         // can still say not yet; three checks at one estimate get a nudge.
         let rel = root.join("relentless");
-        let cfg = fake_judge(&rel, &[
-            &verdict("met", "done", 90),
-            &verdict("met", "done again", 90),
-            &verdict("met", "done a third time", 90),
-            &verdict("not_yet", "a TODO is left in parse.rs", 0),
-            &verdict("not_yet", "still the TODO", 90),
-            &verdict("not_yet", "still the TODO", 90),
-            &verdict("not_yet", "still the TODO", 90),
-            &verdict("not_yet", "still the TODO", 90),
-        ]);
-        start("rl", "/tmp", "tests pass".into(), None, None, Persistence::Relentless);
-        assert!(stop(&cfg, "rl")["reason"].as_str().unwrap().contains("Proof lap 1 of 2"));
-        assert!(stop(&cfg, "rl")["reason"].as_str().unwrap().contains("Proof lap 2 of 2"));
+        let cfg = fake_judge(
+            &rel,
+            &[
+                &verdict("met", "done", 90),
+                &verdict("met", "done again", 90),
+                &verdict("met", "done a third time", 90),
+                &verdict("not_yet", "a TODO is left in parse.rs", 0),
+                &verdict("not_yet", "still the TODO", 90),
+                &verdict("not_yet", "still the TODO", 90),
+                &verdict("not_yet", "still the TODO", 90),
+                &verdict("not_yet", "still the TODO", 90),
+            ],
+        );
+        start(
+            "rl",
+            "/tmp",
+            "tests pass".into(),
+            None,
+            None,
+            Persistence::Relentless,
+        );
+        assert!(
+            stop(&cfg, "rl")["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Proof lap 1 of 2")
+        );
+        assert!(
+            stop(&cfg, "rl")["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Proof lap 2 of 2")
+        );
         let reviewed = stop(&cfg, "rl");
-        assert!(reviewed["reason"].as_str().unwrap().contains("sceptical review of your changes found: a TODO is left"), "{reviewed}");
+        assert!(
+            reviewed["reason"]
+                .as_str()
+                .unwrap()
+                .contains("sceptical review of your changes found: a TODO is left"),
+            "{reviewed}"
+        );
         let (a, b) = (stop(&cfg, "rl"), stop(&cfg, "rl"));
-        assert!(!a["reason"].as_str().unwrap().contains("stuck") && b["reason"].as_str().unwrap().contains("stuck at about 90% for 2 checks"), "{b}");
+        assert!(
+            !a["reason"].as_str().unwrap().contains("stuck")
+                && b["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("stuck at about 90% for 2 checks"),
+            "{b}"
+        );
         let (_, d) = (stop(&cfg, "rl"), stop(&cfg, "rl"));
-        assert!(d["reason"].as_str().unwrap().contains("Still stuck at about 90%, 4 checks now"), "the second nudge is firmer: {d}");
-        assert!(std::fs::read_to_string(rel.join("models")).unwrap().lines().all(|m| m == "opus"));
+        assert!(
+            d["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Still stuck at about 90%, 4 checks now"),
+            "the second nudge is firmer: {d}"
+        );
+        assert!(
+            std::fs::read_to_string(rel.join("models"))
+                .unwrap()
+                .lines()
+                .all(|m| m == "opus")
+        );
 
         unsafe { std::env::remove_var("XDG_STATE_HOME") };
         let _ = std::fs::remove_dir_all(&root);
@@ -1515,11 +1699,23 @@ mod tests {
         let root = std::env::temp_dir().join(format!("toomux-voyage-state-{}", std::process::id()));
         unsafe { std::env::set_var("XDG_STATE_HOME", &root) };
         let cfg = Config::default();
-        let hook = |p: &str| prompt_hook(&cfg, &json!({"session_id": "s1", "cwd": "/tmp", "prompt": p}));
+        let hook = |p: &str| {
+            prompt_hook(
+                &cfg,
+                &json!({"session_id": "s1", "cwd": "/tmp", "prompt": p}),
+            )
+        };
 
-        let out: Value = serde_json::from_str(&hook("/voyage the docs build --budget 10").unwrap()).unwrap();
-        let said = out.pointer("/hookSpecificOutput/additionalContext").and_then(Value::as_str).unwrap();
-        assert!(said.contains("the docs build") && said.contains("$10"), "{said}");
+        let out: Value =
+            serde_json::from_str(&hook("/voyage the docs build --budget 10").unwrap()).unwrap();
+        let said = out
+            .pointer("/hookSpecificOutput/additionalContext")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(
+            said.contains("the docs build") && said.contains("$10"),
+            "{said}"
+        );
         let q = open_for("s1").unwrap();
         assert_eq!((q.status, q.budget_usd), (Status::Active, Some(10.0)));
 
@@ -1534,11 +1730,25 @@ mod tests {
         let mut q = open_for("s2").unwrap();
         pause(&mut q, "which database?");
         // Your next message carries a paused voyage on.
-        assert!(prompt_hook(&cfg, &json!({"session_id": "s2", "prompt": "use postgres"})).is_none());
+        assert!(
+            prompt_hook(&cfg, &json!({"session_id": "s2", "prompt": "use postgres"})).is_none()
+        );
         assert_eq!(open_for("s2").unwrap().status, Status::Active);
 
-        let cleared: Value = serde_json::from_str(&prompt_hook(&cfg, &json!({"session_id": "s2", "prompt": "/voyage clear"})).unwrap()).unwrap();
-        assert!(cleared["reason"].as_str().unwrap().starts_with("voyage cleared"));
+        let cleared: Value = serde_json::from_str(
+            &prompt_hook(
+                &cfg,
+                &json!({"session_id": "s2", "prompt": "/voyage clear"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            cleared["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("voyage cleared")
+        );
         assert!(open_for("s2").is_none());
         assert_eq!(all()[0].status, Status::Cleared);
         unsafe { std::env::remove_var("XDG_STATE_HOME") };

@@ -63,7 +63,10 @@ pub fn claude_json(dir: &Path) -> std::path::PathBuf {
 }
 
 /// Set (or clear) `CLAUDE_CONFIG_DIR` on a command for this account.
-pub fn with_config_dir<'a>(cmd: &'a mut std::process::Command, dir: &Path) -> &'a mut std::process::Command {
+pub fn with_config_dir<'a>(
+    cmd: &'a mut std::process::Command,
+    dir: &Path,
+) -> &'a mut std::process::Command {
     match config_dir_var(dir) {
         Some(_) => cmd.env("CLAUDE_CONFIG_DIR", dir),
         None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
@@ -89,13 +92,24 @@ mod keychain {
 
     fn suffix(dir: &str) -> String {
         let nfc: String = dir.nfc().collect();
-        let hex: String = Sha256::digest(nfc.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = Sha256::digest(nfc.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         format!("-{}", &hex[..8])
     }
 
     fn account() -> String {
-        let user = std::env::var("USER").ok().filter(|u| !u.is_empty()).or_else(login_name).unwrap_or_default();
-        if !user.is_empty() && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        let user = std::env::var("USER")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .or_else(login_name)
+            .unwrap_or_default();
+        if !user.is_empty()
+            && user
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
             user
         } else {
             "claude-code-user".into()
@@ -106,11 +120,22 @@ mod keychain {
         let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
         let mut buf = vec![0 as libc::c_char; 4096];
         let mut out: *mut libc::passwd = std::ptr::null_mut();
-        let rc = unsafe { libc::getpwuid_r(libc::getuid(), &mut pw, buf.as_mut_ptr(), buf.len(), &mut out) };
+        let rc = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut pw,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out,
+            )
+        };
         if rc != 0 || out.is_null() || pw.pw_name.is_null() {
             return None;
         }
-        unsafe { std::ffi::CStr::from_ptr(pw.pw_name) }.to_str().ok().map(str::to_string)
+        unsafe { std::ffi::CStr::from_ptr(pw.pw_name) }
+            .to_str()
+            .ok()
+            .map(str::to_string)
     }
 
     pub fn is_default(dir: &Path) -> bool {
@@ -123,10 +148,18 @@ mod keychain {
     fn services(dir: &Path) -> Vec<String> {
         if let Some(v) = std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
             let v = v.to_string_lossy();
-            return vec![if v.is_empty() { SERVICE.to_string() } else { format!("{SERVICE}{}", suffix(&v)) }];
+            return vec![if v.is_empty() {
+                SERVICE.to_string()
+            } else {
+                format!("{SERVICE}{}", suffix(&v))
+            }];
         }
         let own = format!("{SERVICE}{}", suffix(&dir.display().to_string()));
-        if is_default(dir) { vec![SERVICE.to_string(), own] } else { vec![own] }
+        if is_default(dir) {
+            vec![SERVICE.to_string(), own]
+        } else {
+            vec![own]
+        }
     }
 
     /// Run `security`, as Claude Code does, giving up after 10s (its own
@@ -134,7 +167,11 @@ mod keychain {
     fn security(args: &[&str], input: Option<&str>) -> Option<(i32, String)> {
         let mut child = Command::new(SECURITY)
             .args(args)
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -147,7 +184,9 @@ mod keychain {
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
                 _ => {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -156,12 +195,18 @@ mod keychain {
             }
         }
         let out = child.wait_with_output().ok()?;
-        Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).trim().to_string()))
+        Some((
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
     }
 
     fn find(svc: &str) -> Option<String> {
         let acct = account();
-        match security(&["find-generic-password", "-a", &acct, "-w", "-s", svc], None)? {
+        match security(
+            &["find-generic-password", "-a", &acct, "-w", "-s", svc],
+            None,
+        )? {
             (0, s) if !s.is_empty() => Some(s),
             _ => None,
         }
@@ -174,7 +219,12 @@ mod keychain {
     /// Without `-w` only the item's attributes are read, never the secret.
     pub fn present(dir: &Path) -> bool {
         let acct = account();
-        services(dir).iter().any(|s| matches!(security(&["find-generic-password", "-a", &acct, "-s", s], None), Some((0, _))))
+        services(dir).iter().any(|s| {
+            matches!(
+                security(&["find-generic-password", "-a", &acct, "-s", s], None),
+                Some((0, _))
+            )
+        })
     }
 
     /// Copy the sign-in to the item the new folder is known by, written the
@@ -187,7 +237,10 @@ mod keychain {
             return None;
         }
         let hex: String = secret.bytes().map(|b| format!("{b:02x}")).collect();
-        let line = format!("add-generic-password -U -a \"{}\" -s \"{to_svc}\" -X \"{hex}\"\n", account());
+        let line = format!(
+            "add-generic-password -U -a \"{}\" -s \"{to_svc}\" -X \"{hex}\"\n",
+            account()
+        );
         match security(&["-i"], Some(&line)) {
             Some((0, _)) => Some("sign-in carried over in the Keychain".into()),
             _ => Some("couldn't carry the sign-in over in the Keychain: log in again there".into()),
@@ -220,21 +273,41 @@ mod keychain {
             assert_eq!(read(&dir), None);
             let secret = r#"{"claudeAiOauth":{"accessToken":"not-a-token"}}"#;
             let svc = services(&dir).remove(0);
-            assert!(Command::new(SECURITY)
-                .args(["add-generic-password", "-U", "-a", &account(), "-s", &svc, "-w", secret])
-                .status()
-                .unwrap()
-                .success());
+            assert!(
+                Command::new(SECURITY)
+                    .args([
+                        "add-generic-password",
+                        "-U",
+                        "-a",
+                        &account(),
+                        "-s",
+                        &svc,
+                        "-w",
+                        secret
+                    ])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
             let got = (present(&dir), read(&dir));
             let carried = carry(&dir, &moved);
             let there = read(&moved);
             for s in [svc, services(&moved).remove(0)] {
-                let _ = Command::new(SECURITY).args(["delete-generic-password", "-a", &account(), "-s", &s]).output();
+                let _ = Command::new(SECURITY)
+                    .args(["delete-generic-password", "-a", &account(), "-s", &s])
+                    .output();
             }
             assert_eq!(got, (true, Some(secret.to_string())));
-            assert_eq!(carried.as_deref(), Some("sign-in carried over in the Keychain"));
+            assert_eq!(
+                carried.as_deref(),
+                Some("sign-in carried over in the Keychain")
+            );
             assert_eq!(there.as_deref(), Some(secret));
-            assert!(t.elapsed() < Duration::from_secs(10), "the Keychain took {:?}", t.elapsed());
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "the Keychain took {:?}",
+                t.elapsed()
+            );
         }
     }
 }

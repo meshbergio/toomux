@@ -46,7 +46,10 @@ fn boot_id() -> String {
 }
 
 fn read<T: for<'de> Deserialize<'de> + Default>(name: &str) -> T {
-    std::fs::read_to_string(dir().join(name)).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+    std::fs::read_to_string(dir().join(name))
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default()
 }
 
 fn write<T: Serialize>(name: &str, v: &T) {
@@ -62,10 +65,16 @@ fn write<T: Serialize>(name: &str, v: &T) {
 fn entry(cfg: &Config, s: &Session) -> Entry {
     let window = s.pane.as_ref().and_then(|p| {
         // Only a name someone chose; tmux's automatic one is just the command.
-        crate::tmux::run(&["display-message", "-p", "-t", &p.id, "#{?automatic-rename,,#{window_name}}"])
-            .ok()
-            .map(|w| w.trim().to_string())
-            .filter(|w| !w.is_empty())
+        crate::tmux::run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &p.id,
+            "#{?automatic-rename,,#{window_name}}",
+        ])
+        .ok()
+        .map(|w| w.trim().to_string())
+        .filter(|w| !w.is_empty())
     });
     Entry {
         id: s.id.clone(),
@@ -81,22 +90,36 @@ fn entry(cfg: &Config, s: &Session) -> Entry {
 /// Bring running.json up to date. Cheap when nothing changed: it compares
 /// session ids and places before doing any tmux lookups or writes.
 pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("snapshot.lock")) else {
+        return;
+    };
     let boot = boot_id();
     let mut snap: Snap = read("running.json");
     if snap.boot != boot {
         if !snap.entries.is_empty() {
-            write("restore.json", &Restore { at_ms: snap.at_ms, entries: std::mem::take(&mut snap.entries) });
+            write(
+                "restore.json",
+                &Restore {
+                    at_ms: snap.at_ms,
+                    entries: std::mem::take(&mut snap.entries),
+                },
+            );
             if cfg.reopen_after_restart {
                 let _ = std::fs::write(dir().join(REOPEN_DUE), "");
             }
         }
-        snap = Snap { boot: boot.clone(), ..Default::default() };
+        snap = Snap {
+            boot: boot.clone(),
+            ..Default::default()
+        };
     }
     let live: Vec<&Session> = sessions.iter().filter(|s| !s.dormant).collect();
     let same = live.len() == snap.entries.len()
         && live.iter().all(|s| {
             snap.entries.iter().any(|e| {
-                e.id == s.id && e.title == s.title && e.tmux_session == s.pane.as_ref().map(|p| p.session.clone())
+                e.id == s.id
+                    && e.title == s.title
+                    && e.tmux_session == s.pane.as_ref().map(|p| p.session.clone())
             })
         });
     if same {
@@ -108,7 +131,11 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
     // A shutdown ends every session at once, usually before tmux itself
     // goes. Don't let that wipe the record: doubt a sudden loss of more than
     // half for two minutes before believing it.
-    let lost = snap.entries.iter().filter(|e| !live.iter().any(|s| s.id == e.id)).count();
+    let lost = snap
+        .entries
+        .iter()
+        .filter(|e| !live.iter().any(|s| s.id == e.id))
+        .count();
     if snap.entries.len() >= 3 && lost * 2 > snap.entries.len() {
         match snap.shrink_since {
             None => {
@@ -120,7 +147,12 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
             Some(_) => {
                 // Real: a tmux server went down with them (a reboot is
                 // caught above). Offer them back, as after a restart.
-                let lost: Vec<Entry> = snap.entries.iter().filter(|e| !live.iter().any(|s| s.id == e.id)).cloned().collect();
+                let lost: Vec<Entry> = snap
+                    .entries
+                    .iter()
+                    .filter(|e| !live.iter().any(|s| s.id == e.id))
+                    .cloned()
+                    .collect();
                 let mut r: Restore = read("restore.json");
                 r.entries.retain(|e| !lost.iter().any(|l| l.id == e.id));
                 r.entries.extend(lost);
@@ -161,12 +193,16 @@ pub fn restorable(running: &[Session]) -> Restore {
     if crate::registry::now_ms() - r.at_ms > 7 * 86_400_000 {
         return Restore::default();
     }
-    r.entries.retain(|e| !running.iter().any(|s| !s.dormant && s.id == e.id));
+    r.entries
+        .retain(|e| !running.iter().any(|s| !s.dormant && s.id == e.id));
     r
 }
 
 /// Stop offering these (restored, or dismissed).
 pub fn forget(ids: &[String]) {
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("snapshot.lock")) else {
+        return;
+    };
     let mut r: Restore = read("restore.json");
     let before = r.entries.len();
     r.entries.retain(|e| !ids.contains(&e.id));
@@ -189,8 +225,24 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("toomux-reboot-{}", std::process::id()));
         unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
         let earlier = |cfg: &Config| {
-            let e = Entry { id: "a".into(), cwd: "/".into(), account: "x".into(), title: "work".into(), args: vec![], tmux_session: None, window: None };
-            write("running.json", &Snap { boot: "an earlier boot".into(), at_ms: 1, entries: vec![e], shrink_since: None });
+            let e = Entry {
+                id: "a".into(),
+                cwd: "/".into(),
+                account: "x".into(),
+                title: "work".into(),
+                args: vec![],
+                tmux_session: None,
+                window: None,
+            };
+            write(
+                "running.json",
+                &Snap {
+                    boot: "an earlier boot".into(),
+                    at_ms: 1,
+                    entries: vec![e],
+                    shrink_since: None,
+                },
+            );
             record(cfg, &[], crate::registry::now_ms());
         };
         let mut cfg = Config::default();
@@ -204,5 +256,20 @@ mod tests {
         earlier(&cfg);
         assert!(!reopen_due(), "off: only offered");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn truncated_snapshot_files_are_treated_as_empty() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp =
+            std::env::temp_dir().join(format!("toomux-snapshot-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(dir().join("running.json"), "{").unwrap();
+        std::fs::write(dir().join("restore.json"), "not-json").unwrap();
+        assert_eq!(recorded(), (0, vec![]));
+        assert!(restorable(&[]).entries.is_empty());
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

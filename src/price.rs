@@ -45,11 +45,23 @@ const TABLE: [(&str, f64, f64, f64); 14] = [
 /// a gateway) cost nothing here.
 pub fn of(model: &str, fast: bool) -> Price {
     if !model.is_empty() && !model.starts_with("claude-") && !model.starts_with('<') {
-        return Price { input: 0.0, output: 0.0, read: 0.0 };
+        return Price {
+            input: 0.0,
+            output: 0.0,
+            read: 0.0,
+        };
     }
-    let (_, i, o, r) = TABLE.iter().find(|(id, ..)| model.starts_with(id)).copied().unwrap_or(TABLE[4]);
+    let (_, i, o, r) = TABLE
+        .iter()
+        .find(|(id, ..)| model.starts_with(id))
+        .copied()
+        .unwrap_or(TABLE[4]);
     let k = if fast { 2.0 } else { 1.0 } / 1e6;
-    Price { input: i * k, output: o * k, read: r * k }
+    Price {
+        input: i * k,
+        output: o * k,
+        read: r * k,
+    }
 }
 
 /// "opus 5.5" for `claude-opus-5-5`, "haiku 4.5" for `claude-haiku-4-5-20251001`.
@@ -57,7 +69,10 @@ pub fn name(model: &str) -> String {
     let m = model.strip_prefix("claude-").unwrap_or(model);
     let mut parts: Vec<&str> = m.split('-').collect();
     // A dated snapshot's date.
-    if parts.last().is_some_and(|p| p.len() == 8 && p.chars().all(|c| c.is_ascii_digit())) {
+    if parts
+        .last()
+        .is_some_and(|p| p.len() == 8 && p.chars().all(|c| c.is_ascii_digit()))
+    {
         parts.pop();
     }
     match parts.split_first() {
@@ -75,10 +90,14 @@ mod tests {
         // Session f2242663's own cost-state: opus 5.5, $10.410496, all of its
         // cache writes for the hour; haiku 4.5, $0.065022, for five minutes.
         let p = of("claude-opus-5-5", false);
-        let opus = 4_810.0 * p.input + 140_187.0 * p.output + 26_535_740.0 * p.read + 285_046.0 * p.write_1h();
+        let opus = 4_810.0 * p.input
+            + 140_187.0 * p.output
+            + 26_535_740.0 * p.read
+            + 285_046.0 * p.write_1h();
         assert!((opus - 10.410496).abs() < 1e-6, "{opus}");
         let h = of("claude-haiku-4-5-20251001", false);
-        let haiku = 11_203.0 * h.input + 1_756.0 * h.output + 93_452.0 * h.read + 28_555.0 * h.write_5m();
+        let haiku =
+            11_203.0 * h.input + 1_756.0 * h.output + 93_452.0 * h.read + 28_555.0 * h.write_5m();
         assert!((haiku - 0.06502195).abs() < 1e-6, "{haiku}");
     }
 

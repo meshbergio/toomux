@@ -28,7 +28,15 @@ const DEPTH: usize = 7;
 
 /// Claude Code's folder name for a workspace path.
 pub fn mangle(path: &str) -> String {
-    path.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect()
+    path.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// The folders under home, by Claude Code's name for them and by their own.
@@ -47,7 +55,12 @@ impl Places {
             .flat_map(|r| std::fs::read_dir(r).into_iter().flatten().flatten())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        let mut p = Places { home: home.to_path_buf(), worked, by_folder: HashMap::new(), by_name: HashMap::new() };
+        let mut p = Places {
+            home: home.to_path_buf(),
+            worked,
+            by_folder: HashMap::new(),
+            by_name: HashMap::new(),
+        };
         p.add(home);
         p.by_folder.insert("-".into(), PathBuf::from("/"));
         let mut stack = vec![(home.to_path_buf(), 0)];
@@ -57,7 +70,12 @@ impl Places {
             }
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "venv" | "__pycache__") {
+                if name.starts_with('.')
+                    || matches!(
+                        name.as_str(),
+                        "node_modules" | "target" | "venv" | "__pycache__"
+                    )
+                {
                     continue;
                 }
                 let Ok(kind) = e.file_type() else { continue };
@@ -66,7 +84,8 @@ impl Places {
                     stack.push((e.path(), depth + 1));
                 } else if kind.is_symlink() && e.path().is_dir() {
                     // A folder by another name: live, but not walked twice.
-                    p.by_folder.insert(mangle(&e.path().to_string_lossy()), e.path());
+                    p.by_folder
+                        .insert(mangle(&e.path().to_string_lossy()), e.path());
                 }
             }
         }
@@ -87,9 +106,13 @@ impl Places {
     }
 
     fn add(&mut self, d: &Path) {
-        self.by_folder.insert(mangle(&d.to_string_lossy()), d.to_path_buf());
+        self.by_folder
+            .insert(mangle(&d.to_string_lossy()), d.to_path_buf());
         if let Some(n) = d.file_name() {
-            self.by_name.entry(n.to_string_lossy().into_owned()).or_default().push(d.to_path_buf());
+            self.by_name
+                .entry(n.to_string_lossy().into_owned())
+                .or_default()
+                .push(d.to_path_buf());
         }
     }
 
@@ -108,14 +131,22 @@ impl Places {
         }
         let mut best: Vec<(&PathBuf, usize)> = Vec::new();
         for (m, d) in &self.by_folder {
-            let own = d.file_name().map(|n| mangle(&n.to_string_lossy())).unwrap_or_default();
+            let own = d
+                .file_name()
+                .map(|n| mangle(&n.to_string_lossy()))
+                .unwrap_or_default();
             if own.len() < 4 || !folder.ends_with(&format!("-{own}")) || *d == self.home {
                 continue;
             }
             if !d.join(".git").exists() && !self.worked.contains(m) {
                 continue;
             }
-            let shared = m.chars().rev().zip(folder.chars().rev()).take_while(|(a, b)| a == b).count();
+            let shared = m
+                .chars()
+                .rev()
+                .zip(folder.chars().rev())
+                .take_while(|(a, b)| a == b)
+                .count();
             match best.first() {
                 Some((_, s)) if shared < *s => {}
                 Some((_, s)) if shared == *s => best.push((d, shared)),
@@ -150,7 +181,9 @@ impl Places {
     }
 }
 
-static PATH_REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?:~|/home/[A-Za-z0-9._-]+)/[^\s`'"()<>\[\]{}*|,;]+"#).expect("path pattern"));
+static PATH_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:~|/home/[A-Za-z0-9._-]+)/[^\s`'"()<>\[\]{}*|,;]+"#).expect("path pattern")
+});
 
 /// A cited path worth checking, trimmed of the sentence around it; None for
 /// fragments, placeholders and other users' homes.
@@ -169,8 +202,13 @@ fn cited(raw: &str, home: &Path) -> Option<PathBuf> {
 /// Whether a path that stopped at a space goes on past it: `~/AI Brain/x`
 /// is matched as `~/AI`, which is not gone when `~/AI Brain` is there.
 fn spaced(p: &Path, after: &str) -> bool {
-    let Some(rest) = after.strip_prefix(' ') else { return false };
-    let word: String = rest.chars().take_while(|c| !c.is_whitespace() && !"/`'\"()<>[]{}*|,;".contains(*c)).collect();
+    let Some(rest) = after.strip_prefix(' ') else {
+        return false;
+    };
+    let word: String = rest
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !"/`'\"()<>[]{}*|,;".contains(*c))
+        .collect();
     !word.is_empty() && PathBuf::from(format!("{} {word}", p.display())).exists()
 }
 
@@ -178,7 +216,9 @@ fn spaced(p: &Path, after: &str) -> bool {
 fn temporary(p: &Path, home: &Path) -> bool {
     p.strip_prefix(home).unwrap_or(p).components().any(|c| {
         let c = c.as_os_str().to_string_lossy();
-        c.starts_with("tmp") || c.starts_with(".tmp") || matches!(c.as_ref(), ".cache" | "target" | "tmp" | "scratchpad")
+        c.starts_with("tmp")
+            || c.starts_with(".tmp")
+            || matches!(c.as_ref(), ".cache" | "target" | "tmp" | "scratchpad")
     })
 }
 
@@ -209,22 +249,40 @@ pub fn places(cfg: &Config) -> Places {
 pub fn run(cfg: &Config, places: &Places, apply: bool) -> Result<Report> {
     let home = crate::config::home();
     let roots = crate::index::roots(cfg);
-    let r = run_in(&roots, places, &home, &crate::archive::dir(), apply && cfg.fix_memory)?;
+    let r = run_in(
+        &roots,
+        places,
+        &home,
+        &crate::archive::dir(),
+        apply && cfg.fix_memory,
+    )?;
     if apply {
         save_gone(&r.gone);
     }
     Ok(r)
 }
 
-fn run_in(roots: &[PathBuf], places: &Places, home: &Path, archive: &Path, apply: bool) -> Result<Report> {
+fn run_in(
+    roots: &[PathBuf],
+    places: &Places,
+    home: &Path,
+    archive: &Path,
+    apply: bool,
+) -> Result<Report> {
     let mut r = Report::default();
     let cited = all_memory_text(roots);
     for root in roots {
-        let mut folders: Vec<_> = std::fs::read_dir(root).into_iter().flatten().flatten().filter(|p| p.path().join("memory").is_dir()).collect();
+        let mut folders: Vec<_> = std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|p| p.path().join("memory").is_dir())
+            .collect();
         folders.sort_by_key(|f| f.file_name());
         for f in &folders {
             let name = f.file_name().to_string_lossy().into_owned();
-            let recorded = crate::index::recorded_cwd(&f.path()).is_some_and(|c| Path::new(&c).is_dir());
+            let recorded =
+                crate::index::recorded_cwd(&f.path()).is_some_and(|c| Path::new(&c).is_dir());
             if recorded || places.live(&name).is_some() {
                 continue;
             }
@@ -243,12 +301,18 @@ fn run_in(roots: &[PathBuf], places: &Places, home: &Path, archive: &Path, apply
             }
         }
         for f in &folders {
-            for e in std::fs::read_dir(f.path().join("memory")).into_iter().flatten().flatten() {
+            for e in std::fs::read_dir(f.path().join("memory"))
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 let path = e.path();
                 if path.extension().is_none_or(|x| x != "md") {
                     continue;
                 }
-                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
                 r.files += 1;
                 check(root, &path, &text, places, home, archive, apply, &mut r)?;
             }
@@ -262,7 +326,11 @@ fn all_memory_text(roots: &[PathBuf]) -> String {
     let mut all = String::new();
     for root in roots {
         for f in std::fs::read_dir(root).into_iter().flatten().flatten() {
-            for e in std::fs::read_dir(f.path().join("memory")).into_iter().flatten().flatten() {
+            for e in std::fs::read_dir(f.path().join("memory"))
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 if e.path().extension().is_some_and(|x| x == "md") {
                     all.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
                     all.push('\n');
@@ -277,21 +345,36 @@ fn all_memory_text(roots: &[PathBuf]) -> String {
 /// memory migrated to (MIGRATED_TO_*.md), or other memory cites its files for
 /// the full detail. It stays where those pointers expect it.
 fn archived(dir: &Path, name: &str, cited: &str) -> bool {
-    let marked = std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
-        let n = e.file_name().to_string_lossy().to_uppercase();
-        n.starts_with("MIGRATED_TO") || n.starts_with("MOVED_TO")
-    });
+    let marked = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| {
+            let n = e.file_name().to_string_lossy().to_uppercase();
+            n.starts_with("MIGRATED_TO") || n.starts_with("MOVED_TO")
+        });
     marked || cited.contains(&format!("{name}/memory/"))
 }
 
 /// Check one memory file's paths, correcting the ones that moved.
 #[allow(clippy::too_many_arguments)]
-fn check(root: &Path, path: &Path, text: &str, places: &Places, home: &Path, archive: &Path, apply: bool, r: &mut Report) -> Result<()> {
+fn check(
+    root: &Path,
+    path: &Path,
+    text: &str,
+    places: &Places,
+    home: &Path,
+    archive: &Path,
+    apply: bool,
+    r: &mut Report,
+) -> Result<()> {
     let key = path.display().to_string();
     let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let mut gone = Vec::new();
     for m in PATH_REF.find_iter(text) {
-        let Some(p) = cited(m.as_str(), home) else { continue };
+        let Some(p) = cited(m.as_str(), home) else {
+            continue;
+        };
         r.cited += 1;
         if p.exists() || spaced(&p, &text[m.end()..]) {
             continue;
@@ -302,7 +385,10 @@ fn check(root: &Path, path: &Path, text: &str, places: &Places, home: &Path, arc
         }
         // A path with a space in it can't be written back into prose and read
         // again as one path.
-        match places.relocate(&p).filter(|n| !n.to_string_lossy().contains(char::is_whitespace)) {
+        match places
+            .relocate(&p)
+            .filter(|n| !n.to_string_lossy().contains(char::is_whitespace))
+        {
             Some(now) => {
                 // Written as it was: with ~ if it was, and the trimmed end kept.
                 let old = m.as_str();
@@ -344,12 +430,23 @@ fn bring(root: &Path, from: &str, to: &str, archive: &Path, apply: bool) -> Resu
     if apply {
         std::fs::create_dir_all(&dst)?;
     }
-    let tag = from.trim_start_matches('-').rsplit('-').next().unwrap_or("old").to_ascii_lowercase();
+    let tag = from
+        .trim_start_matches('-')
+        .rsplit('-')
+        .next()
+        .unwrap_or("old")
+        .to_ascii_lowercase();
     let mut renamed: Vec<(String, String)> = Vec::new();
     let mut brought = 0;
-    let mut names: Vec<_> = std::fs::read_dir(&src)?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let mut names: Vec<_> = std::fs::read_dir(&src)?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
     names.sort();
-    for name in names.iter().filter(|n| n.ends_with(".md") && *n != "MEMORY.md") {
+    for name in names
+        .iter()
+        .filter(|n| n.ends_with(".md") && *n != "MEMORY.md")
+    {
         let text = std::fs::read_to_string(src.join(name))?;
         let mut target = dst.join(name);
         if let Ok(there) = std::fs::read_to_string(&target) {
@@ -391,8 +488,14 @@ fn bring(root: &Path, from: &str, to: &str, archive: &Path, apply: bool) -> Resu
                 if !now.is_empty() {
                     crate::archive::keep_version(root, &index, &now, archive)?;
                 }
-                let line = format!("- [Before the move]({topic}) — this workspace's memory index from {from}\n");
-                let joined = if now.is_empty() || now.ends_with('\n') { format!("{now}{line}") } else { format!("{now}\n{line}") };
+                let line = format!(
+                    "- [Before the move]({topic}) — this workspace's memory index from {from}\n"
+                );
+                let joined = if now.is_empty() || now.ends_with('\n') {
+                    format!("{now}{line}")
+                } else {
+                    format!("{now}\n{line}")
+                };
                 write_as(&index, &joined)?;
             }
         }
@@ -420,21 +523,35 @@ struct Gone {
 
 fn save_gone(g: &BTreeMap<String, Vec<String>>) {
     let tmp = gone_path().with_extension(format!("json.{}", std::process::id()));
-    if std::fs::write(&tmp, serde_json::to_string(&Gone { files: g.clone() }).unwrap_or_default()).is_ok() {
+    if std::fs::write(
+        &tmp,
+        serde_json::to_string(&Gone { files: g.clone() }).unwrap_or_default(),
+    )
+    .is_ok()
+    {
         let _ = std::fs::rename(tmp, gone_path());
     }
 }
 
 /// The paths a memory file cites that were gone at the last upkeep.
 pub fn gone_in(file: &str) -> Vec<String> {
-    let g: Gone = std::fs::read_to_string(gone_path()).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default();
+    let g: Gone = std::fs::read_to_string(gone_path())
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default();
     g.files.get(file).cloned().unwrap_or_default()
 }
 
 /// Memory files under `prefix` citing paths that are gone, with those paths.
 pub fn gone_files(prefix: &str) -> Vec<(String, Vec<String>)> {
-    let g: Gone = std::fs::read_to_string(gone_path()).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default();
-    g.files.into_iter().filter(|(f, _)| f.starts_with(prefix)).collect()
+    let g: Gone = std::fs::read_to_string(gone_path())
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())
+        .unwrap_or_default();
+    g.files
+        .into_iter()
+        .filter(|(f, _)| f.starts_with(prefix))
+        .collect()
 }
 
 #[cfg(test)]
@@ -454,8 +571,14 @@ mod tests {
 
     #[test]
     fn folder_names_are_claude_codes() {
-        assert_eq!(mangle("/home/sam/AI Brain/workspaces"), "-home-sam-AI-Brain-workspaces");
-        assert_eq!(mangle("/home/sam/Northwind_Platform_Workspace"), "-home-sam-Northwind-Platform-Workspace");
+        assert_eq!(
+            mangle("/home/sam/AI Brain/workspaces"),
+            "-home-sam-AI-Brain-workspaces"
+        );
+        assert_eq!(
+            mangle("/home/sam/Northwind_Platform_Workspace"),
+            "-home-sam-Northwind-Platform-Workspace"
+        );
     }
 
     #[test]
@@ -468,11 +591,18 @@ mod tests {
         std::fs::create_dir_all(&cited).unwrap();
         let live = root.join("-home-sam-new/memory");
         std::fs::create_dir_all(&live).unwrap();
-        std::fs::write(live.join("t.md"), "full detail: ~/.claude/projects/-home-sam-older/memory/t.md").unwrap();
+        std::fs::write(
+            live.join("t.md"),
+            "full detail: ~/.claude/projects/-home-sam-older/memory/t.md",
+        )
+        .unwrap();
         let text = all_memory_text(&[root.clone()]);
         assert!(archived(&marked, "-home-sam-old", &text));
         assert!(archived(&cited, "-home-sam-older", &text));
-        assert!(!archived(&live, "-home-sam-ne", &text), "a name that is only a prefix of another's");
+        assert!(
+            !archived(&live, "-home-sam-ne", &text),
+            "a name that is only a prefix of another's"
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 
@@ -497,8 +627,15 @@ mod tests {
         std::fs::create_dir_all(home.join("sdk/lib/Cloud_App")).unwrap();
         let places = Places::scan(&home, &[root.clone()]);
         let folder = mangle(&home.join("Cloud_App").to_string_lossy());
-        assert_eq!(places.moved(&folder), Some(&ws), "its old name's tail finds it");
-        assert!(places.moved(&mangle(&ws.to_string_lossy())).is_none(), "a live workspace hasn't moved");
+        assert_eq!(
+            places.moved(&folder),
+            Some(&ws),
+            "its old name's tail finds it"
+        );
+        assert!(
+            places.moved(&mangle(&ws.to_string_lossy())).is_none(),
+            "a live workspace hasn't moved"
+        );
         let mem = root.join(mangle(&ws.to_string_lossy())).join("memory");
         std::fs::create_dir_all(&mem).unwrap();
         let note = mem.join("styles.md");
@@ -506,10 +643,18 @@ mod tests {
         std::fs::write(&note, text).unwrap();
         let r = run_in(&[root.clone()], &places, &home, &archive, true).unwrap();
         let now = std::fs::read_to_string(&note).unwrap();
-        assert!(now.contains("`~/storage/work/Cloud_App/src/tokens.css`"), "{now}");
+        assert!(
+            now.contains("`~/storage/work/Cloud_App/src/tokens.css`"),
+            "{now}"
+        );
         assert_eq!(r.fixed.len(), 1);
         assert_eq!(r.temporary, 1, "a tmp worktree is expected to go");
-        assert_eq!(r.gone.values().flatten().count(), 1, "what can't be placed is listed: {:?}", r.gone);
+        assert_eq!(
+            r.gone.values().flatten().count(),
+            1,
+            "what can't be placed is listed: {:?}",
+            r.gone
+        );
         let kept = crate::archive::versions(&archive, &root, &note);
         assert_eq!(kept.len(), 1, "the file as it was is in the archive");
         assert_eq!(crate::archive::read_version(&kept[0]).unwrap(), text);
@@ -523,11 +668,19 @@ mod tests {
         let (tmp, home, root, archive) = rig("bring");
         let new_home = home.join("storage/projects/Platform_Workspace");
         std::fs::create_dir_all(new_home.join(".git")).unwrap();
-        let old = root.join(mangle(&home.join("Platform_Workspace").to_string_lossy())).join("memory");
-        let new = root.join(mangle(&new_home.to_string_lossy())).join("memory");
+        let old = root
+            .join(mangle(&home.join("Platform_Workspace").to_string_lossy()))
+            .join("memory");
+        let new = root
+            .join(mangle(&new_home.to_string_lossy()))
+            .join("memory");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::create_dir_all(&new).unwrap();
-        std::fs::write(old.join("MEMORY.md"), "- [Deploys](deploys.md) — how\n- [Same](same.md) — same\n").unwrap();
+        std::fs::write(
+            old.join("MEMORY.md"),
+            "- [Deploys](deploys.md) — how\n- [Same](same.md) — same\n",
+        )
+        .unwrap();
         std::fs::write(old.join("deploys.md"), "old deploy notes").unwrap();
         std::fs::write(old.join("same.md"), "identical").unwrap();
         std::fs::write(new.join("deploys.md"), "new deploy notes").unwrap();
@@ -536,15 +689,39 @@ mod tests {
         let places = Places::scan(&home, &[root.clone()]);
         let r = run_in(&[root.clone()], &places, &home, &archive, true).unwrap();
         assert_eq!(r.moved.len(), 1, "{:?}", r);
-        assert_eq!(std::fs::read_to_string(new.join("deploys.md")).unwrap(), "new deploy notes", "what's there is kept");
-        let from = std::fs::read_dir(&new).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert!(from.iter().any(|n| n.starts_with("deploys.from-") && n.ends_with(".md")), "{from:?}");
-        let topic = from.iter().find(|n| n.starts_with("moved-from-")).expect("the old index comes as a topic");
+        assert_eq!(
+            std::fs::read_to_string(new.join("deploys.md")).unwrap(),
+            "new deploy notes",
+            "what's there is kept"
+        );
+        let from = std::fs::read_dir(&new)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            from.iter()
+                .any(|n| n.starts_with("deploys.from-") && n.ends_with(".md")),
+            "{from:?}"
+        );
+        let topic = from
+            .iter()
+            .find(|n| n.starts_with("moved-from-"))
+            .expect("the old index comes as a topic");
         let body = std::fs::read_to_string(new.join(topic)).unwrap();
-        assert!(body.contains("(deploys.from-") && body.contains("(same.md)"), "links follow renames: {body}");
+        assert!(
+            body.contains("(deploys.from-") && body.contains("(same.md)"),
+            "links follow renames: {body}"
+        );
         let index = std::fs::read_to_string(new.join("MEMORY.md")).unwrap();
-        assert!(index.starts_with("# Rules\n- be calm\n") && index.contains(topic.as_str()), "{index}");
-        assert!(old.join("deploys.md").exists(), "the old folder is left as it is");
+        assert!(
+            index.starts_with("# Rules\n- be calm\n") && index.contains(topic.as_str()),
+            "{index}"
+        );
+        assert!(
+            old.join("deploys.md").exists(),
+            "the old folder is left as it is"
+        );
         let again = run_in(&[root.clone()], &places, &home, &archive, true).unwrap();
         assert!(again.moved.is_empty(), "brought once: {:?}", again.moved);
         let _ = std::fs::remove_dir_all(tmp);
@@ -555,13 +732,27 @@ mod tests {
         let (tmp, home, root, _) = rig("lookalike");
         std::fs::create_dir_all(home.join("android-sdk/lib/analytics-library/tracker")).unwrap();
         let places = Places::scan(&home, &[root.clone()]);
-        assert!(places.moved(&mangle(&home.join(".local/state/ai-usage-tracker").to_string_lossy())).is_none());
+        assert!(
+            places
+                .moved(&mangle(
+                    &home.join(".local/state/ai-usage-tracker").to_string_lossy()
+                ))
+                .is_none()
+        );
         std::fs::create_dir_all(home.join("a")).unwrap();
         std::os::unix::fs::symlink(home.join("a"), home.join("link")).unwrap();
         std::fs::create_dir_all(home.join("x/deep/go")).unwrap();
         let places = Places::scan(&home, &[root.clone()]);
-        assert!(places.relocate(&home.join("go")).is_none(), "a bare name is no evidence");
-        assert!(places.live(&mangle(&home.join("link").to_string_lossy())).is_some(), "a linked folder is live");
+        assert!(
+            places.relocate(&home.join("go")).is_none(),
+            "a bare name is no evidence"
+        );
+        assert!(
+            places
+                .live(&mangle(&home.join("link").to_string_lossy()))
+                .is_some(),
+            "a linked folder is live"
+        );
         let _ = std::fs::remove_dir_all(tmp);
     }
 }

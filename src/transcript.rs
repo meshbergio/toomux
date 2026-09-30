@@ -18,7 +18,9 @@ pub struct Turn {
 const TAIL_BYTES: u64 = 768 * 1024;
 
 pub fn tail(path: &Path, max_turns: usize) -> Vec<Turn> {
-    let Ok(mut f) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let from = len.saturating_sub(TAIL_BYTES);
     if f.seek(SeekFrom::Start(from)).is_err() {
@@ -37,8 +39,12 @@ pub fn tail(path: &Path, max_turns: usize) -> Vec<Turn> {
 
     let mut turns: Vec<Turn> = Vec::new();
     for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        if v.get("isMeta").and_then(Value::as_bool) == Some(true) || v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("isMeta").and_then(Value::as_bool) == Some(true)
+            || v.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
             continue;
         }
         let who = match v.get("type").and_then(Value::as_str) {
@@ -46,7 +52,9 @@ pub fn tail(path: &Path, max_turns: usize) -> Vec<Turn> {
             Some("assistant") => Who::Claude,
             _ => continue,
         };
-        let Some(text) = text_of(v.pointer("/message/content")) else { continue };
+        let Some(text) = text_of(v.pointer("/message/content")) else {
+            continue;
+        };
         let text = text.trim();
         // Skip slash-command plumbing and system-injected wrappers.
         if text.is_empty() || text.starts_with('<') || text.starts_with("Caveat:") {
@@ -56,7 +64,10 @@ pub fn tail(path: &Path, max_turns: usize) -> Vec<Turn> {
             (Some(last), Who::Claude) if matches!(last.who, Who::Claude) => {
                 last.text = text.to_string();
             }
-            _ => turns.push(Turn { who, text: text.to_string() }),
+            _ => turns.push(Turn {
+                who,
+                text: text.to_string(),
+            }),
         }
     }
     let skip = turns.len().saturating_sub(max_turns);
@@ -92,30 +103,55 @@ impl Meta {
 
     fn absorb(&mut self, line: &str) {
         // Cheap prefilter: most lines are tool traffic we never need to parse.
-        let kind = ["\"type\":\"assistant\"", "\"type\":\"ai-title\"", "\"type\":\"custom-title\"", "\"type\":\"last-prompt\"", "\"type\":\"pr-link\""]
-            .into_iter()
-            .position(|k| line.contains(k));
+        let kind = [
+            "\"type\":\"assistant\"",
+            "\"type\":\"ai-title\"",
+            "\"type\":\"custom-title\"",
+            "\"type\":\"last-prompt\"",
+            "\"type\":\"pr-link\"",
+        ]
+        .into_iter()
+        .position(|k| line.contains(k));
         let Some(kind) = kind else { return };
-        let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
         let str_at = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
         match (kind, v.get("type").and_then(Value::as_str)) {
             (0, Some("assistant")) => {
                 if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
                     return;
                 }
-                self.limit_hit = (v.get("error").and_then(Value::as_str) == Some("rate_limit")).then(|| {
-                    let text = text_of(v.pointer("/message/content")).unwrap_or_else(|| "usage limit".into());
-                    let text = text.trim().trim_start_matches("You've hit your ").to_string();
-                    let text = text.split(" (").next().unwrap_or(&text).to_string();
-                    let at = v.get("timestamp").and_then(Value::as_str).and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-                    (text, at.map(|t| t.with_timezone(&Local)))
-                });
+                self.limit_hit = (v.get("error").and_then(Value::as_str) == Some("rate_limit"))
+                    .then(|| {
+                        let text = text_of(v.pointer("/message/content"))
+                            .unwrap_or_else(|| "usage limit".into());
+                        let text = text
+                            .trim()
+                            .trim_start_matches("You've hit your ")
+                            .to_string();
+                        let text = text.split(" (").next().unwrap_or(&text).to_string();
+                        let at = v
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+                        (text, at.map(|t| t.with_timezone(&Local)))
+                    });
             }
-            (1, Some("ai-title")) => self.title = str_at("aiTitle").filter(|t| !t.trim().is_empty()),
-            (2, Some("custom-title")) => self.custom = str_at("customTitle").filter(|t| !t.trim().is_empty()),
-            (3, Some("last-prompt")) => self.last_prompt = str_at("lastPrompt").filter(|t| !t.trim().is_empty()),
+            (1, Some("ai-title")) => {
+                self.title = str_at("aiTitle").filter(|t| !t.trim().is_empty())
+            }
+            (2, Some("custom-title")) => {
+                self.custom = str_at("customTitle").filter(|t| !t.trim().is_empty())
+            }
+            (3, Some("last-prompt")) => {
+                self.last_prompt = str_at("lastPrompt").filter(|t| !t.trim().is_empty())
+            }
             (4, Some("pr-link")) => {
-                if let (Some(repo), Some(n)) = (str_at("prRepository"), v.get("prNumber").and_then(Value::as_u64)) {
+                if let (Some(repo), Some(n)) = (
+                    str_at("prRepository"),
+                    v.get("prNumber").and_then(Value::as_u64),
+                ) {
                     self.pr = Some((repo, n));
                 }
             }
@@ -133,12 +169,15 @@ struct Cached {
     meta: Meta,
 }
 
-static CACHE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Cached>>> = std::sync::Mutex::new(None);
+static CACHE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Cached>>> =
+    std::sync::Mutex::new(None);
 
 /// Read a transcript's metadata. Within one process this is incremental: only
 /// bytes appended since the last call are read.
 pub fn meta(path: &Path) -> Meta {
-    let Ok(len) = std::fs::metadata(path).map(|m| m.len()) else { return Meta::default() };
+    let Ok(len) = std::fs::metadata(path).map(|m| m.len()) else {
+        return Meta::default();
+    };
     let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let cache = guard.get_or_insert_with(Default::default);
     let (from, mut meta, fresh) = match cache.remove(path) {
@@ -152,17 +191,32 @@ pub fn meta(path: &Path) -> Meta {
     };
     let mut bytes = Vec::new();
     if let Ok(mut f) = std::fs::File::open(path)
-        && f.seek(SeekFrom::Start(from)).is_ok() {
-            let _ = f.take(len - from).read_to_end(&mut bytes);
-        }
+        && f.seek(SeekFrom::Start(from)).is_ok()
+    {
+        let _ = f.take(len - from).read_to_end(&mut bytes);
+    }
     // Only whole lines: a writer may be mid-line at the end, and a tail read
     // starts mid-line at the front.
     let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    let start = if fresh && from > 0 { bytes.iter().position(|&b| b == b'\n').map_or(end, |i| i + 1).min(end) } else { 0 };
+    let start = if fresh && from > 0 {
+        bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(end, |i| i + 1)
+            .min(end)
+    } else {
+        0
+    };
     for line in String::from_utf8_lossy(&bytes[start..end]).lines() {
         meta.absorb(line);
     }
-    cache.insert(path.to_path_buf(), Cached { upto: from + end as u64, meta: meta.clone() });
+    cache.insert(
+        path.to_path_buf(),
+        Cached {
+            upto: from + end as u64,
+            meta: meta.clone(),
+        },
+    );
     meta
 }
 
@@ -191,14 +245,20 @@ fn reset_time(text: &str, hit_at: Option<DateTime<Local>>) -> Option<DateTime<Lo
         (h, false) => h,
     };
     let base = hit_at.unwrap_or_else(Local::now);
-    let at_time = |d: NaiveDate| Local.from_local_datetime(&d.and_hms_opt(h, m, 0)?).earliest();
+    let at_time = |d: NaiveDate| {
+        Local
+            .from_local_datetime(&d.and_hms_opt(h, m, 0)?)
+            .earliest()
+    };
     match date {
         Some(d) => {
             let mut parts = d.split_whitespace();
             let name = parts.next()?;
-            let month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-                .iter()
-                .position(|mo| name.starts_with(mo))? as u32
+            let month = [
+                "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+            ]
+            .iter()
+            .position(|mo| name.starts_with(mo))? as u32
                 + 1;
             let day: u32 = parts.next()?.parse().ok()?;
             let mut reset = at_time(NaiveDate::from_ymd_opt(base.year(), month, day)?)?;
@@ -209,7 +269,11 @@ fn reset_time(text: &str, hit_at: Option<DateTime<Local>>) -> Option<DateTime<Lo
         }
         None => {
             let today = at_time(base.date_naive())?;
-            Some(if today > base { today } else { at_time(base.date_naive().succ_opt()?)? })
+            Some(if today > base {
+                today
+            } else {
+                at_time(base.date_naive().succ_opt()?)?
+            })
         }
     }
 }
@@ -238,9 +302,15 @@ mod tests {
     fn parses_dated_and_daily_resets() {
         let hit = Local.with_ymd_and_hms(2026, 9, 29, 15, 53, 0).unwrap();
         let weekly = reset_time("weekly limit · resets Oct 3, 5pm", Some(hit)).unwrap();
-        assert_eq!(weekly, Local.with_ymd_and_hms(2026, 10, 3, 17, 0, 0).unwrap());
+        assert_eq!(
+            weekly,
+            Local.with_ymd_and_hms(2026, 10, 3, 17, 0, 0).unwrap()
+        );
         let later_today = reset_time("5-hour limit · resets 5pm", Some(hit)).unwrap();
-        assert_eq!(later_today, Local.with_ymd_and_hms(2026, 9, 29, 17, 0, 0).unwrap());
+        assert_eq!(
+            later_today,
+            Local.with_ymd_and_hms(2026, 9, 29, 17, 0, 0).unwrap()
+        );
         let tomorrow = reset_time("limit · resets 11:30am", Some(hit)).unwrap();
         assert_eq!((tomorrow.hour(), tomorrow.minute()), (11, 30));
         assert!(tomorrow > hit);
