@@ -89,6 +89,10 @@ pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Re
     let mut r = Repo { path: repo.to_path_buf(), ..Repo::default() };
     let base = default_branch(repo);
     let trees = worktrees(repo);
+    // Git lists real paths; a folder reached through a symlink (macOS /var is
+    // /private/var) must still count as in use.
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let in_use: Vec<PathBuf> = in_use.iter().map(|u| real(u)).collect();
     for t in trees.iter().skip(1) {
         if t.prunable {
             r.pruned += 1;
@@ -96,7 +100,8 @@ pub fn tend(repo: &Path, apply: bool, in_use: &[PathBuf], now: SystemTime) -> Re
         }
         let merged = base.as_deref().is_some_and(|b| !t.head.is_empty() && git(repo, &["merge-base", "--is-ancestor", &t.head, b]).is_some());
         let clean = git(&t.path, &["status", "--porcelain"]).is_some_and(|s| s.trim().is_empty());
-        let used = in_use.iter().any(|u| u.starts_with(&t.path));
+        let here = real(&t.path);
+        let used = in_use.iter().any(|u| u.starts_with(&here));
         if t.locked || !merged || !clean || used || !quiet(&t.path, now) {
             r.kept += 1;
             continue;
@@ -158,6 +163,8 @@ mod tests {
     fn only_merged_clean_quiet_worktrees_go() {
         let tmp = std::env::temp_dir().join(format!("toomux-hygiene-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = tmp.canonicalize().unwrap();
         let repo = tmp.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         sh(&repo, &["init", "-q", "-b", "main"]);
