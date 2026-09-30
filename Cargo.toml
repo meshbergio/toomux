@@ -1,0 +1,52 @@
+[package]
+name = "toomux"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A calm control center for every Claude Code session on a machine: tmux switching, handovers, shared memory, accounts"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/meshbergio/toomux"
+readme = "README.md"
+keywords = ["claude", "tmux", "tui", "ai", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["target", "assets"]
+
+[dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
+ansi-to-tui = "8.0.1"
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29"
+dirs = "7.0.0"
+libc = "0.2.189"
+regex = "1"
+notify = "8.2.0"
+ratatui = "0.30"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+sha2 = "0.10"
+shell-words = "1.1.1"
+toml = "1.1.6"
+unicode-width = "0.2"
+zstd = "0.13"
+toml_edit = "0.25.15"
+
+# Claude Code names its macOS Keychain items after the NFC form of the
+# config folder.
+[target.'cfg(target_os = "macos")'.dependencies]
+unicode-normalization = "0.1"
+
+
+[profile.release]
+opt-level = 3
+
+# Allowed where the plain form reads better: `&[x.clone()]` in tests, an
+# edit-distance index loop, a negation kept as written, ratatui return types.
+[lints.clippy]
+cloned_ref_to_slice_refs = "allow"
+needless_range_loop = "allow"
+nonminimal_bool = "allow"
+type_complexity = "allow"
+field_reassign_with_default = "allow"

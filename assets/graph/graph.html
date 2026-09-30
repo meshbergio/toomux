@@ -1,0 +1,1739 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>toomux memory</title>
+<style>
+:root {
+  --base: #0f141c; --well: #0b0f15; --raised: #141b26; --overlay: #18202e;
+  --sel: #22304a; --hover: #151d2a; --hair: #263041; --hair2: #34415a;
+  --text: #dbe2ec; --dim: #97a3b6; --muted: #6d7a8e;
+  --accent: #7dd3fc; --working: #f5a623; --attention: #f7788c; --finished: #3ecf8e;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --panel-w: 392px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); overflow: hidden;
+  font: 13px/1.45 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
+button, input { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+kbd { font: 10.5px/1 var(--mono); color: var(--muted); border: 1px solid var(--hair); border-radius: 3px; padding: 2px 4px; background: var(--well); }
+
+#sky { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: default; }
+#sky.grab { cursor: grabbing; }
+#sky.point { cursor: pointer; }
+#vignette { position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 55%, rgba(11,15,21,.55) 100%); }
+
+/* header */
+#top { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 18px;
+  padding: 12px 16px 22px; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(15,20,28,.94) 0%, rgba(15,20,28,.7) 55%, rgba(15,20,28,0) 100%); }
+#top > * { pointer-events: auto; }
+.brand { font: 600 13px/1 var(--mono); letter-spacing: .02em; white-space: nowrap; display: flex; align-items: baseline; gap: 7px; }
+.brand .slash { color: var(--hair2); font-weight: 400; }
+.brand .sub { color: var(--dim); font-weight: 400; }
+#counts { font: 11.5px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+#counts b { color: var(--dim); font-weight: 400; }
+#counts .made { color: var(--muted); }
+#counts .c, #counts .made { white-space: nowrap; }
+#counts .sep { color: var(--hair2); padding: 0 6px; }
+#status { font: 11px/1 var(--mono); color: var(--accent); white-space: nowrap; }
+
+.search { position: relative; width: 320px; flex: none; }
+.search svg { position: absolute; left: 10px; top: 50%; margin-top: -6px; width: 12px; height: 12px; stroke: var(--muted); fill: none; stroke-width: 1.6; pointer-events: none; }
+#q { width: 100%; height: 32px; padding: 0 34px 0 30px; border-radius: 6px; border: 1px solid var(--hair);
+  background: var(--well); font: 12.5px/1 var(--mono); color: var(--text); outline: none; -webkit-appearance: none; appearance: none; }
+#q::placeholder { color: var(--muted); }
+#q:focus { border-color: #3d5575; box-shadow: 0 0 0 3px rgba(125,211,252,.10); }
+#q::-webkit-search-cancel-button { display: none; }
+.search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+#q:focus + kbd, #q:not(:placeholder-shown) + kbd { display: none; }
+#results { position: absolute; top: 38px; right: 0; width: min(460px, calc(100vw - 32px)); max-height: min(62vh, 560px); overflow: auto;
+  margin: 0; padding: 4px; list-style: none; background: var(--raised); border: 1px solid var(--hair); border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.5); }
+#results[hidden] { display: none; }
+#results li { display: grid; grid-template-columns: 14px 1fr auto; gap: 2px 9px; align-items: center; padding: 7px 8px; border-radius: 5px; cursor: pointer; }
+#results li[aria-selected="true"] { background: var(--sel); }
+#results li:hover { background: var(--hover); }
+#results li[aria-selected="true"]:hover { background: var(--sel); }
+#results .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+#results .meta { grid-column: 2 / 4; font: 11px/1.3 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#results .age { font: 11px/1 var(--mono); color: var(--muted); }
+#results .more { display: block; padding: 8px; font: 11px/1.3 var(--mono); color: var(--muted); cursor: default; }
+#results .more:hover { background: none; }
+mark { background: none; color: var(--accent); }
+
+/* glyphs */
+.g { display: inline-block; width: 10px; height: 10px; flex: none; justify-self: center; position: relative; }
+.g-project { width: 11px; height: 11px; border-radius: 50%; background: #1b2433; box-shadow: inset 0 0 0 1px #4a5b77; }
+.g-project::after { content: ""; position: absolute; left: 4px; top: 4px; width: 3px; height: 3px; border-radius: 50%; background: var(--dim); }
+.g-file, .g-note { width: 5px; height: 5px; border-radius: 50%; background: var(--text); box-shadow: 0 0 5px rgba(219,226,236,.55); }
+.g-memory { width: 5px; height: 5px; border-radius: 50%; background: var(--text); box-shadow: 0 0 5px rgba(219,226,236,.55), 7px -1px 0 -1px var(--text), 3px 5px 0 -1.5px var(--text); margin-right: 5px; }
+.g-index { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1.3px var(--text); }
+.g-index::after { content: ""; position: absolute; left: 3.5px; top: 3.5px; width: 2px; height: 2px; border-radius: 50%; background: var(--text); }
+.g-session { width: 10px; height: 10px; border-radius: 50%; background: rgba(125,211,252,.3); box-shadow: inset 0 0 0 1.2px var(--accent); }
+.g-handover, .g-brief { width: 7px; height: 7px; background: var(--working); transform: rotate(45deg); box-shadow: 0 0 6px rgba(245,166,35,.55); }
+.g-turn { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); opacity: .85; }
+.g-output { width: 4px; height: 4px; background: var(--dim); }
+.g-recall { width: 14px; height: 0; border-top: 1.5px dashed var(--finished); }
+
+/* layers */
+#layers { position: fixed; left: 16px; bottom: 16px; width: 196px; padding: 6px; border: 1px solid var(--hair); border-radius: 8px;
+  background: rgba(11,15,21,.9); }
+#layers h2, #timebar h2 { margin: 2px 6px 6px; font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+#layers button { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px; width: 100%; padding: 5px 6px; border-radius: 5px; text-align: left; font: 12px/1.2 var(--mono); color: var(--text); }
+#layers button:hover { background: var(--hover); }
+#layers button .n { color: var(--muted); font-size: 11px; }
+#layers button[aria-pressed="false"] { color: var(--muted); }
+#layers button[aria-pressed="false"] .g { opacity: .28; filter: grayscale(1); }
+#layers button[aria-pressed="false"] .n { color: #4e5a6c; }
+#layers .hint { display: grid; grid-template-columns: auto auto; justify-content: space-between; gap: 1px 10px; margin: 6px 6px 2px; padding-top: 7px; border-top: 1px solid var(--hair); font: 10.5px/1.6 var(--mono); color: var(--muted); }
+#layers .hint span { white-space: nowrap; }
+#layers .hint b { color: var(--dim); font-weight: 400; }
+#layers .more { display: none; position: absolute; top: 4px; bottom: 4px; width: 30px; padding: 0; place-items: center; font: 17px/1 var(--mono); color: var(--text); }
+#layers .more:hover { background: none; color: var(--accent); }
+#layers .more.l { left: 2px; }
+#layers .more.r { right: 2px; }
+
+/* time */
+#timebar { position: fixed; left: 228px; right: 16px; bottom: 16px; height: 66px; display: grid; grid-template-columns: 34px 1fr 304px; align-items: center; gap: 12px;
+  padding: 8px 12px 8px 10px; border: 1px solid var(--hair); border-radius: 8px; background: rgba(11,15,21,.9); max-width: 980px; }
+body.panel-open.wide #timebar { right: calc(var(--panel-w) + 28px); }
+#play { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--hair2); display: grid; place-items: center; color: var(--text); }
+#play:hover { border-color: var(--accent); color: var(--accent); }
+#play svg { width: 11px; height: 11px; fill: currentColor; }
+#track { position: relative; height: 44px; }
+#hist { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 30px; pointer-events: none; }
+#axis { position: absolute; left: 0; right: 0; top: 32px; height: 12px; font: 10px/12px var(--mono); color: var(--muted); pointer-events: none; }
+#axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+#scrub { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 32px; margin: 0; background: none; -webkit-appearance: none; appearance: none; cursor: ew-resize; }
+#scrub::-webkit-slider-runnable-track { height: 32px; background: none; }
+#scrub::-moz-range-track { height: 32px; background: none; }
+#scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 32px; border: 0; border-radius: 2px;
+  background: linear-gradient(to right, transparent 4.5px, var(--accent) 4.5px, var(--accent) 6.5px, transparent 6.5px); }
+#scrub::-moz-range-thumb { width: 2px; height: 32px; border: 0; border-radius: 1px; background: var(--accent); }
+#scrub:focus-visible { outline-offset: 3px; }
+#when { font: 11.5px/1.45 var(--mono); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#when b { display: block; color: var(--text); font-weight: 500; font-size: 12.5px; }
+#when span { color: var(--muted); font-size: 11px; }
+
+/* zoom */
+#zoom { position: fixed; right: 16px; bottom: 98px; display: flex; flex-direction: column; border: 1px solid var(--hair); border-radius: 8px; background: rgba(11,15,21,.9); overflow: hidden; }
+body.panel-open.wide #zoom { right: calc(var(--panel-w) + 28px); }
+#zoom button { width: 34px; height: 32px; display: grid; place-items: center; font: 15px/1 var(--mono); color: var(--dim); }
+#zoom button + button { border-top: 1px solid var(--hair); }
+#zoom button:hover { color: var(--text); background: var(--hover); }
+#zoom .fit { font-size: 10px; letter-spacing: .06em; }
+
+/* hover card */
+#card { position: fixed; left: 0; top: 0; max-width: 340px; padding: 9px 11px 10px; border: 1px solid var(--hair2); border-radius: 7px;
+  background: rgba(20,27,38,.97); box-shadow: 0 12px 34px rgba(0,0,0,.5); pointer-events: none; z-index: 5; }
+#card[hidden] { display: none; }
+#card .k { display: flex; align-items: center; gap: 7px; font: 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#card .t { margin-top: 6px; font-size: 13px; line-height: 1.35; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+#card .m { margin-top: 4px; font: 11px/1.4 var(--mono); color: var(--dim); }
+#card .x { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+
+/* panel */
+#panel { position: fixed; top: 62px; right: 12px; bottom: 12px; width: var(--panel-w); display: flex; flex-direction: column;
+  background: var(--raised); border: 1px solid var(--hair); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.45); z-index: 3; }
+#panel[hidden] { display: none; }
+#panel .grip { display: none; }
+.p-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 0 16px; font: 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.p-head .kind { flex: 1; }
+.p-head button { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); font: 16px/1 var(--mono); }
+.p-head button:hover { color: var(--text); background: var(--hover); }
+.p-head button[disabled] { opacity: .3; cursor: default; background: none; }
+.p-body { overflow: auto; padding: 4px 16px 18px; flex: 1; overscroll-behavior: contain; }
+.p-title { margin: 6px 0 4px; font: 600 15.5px/1.35 var(--sans); color: var(--text); word-break: break-word; }
+.p-proj { font: 11.5px/1.4 var(--mono); color: var(--muted); }
+.p-proj button { color: var(--dim); text-decoration: underline; text-decoration-color: var(--hair2); text-underline-offset: 3px; }
+.p-proj button:hover { color: var(--accent); }
+.facts { display: grid; grid-template-columns: 92px 1fr; gap: 5px 10px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--hair); font: 11.5px/1.45 var(--mono); }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; color: var(--text); min-width: 0; word-break: break-all; }
+.facts dd span { color: var(--muted); }
+.copy { display: flex; align-items: center; gap: 6px; }
+.copy code { flex: 1; min-width: 0; font: 11.5px/1.45 var(--mono); color: var(--text); word-break: break-all; }
+.copy button { flex: none; font: 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 4px 6px; border: 1px solid var(--hair); border-radius: 4px; }
+.copy button:hover { color: var(--accent); border-color: #3d5575; }
+.copy button.done { color: var(--finished); border-color: rgba(62,207,142,.4); }
+.cmd { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: var(--well); border: 1px solid var(--hair); }
+.cmd code::before { content: "$ "; color: var(--muted); }
+.p-sec { margin-top: 18px; }
+.p-sec h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 7px; font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.p-sec h3 .c { color: var(--dim); font-weight: 400; letter-spacing: 0; }
+.preview { margin: 0; padding: 10px 12px; border-left: 2px solid var(--hair2); background: rgba(11,15,21,.6); border-radius: 0 6px 6px 0;
+  white-space: pre-wrap; word-break: break-word; font: 12.5px/1.55 var(--sans); color: #c3ccd9; max-height: 320px; overflow: auto; }
+.preview.empty { color: var(--muted); font-style: italic; }
+.rel { list-style: none; margin: 0; padding: 0; }
+.rel li button { display: grid; grid-template-columns: 14px 1fr auto; gap: 9px; align-items: center; width: 100%; padding: 5px 6px; margin: 0 -6px; border-radius: 5px; text-align: left; }
+.rel li button { width: calc(100% + 12px); }
+.rel li button:hover { background: var(--hover); }
+.rel li button.cursor { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+.rel .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: #cdd5e1; }
+.rel .age { font: 10.5px/1 var(--mono); color: var(--muted); }
+.rel .hid .lbl { color: var(--dim); }
+.rel .all { margin-top: 3px; font: 11px/1 var(--mono); color: var(--accent); padding: 5px 0; }
+.rel .all:hover { text-decoration: underline; }
+.line { display: flex; flex-wrap: wrap; align-items: center; row-gap: 8px; padding: 2px 0; }
+.stop { position: relative; width: 17px; height: 20px; display: grid; place-items: center; border-radius: 4px; }
+.stop::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 2px; margin-top: -1px; background: rgba(245,166,35,.42); }
+.stop:first-child::before { left: 50%; }
+.stop:last-child::before { right: 50%; }
+.stop span { position: relative; display: block; }
+.s-session span { width: 9px; height: 9px; border-radius: 50%; background: #1d3445; box-shadow: inset 0 0 0 1.3px var(--accent); }
+.s-handover span { width: 7px; height: 7px; background: var(--working); transform: rotate(45deg); }
+.stop:hover span { transform: scale(1.35); }
+.s-handover:hover span { transform: rotate(45deg) scale(1.35); }
+.stop.here span { outline: 1.5px solid var(--text); outline-offset: 2.5px; }
+.s-session.here span { border-radius: 50%; }
+.line-cap { margin-top: 6px; font: 11px/1.4 var(--mono); color: var(--muted); }
+
+/* empty */
+#empty { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; }
+#empty[hidden] { display: none; }
+#empty .in { max-width: 420px; padding: 24px; }
+#empty .ring { width: 54px; height: 54px; margin: 0 auto 22px; border-radius: 50%; border: 1px dashed var(--hair2); position: relative; }
+#empty .ring::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: var(--dim); box-shadow: 0 0 8px rgba(219,226,236,.5); }
+#empty h1 { margin: 0 0 8px; font: 500 15px/1.4 var(--mono); color: var(--text); }
+#empty p { margin: 0; font: 12.5px/1.6 var(--sans); color: var(--muted); }
+#empty code { font: 12px var(--mono); color: var(--dim); }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* tablet and narrower: bottom sheet */
+@media (max-width: 899px) {
+  #top { flex-wrap: wrap; row-gap: 6px; padding-bottom: 20px;
+    background: linear-gradient(to bottom, rgba(15,20,28,.97) 0%, rgba(15,20,28,.9) 65%, rgba(15,20,28,0) 100%); }
+  #counts { order: 3; flex-basis: 100%; white-space: normal; font-size: 11px; }
+  .search { width: auto; flex: 1; min-width: 180px; }
+  #layers { left: 12px; right: 12px; bottom: 90px; width: auto; padding: 4px; }
+  #layers .chips { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+  #layers .chips::-webkit-scrollbar { display: none; }
+  /* more chips off either edge: fade them out and show a chevron */
+  #layers.more-r .chips { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent calc(100% - 8px)); mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent calc(100% - 8px)); }
+  #layers.more-l .chips { -webkit-mask-image: linear-gradient(to right, transparent 8px, #000 56px); mask-image: linear-gradient(to right, transparent 8px, #000 56px); }
+  #layers.more-l.more-r .chips { -webkit-mask-image: linear-gradient(to right, transparent 8px, #000 56px, #000 calc(100% - 56px), transparent calc(100% - 8px)); mask-image: linear-gradient(to right, transparent 8px, #000 56px, #000 calc(100% - 56px), transparent calc(100% - 8px)); }
+  #layers.more-l .more.l, #layers.more-r .more.r { display: grid; }
+  #layers h2, #layers .hint { display: none; }
+  #layers button { width: auto; flex: none; grid-template-columns: 14px auto auto; gap: 6px; padding: 7px 8px; }
+  #timebar { left: 12px; right: 12px; bottom: 12px; height: 70px; grid-template-columns: 34px 1fr; grid-template-rows: auto auto; row-gap: 0; padding: 6px 12px; max-width: none; }
+  #timebar #when { grid-column: 1 / 3; grid-row: 1; }
+  #timebar #when b { display: inline; margin-right: 8px; }
+  #play { grid-row: 2; }
+  #track { grid-row: 2; height: 38px; }
+  #hist { height: 24px; } #scrub, #scrub::-webkit-slider-runnable-track { height: 26px; } #scrub::-webkit-slider-thumb { height: 26px; }
+  #axis { top: 26px; }
+  #zoom { right: 12px; bottom: 148px; }
+  #panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 58vh; max-height: 58vh; border-radius: 14px 14px 0 0; border-bottom: 0; }
+  #panel .grip { display: block; width: 38px; height: 4px; margin: 8px auto 0; border-radius: 2px; background: var(--hair2); }
+  .p-head { padding-top: 4px; }
+  body.panel-open #layers, body.panel-open #timebar, body.panel-open #zoom { visibility: hidden; }
+  .p-body { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 520px) { .brand .sub { display: none; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<canvas id="sky" role="img" aria-label="Memory graph. Use the search box or the layer list to explore it with a keyboard."></canvas>
+<div id="vignette"></div>
+
+<header id="top">
+  <div class="brand"><span>toomux</span><span class="slash">/</span><span class="sub">memory</span></div>
+  <div id="counts"></div>
+  <span id="status" aria-live="polite"></span>
+  <div class="search" role="search">
+    <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="5" cy="5" r="3.8"/><path d="M8 8l3 3"/></svg>
+    <input id="q" type="search" placeholder="Search memory" autocomplete="off" spellcheck="false"
+      aria-label="Search labels, text and paths" aria-controls="results" aria-expanded="false" aria-autocomplete="list" role="combobox"><kbd>/</kbd>
+    <ol id="results" role="listbox" aria-label="Search results" hidden></ol>
+  </div>
+</header>
+
+<nav id="layers" aria-label="Layers"><h2>Layers</h2><div class="chips" id="chips"></div>
+  <button type="button" class="more l" data-by="-1" tabindex="-1" aria-hidden="true">&lsaquo;</button>
+  <button type="button" class="more r" data-by="1" tabindex="-1" aria-hidden="true">&rsaquo;</button></nav>
+
+<section id="timebar" aria-label="Time">
+  <button id="play" type="button" aria-label="Replay memory growing over time"></button>
+  <div id="track">
+    <canvas id="hist" aria-hidden="true"></canvas>
+    <input id="scrub" type="range" min="0" max="1000" step="1" value="1000" aria-label="Show what existed up to this date">
+    <div id="axis" aria-hidden="true"></div>
+  </div>
+  <output id="when" for="scrub"></output>
+</section>
+
+<div id="zoom" role="group" aria-label="Zoom">
+  <button type="button" data-z="in" aria-label="Zoom in">+</button>
+  <button type="button" data-z="out" aria-label="Zoom out">&minus;</button>
+  <button type="button" data-z="fit" class="fit" aria-label="Fit everything in view">FIT</button>
+</div>
+
+<aside id="panel" aria-label="Selected entry" hidden>
+  <div class="grip" aria-hidden="true"></div>
+  <div class="p-head"><span class="kind" id="p-kind"></span>
+    <button type="button" id="p-back" aria-label="Back to the previous selection" title="Back (Backspace)">&larr;</button>
+    <button type="button" id="p-close" aria-label="Close the panel" title="Close (Esc)">&times;</button></div>
+  <div class="p-body" id="p-body"></div>
+</aside>
+
+<div id="card" hidden></div>
+<div id="empty" hidden><div class="in"><div class="ring"></div><h1 id="empty-h"></h1><p id="empty-p"></p></div></div>
+
+<script>
+/*
+ * d3-dispatch, d3-quadtree, d3-timer and d3-force, vendored so this page needs no network.
+ * Copyright 2010-2021 Mike Bostock
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any purpose
+ * with or without fee is hereby granted, provided that the above copyright notice
+ * and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ * REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+ * INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+ * OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+ * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+ * THIS SOFTWARE.
+ */
+// https://d3js.org/d3-dispatch/ v3.0.1 Copyright 2010-2021 Mike Bostock
+!function(n,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"function"==typeof define&&define.amd?define(["exports"],e):e((n="undefined"!=typeof globalThis?globalThis:n||self).d3=n.d3||{})}(this,(function(n){"use strict";var e={value:()=>{}};function t(){for(var n,e=0,t=arguments.length,o={};e<t;++e){if(!(n=arguments[e]+"")||n in o||/[\s.]/.test(n))throw new Error("illegal type: "+n);o[n]=[]}return new r(o)}function r(n){this._=n}function o(n,e){return n.trim().split(/^|\s+/).map((function(n){var t="",r=n.indexOf(".");if(r>=0&&(t=n.slice(r+1),n=n.slice(0,r)),n&&!e.hasOwnProperty(n))throw new Error("unknown type: "+n);return{type:n,name:t}}))}function i(n,e){for(var t,r=0,o=n.length;r<o;++r)if((t=n[r]).name===e)return t.value}function f(n,t,r){for(var o=0,i=n.length;o<i;++o)if(n[o].name===t){n[o]=e,n=n.slice(0,o).concat(n.slice(o+1));break}return null!=r&&n.push({name:t,value:r}),n}r.prototype=t.prototype={constructor:r,on:function(n,e){var t,r=this._,l=o(n+"",r),a=-1,u=l.length;if(!(arguments.length<2)){if(null!=e&&"function"!=typeof e)throw new Error("invalid callback: "+e);for(;++a<u;)if(t=(n=l[a]).type)r[t]=f(r[t],n.name,e);else if(null==e)for(t in r)r[t]=f(r[t],n.name,null);return this}for(;++a<u;)if((t=(n=l[a]).type)&&(t=i(r[t],n.name)))return t},copy:function(){var n={},e=this._;for(var t in e)n[t]=e[t].slice();return new r(n)},call:function(n,e){if((t=arguments.length-2)>0)for(var t,r,o=new Array(t),i=0;i<t;++i)o[i]=arguments[i+2];if(!this._.hasOwnProperty(n))throw new Error("unknown type: "+n);for(i=0,t=(r=this._[n]).length;i<t;++i)r[i].value.apply(e,o)},apply:function(n,e,t){if(!this._.hasOwnProperty(n))throw new Error("unknown type: "+n);for(var r=this._[n],o=0,i=r.length;o<i;++o)r[o].value.apply(e,t)}},n.dispatch=t,Object.defineProperty(n,"__esModule",{value:!0})}));
+// https://d3js.org/d3-quadtree/ v3.0.1 Copyright 2010-2021 Mike Bostock
+!function(t,i){"object"==typeof exports&&"undefined"!=typeof module?i(exports):"function"==typeof define&&define.amd?define(["exports"],i):i((t="undefined"!=typeof globalThis?globalThis:t||self).d3=t.d3||{})}(this,(function(t){"use strict";function i(t,i,e,n){if(isNaN(i)||isNaN(e))return t;var r,s,h,o,a,u,l,_,f,c=t._root,x={data:n},y=t._x0,d=t._y0,p=t._x1,v=t._y1;if(!c)return t._root=x,t;for(;c.length;)if((u=i>=(s=(y+p)/2))?y=s:p=s,(l=e>=(h=(d+v)/2))?d=h:v=h,r=c,!(c=c[_=l<<1|u]))return r[_]=x,t;if(o=+t._x.call(null,c.data),a=+t._y.call(null,c.data),i===o&&e===a)return x.next=c,r?r[_]=x:t._root=x,t;do{r=r?r[_]=new Array(4):t._root=new Array(4),(u=i>=(s=(y+p)/2))?y=s:p=s,(l=e>=(h=(d+v)/2))?d=h:v=h}while((_=l<<1|u)==(f=(a>=h)<<1|o>=s));return r[f]=c,r[_]=x,t}function e(t,i,e,n,r){this.node=t,this.x0=i,this.y0=e,this.x1=n,this.y1=r}function n(t){return t[0]}function r(t){return t[1]}function s(t,i,e){var s=new h(null==i?n:i,null==e?r:e,NaN,NaN,NaN,NaN);return null==t?s:s.addAll(t)}function h(t,i,e,n,r,s){this._x=t,this._y=i,this._x0=e,this._y0=n,this._x1=r,this._y1=s,this._root=void 0}function o(t){for(var i={data:t.data},e=i;t=t.next;)e=e.next={data:t.data};return i}var a=s.prototype=h.prototype;a.copy=function(){var t,i,e=new h(this._x,this._y,this._x0,this._y0,this._x1,this._y1),n=this._root;if(!n)return e;if(!n.length)return e._root=o(n),e;for(t=[{source:n,target:e._root=new Array(4)}];n=t.pop();)for(var r=0;r<4;++r)(i=n.source[r])&&(i.length?t.push({source:i,target:n.target[r]=new Array(4)}):n.target[r]=o(i));return e},a.add=function(t){const e=+this._x.call(null,t),n=+this._y.call(null,t);return i(this.cover(e,n),e,n,t)},a.addAll=function(t){var e,n,r,s,h=t.length,o=new Array(h),a=new Array(h),u=1/0,l=1/0,_=-1/0,f=-1/0;for(n=0;n<h;++n)isNaN(r=+this._x.call(null,e=t[n]))||isNaN(s=+this._y.call(null,e))||(o[n]=r,a[n]=s,r<u&&(u=r),r>_&&(_=r),s<l&&(l=s),s>f&&(f=s));if(u>_||l>f)return this;for(this.cover(u,l).cover(_,f),n=0;n<h;++n)i(this,o[n],a[n],t[n]);return this},a.cover=function(t,i){if(isNaN(t=+t)||isNaN(i=+i))return this;var e=this._x0,n=this._y0,r=this._x1,s=this._y1;if(isNaN(e))r=(e=Math.floor(t))+1,s=(n=Math.floor(i))+1;else{for(var h,o,a=r-e||1,u=this._root;e>t||t>=r||n>i||i>=s;)switch(o=(i<n)<<1|t<e,(h=new Array(4))[o]=u,u=h,a*=2,o){case 0:r=e+a,s=n+a;break;case 1:e=r-a,s=n+a;break;case 2:r=e+a,n=s-a;break;case 3:e=r-a,n=s-a}this._root&&this._root.length&&(this._root=u)}return this._x0=e,this._y0=n,this._x1=r,this._y1=s,this},a.data=function(){var t=[];return this.visit((function(i){if(!i.length)do{t.push(i.data)}while(i=i.next)})),t},a.extent=function(t){return arguments.length?this.cover(+t[0][0],+t[0][1]).cover(+t[1][0],+t[1][1]):isNaN(this._x0)?void 0:[[this._x0,this._y0],[this._x1,this._y1]]},a.find=function(t,i,n){var r,s,h,o,a,u,l,_=this._x0,f=this._y0,c=this._x1,x=this._y1,y=[],d=this._root;for(d&&y.push(new e(d,_,f,c,x)),null==n?n=1/0:(_=t-n,f=i-n,c=t+n,x=i+n,n*=n);u=y.pop();)if(!(!(d=u.node)||(s=u.x0)>c||(h=u.y0)>x||(o=u.x1)<_||(a=u.y1)<f))if(d.length){var p=(s+o)/2,v=(h+a)/2;y.push(new e(d[3],p,v,o,a),new e(d[2],s,v,p,a),new e(d[1],p,h,o,v),new e(d[0],s,h,p,v)),(l=(i>=v)<<1|t>=p)&&(u=y[y.length-1],y[y.length-1]=y[y.length-1-l],y[y.length-1-l]=u)}else{var w=t-+this._x.call(null,d.data),N=i-+this._y.call(null,d.data),g=w*w+N*N;if(g<n){var A=Math.sqrt(n=g);_=t-A,f=i-A,c=t+A,x=i+A,r=d.data}}return r},a.remove=function(t){if(isNaN(s=+this._x.call(null,t))||isNaN(h=+this._y.call(null,t)))return this;var i,e,n,r,s,h,o,a,u,l,_,f,c=this._root,x=this._x0,y=this._y0,d=this._x1,p=this._y1;if(!c)return this;if(c.length)for(;;){if((u=s>=(o=(x+d)/2))?x=o:d=o,(l=h>=(a=(y+p)/2))?y=a:p=a,i=c,!(c=c[_=l<<1|u]))return this;if(!c.length)break;(i[_+1&3]||i[_+2&3]||i[_+3&3])&&(e=i,f=_)}for(;c.data!==t;)if(n=c,!(c=c.next))return this;return(r=c.next)&&delete c.next,n?(r?n.next=r:delete n.next,this):i?(r?i[_]=r:delete i[_],(c=i[0]||i[1]||i[2]||i[3])&&c===(i[3]||i[2]||i[1]||i[0])&&!c.length&&(e?e[f]=c:this._root=c),this):(this._root=r,this)},a.removeAll=function(t){for(var i=0,e=t.length;i<e;++i)this.remove(t[i]);return this},a.root=function(){return this._root},a.size=function(){var t=0;return this.visit((function(i){if(!i.length)do{++t}while(i=i.next)})),t},a.visit=function(t){var i,n,r,s,h,o,a=[],u=this._root;for(u&&a.push(new e(u,this._x0,this._y0,this._x1,this._y1));i=a.pop();)if(!t(u=i.node,r=i.x0,s=i.y0,h=i.x1,o=i.y1)&&u.length){var l=(r+h)/2,_=(s+o)/2;(n=u[3])&&a.push(new e(n,l,_,h,o)),(n=u[2])&&a.push(new e(n,r,_,l,o)),(n=u[1])&&a.push(new e(n,l,s,h,_)),(n=u[0])&&a.push(new e(n,r,s,l,_))}return this},a.visitAfter=function(t){var i,n=[],r=[];for(this._root&&n.push(new e(this._root,this._x0,this._y0,this._x1,this._y1));i=n.pop();){var s=i.node;if(s.length){var h,o=i.x0,a=i.y0,u=i.x1,l=i.y1,_=(o+u)/2,f=(a+l)/2;(h=s[0])&&n.push(new e(h,o,a,_,f)),(h=s[1])&&n.push(new e(h,_,a,u,f)),(h=s[2])&&n.push(new e(h,o,f,_,l)),(h=s[3])&&n.push(new e(h,_,f,u,l))}r.push(i)}for(;i=r.pop();)t(i.node,i.x0,i.y0,i.x1,i.y1);return this},a.x=function(t){return arguments.length?(this._x=t,this):this._x},a.y=function(t){return arguments.length?(this._y=t,this):this._y},t.quadtree=s,Object.defineProperty(t,"__esModule",{value:!0})}));
+// https://d3js.org/d3-timer/ v3.0.1 Copyright 2010-2021 Mike Bostock
+!function(t,n){"object"==typeof exports&&"undefined"!=typeof module?n(exports):"function"==typeof define&&define.amd?define(["exports"],n):n((t="undefined"!=typeof globalThis?globalThis:t||self).d3=t.d3||{})}(this,(function(t){"use strict";var n,e,o=0,i=0,r=0,l=0,u=0,a=0,s="object"==typeof performance&&performance.now?performance:Date,c="object"==typeof window&&window.requestAnimationFrame?window.requestAnimationFrame.bind(window):function(t){setTimeout(t,17)};function f(){return u||(c(_),u=s.now()+a)}function _(){u=0}function m(){this._call=this._time=this._next=null}function p(t,n,e){var o=new m;return o.restart(t,n,e),o}function w(){f(),++o;for(var t,e=n;e;)(t=u-e._time)>=0&&e._call.call(void 0,t),e=e._next;--o}function d(){u=(l=s.now())+a,o=i=0;try{w()}finally{o=0,function(){var t,o,i=n,r=1/0;for(;i;)i._call?(r>i._time&&(r=i._time),t=i,i=i._next):(o=i._next,i._next=null,i=t?t._next=o:n=o);e=t,y(r)}(),u=0}}function h(){var t=s.now(),n=t-l;n>1e3&&(a-=n,l=t)}function y(t){o||(i&&(i=clearTimeout(i)),t-u>24?(t<1/0&&(i=setTimeout(d,t-s.now()-a)),r&&(r=clearInterval(r))):(r||(l=s.now(),r=setInterval(h,1e3)),o=1,c(d)))}m.prototype=p.prototype={constructor:m,restart:function(t,o,i){if("function"!=typeof t)throw new TypeError("callback is not a function");i=(null==i?f():+i)+(null==o?0:+o),this._next||e===this||(e?e._next=this:n=this,e=this),this._call=t,this._time=i,y()},stop:function(){this._call&&(this._call=null,this._time=1/0,y())}},t.interval=function(t,n,e){var o=new m,i=n;return null==n?(o.restart(t,n,e),o):(o._restart=o.restart,o.restart=function(t,n,e){n=+n,e=null==e?f():+e,o._restart((function r(l){l+=i,o._restart(r,i+=n,e),t(l)}),n,e)},o.restart(t,n,e),o)},t.now=f,t.timeout=function(t,n,e){var o=new m;return n=null==n?0:+n,o.restart((e=>{o.stop(),t(e+n)}),n,e),o},t.timer=p,t.timerFlush=w,Object.defineProperty(t,"__esModule",{value:!0})}));
+// https://d3js.org/d3-force/ v3.0.0 Copyright 2010-2021 Mike Bostock
+!function(n,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports,require("d3-quadtree"),require("d3-dispatch"),require("d3-timer")):"function"==typeof define&&define.amd?define(["exports","d3-quadtree","d3-dispatch","d3-timer"],t):t((n="undefined"!=typeof globalThis?globalThis:n||self).d3=n.d3||{},n.d3,n.d3,n.d3)}(this,(function(n,t,e,r){"use strict";function i(n){return function(){return n}}function u(n){return 1e-6*(n()-.5)}function o(n){return n.x+n.vx}function f(n){return n.y+n.vy}function a(n){return n.index}function c(n,t){var e=n.get(t);if(!e)throw new Error("node not found: "+t);return e}const l=4294967296;function h(n){return n.x}function v(n){return n.y}var y=Math.PI*(3-Math.sqrt(5));n.forceCenter=function(n,t){var e,r=1;function i(){var i,u,o=e.length,f=0,a=0;for(i=0;i<o;++i)f+=(u=e[i]).x,a+=u.y;for(f=(f/o-n)*r,a=(a/o-t)*r,i=0;i<o;++i)(u=e[i]).x-=f,u.y-=a}return null==n&&(n=0),null==t&&(t=0),i.initialize=function(n){e=n},i.x=function(t){return arguments.length?(n=+t,i):n},i.y=function(n){return arguments.length?(t=+n,i):t},i.strength=function(n){return arguments.length?(r=+n,i):r},i},n.forceCollide=function(n){var e,r,a,c=1,l=1;function h(){for(var n,i,h,y,d,g,x,s=e.length,p=0;p<l;++p)for(i=t.quadtree(e,o,f).visitAfter(v),n=0;n<s;++n)h=e[n],g=r[h.index],x=g*g,y=h.x+h.vx,d=h.y+h.vy,i.visit(M);function M(n,t,e,r,i){var o=n.data,f=n.r,l=g+f;if(!o)return t>y+l||r<y-l||e>d+l||i<d-l;if(o.index>h.index){var v=y-o.x-o.vx,s=d-o.y-o.vy,p=v*v+s*s;p<l*l&&(0===v&&(p+=(v=u(a))*v),0===s&&(p+=(s=u(a))*s),p=(l-(p=Math.sqrt(p)))/p*c,h.vx+=(v*=p)*(l=(f*=f)/(x+f)),h.vy+=(s*=p)*l,o.vx-=v*(l=1-l),o.vy-=s*l)}}}function v(n){if(n.data)return n.r=r[n.data.index];for(var t=n.r=0;t<4;++t)n[t]&&n[t].r>n.r&&(n.r=n[t].r)}function y(){if(e){var t,i,u=e.length;for(r=new Array(u),t=0;t<u;++t)i=e[t],r[i.index]=+n(i,t,e)}}return"function"!=typeof n&&(n=i(null==n?1:+n)),h.initialize=function(n,t){e=n,a=t,y()},h.iterations=function(n){return arguments.length?(l=+n,h):l},h.strength=function(n){return arguments.length?(c=+n,h):c},h.radius=function(t){return arguments.length?(n="function"==typeof t?t:i(+t),y(),h):n},h},n.forceLink=function(n){var t,e,r,o,f,l,h=a,v=function(n){return 1/Math.min(o[n.source.index],o[n.target.index])},y=i(30),d=1;function g(r){for(var i=0,o=n.length;i<d;++i)for(var a,c,h,v,y,g,x,s=0;s<o;++s)c=(a=n[s]).source,v=(h=a.target).x+h.vx-c.x-c.vx||u(l),y=h.y+h.vy-c.y-c.vy||u(l),v*=g=((g=Math.sqrt(v*v+y*y))-e[s])/g*r*t[s],y*=g,h.vx-=v*(x=f[s]),h.vy-=y*x,c.vx+=v*(x=1-x),c.vy+=y*x}function x(){if(r){var i,u,a=r.length,l=n.length,v=new Map(r.map(((n,t)=>[h(n,t,r),n])));for(i=0,o=new Array(a);i<l;++i)(u=n[i]).index=i,"object"!=typeof u.source&&(u.source=c(v,u.source)),"object"!=typeof u.target&&(u.target=c(v,u.target)),o[u.source.index]=(o[u.source.index]||0)+1,o[u.target.index]=(o[u.target.index]||0)+1;for(i=0,f=new Array(l);i<l;++i)u=n[i],f[i]=o[u.source.index]/(o[u.source.index]+o[u.target.index]);t=new Array(l),s(),e=new Array(l),p()}}function s(){if(r)for(var e=0,i=n.length;e<i;++e)t[e]=+v(n[e],e,n)}function p(){if(r)for(var t=0,i=n.length;t<i;++t)e[t]=+y(n[t],t,n)}return null==n&&(n=[]),g.initialize=function(n,t){r=n,l=t,x()},g.links=function(t){return arguments.length?(n=t,x(),g):n},g.id=function(n){return arguments.length?(h=n,g):h},g.iterations=function(n){return arguments.length?(d=+n,g):d},g.strength=function(n){return arguments.length?(v="function"==typeof n?n:i(+n),s(),g):v},g.distance=function(n){return arguments.length?(y="function"==typeof n?n:i(+n),p(),g):y},g},n.forceManyBody=function(){var n,e,r,o,f,a=i(-30),c=1,l=1/0,y=.81;function d(r){var i,u=n.length,f=t.quadtree(n,h,v).visitAfter(x);for(o=r,i=0;i<u;++i)e=n[i],f.visit(s)}function g(){if(n){var t,e,r=n.length;for(f=new Array(r),t=0;t<r;++t)e=n[t],f[e.index]=+a(e,t,n)}}function x(n){var t,e,r,i,u,o=0,a=0;if(n.length){for(r=i=u=0;u<4;++u)(t=n[u])&&(e=Math.abs(t.value))&&(o+=t.value,a+=e,r+=e*t.x,i+=e*t.y);n.x=r/a,n.y=i/a}else{(t=n).x=t.data.x,t.y=t.data.y;do{o+=f[t.data.index]}while(t=t.next)}n.value=o}function s(n,t,i,a){if(!n.value)return!0;var h=n.x-e.x,v=n.y-e.y,d=a-t,g=h*h+v*v;if(d*d/y<g)return g<l&&(0===h&&(g+=(h=u(r))*h),0===v&&(g+=(v=u(r))*v),g<c&&(g=Math.sqrt(c*g)),e.vx+=h*n.value*o/g,e.vy+=v*n.value*o/g),!0;if(!(n.length||g>=l)){(n.data!==e||n.next)&&(0===h&&(g+=(h=u(r))*h),0===v&&(g+=(v=u(r))*v),g<c&&(g=Math.sqrt(c*g)));do{n.data!==e&&(d=f[n.data.index]*o/g,e.vx+=h*d,e.vy+=v*d)}while(n=n.next)}}return d.initialize=function(t,e){n=t,r=e,g()},d.strength=function(n){return arguments.length?(a="function"==typeof n?n:i(+n),g(),d):a},d.distanceMin=function(n){return arguments.length?(c=n*n,d):Math.sqrt(c)},d.distanceMax=function(n){return arguments.length?(l=n*n,d):Math.sqrt(l)},d.theta=function(n){return arguments.length?(y=n*n,d):Math.sqrt(y)},d},n.forceRadial=function(n,t,e){var r,u,o,f=i(.1);function a(n){for(var i=0,f=r.length;i<f;++i){var a=r[i],c=a.x-t||1e-6,l=a.y-e||1e-6,h=Math.sqrt(c*c+l*l),v=(o[i]-h)*u[i]*n/h;a.vx+=c*v,a.vy+=l*v}}function c(){if(r){var t,e=r.length;for(u=new Array(e),o=new Array(e),t=0;t<e;++t)o[t]=+n(r[t],t,r),u[t]=isNaN(o[t])?0:+f(r[t],t,r)}}return"function"!=typeof n&&(n=i(+n)),null==t&&(t=0),null==e&&(e=0),a.initialize=function(n){r=n,c()},a.strength=function(n){return arguments.length?(f="function"==typeof n?n:i(+n),c(),a):f},a.radius=function(t){return arguments.length?(n="function"==typeof t?t:i(+t),c(),a):n},a.x=function(n){return arguments.length?(t=+n,a):t},a.y=function(n){return arguments.length?(e=+n,a):e},a},n.forceSimulation=function(n){var t,i=1,u=.001,o=1-Math.pow(u,1/300),f=0,a=.6,c=new Map,h=r.timer(g),v=e.dispatch("tick","end"),d=function(){let n=1;return()=>(n=(1664525*n+1013904223)%l)/l}();function g(){x(),v.call("tick",t),i<u&&(h.stop(),v.call("end",t))}function x(e){var r,u,l=n.length;void 0===e&&(e=1);for(var h=0;h<e;++h)for(i+=(f-i)*o,c.forEach((function(n){n(i)})),r=0;r<l;++r)null==(u=n[r]).fx?u.x+=u.vx*=a:(u.x=u.fx,u.vx=0),null==u.fy?u.y+=u.vy*=a:(u.y=u.fy,u.vy=0);return t}function s(){for(var t,e=0,r=n.length;e<r;++e){if((t=n[e]).index=e,null!=t.fx&&(t.x=t.fx),null!=t.fy&&(t.y=t.fy),isNaN(t.x)||isNaN(t.y)){var i=10*Math.sqrt(.5+e),u=e*y;t.x=i*Math.cos(u),t.y=i*Math.sin(u)}(isNaN(t.vx)||isNaN(t.vy))&&(t.vx=t.vy=0)}}function p(t){return t.initialize&&t.initialize(n,d),t}return null==n&&(n=[]),s(),t={tick:x,restart:function(){return h.restart(g),t},stop:function(){return h.stop(),t},nodes:function(e){return arguments.length?(n=e,s(),c.forEach(p),t):n},alpha:function(n){return arguments.length?(i=+n,t):i},alphaMin:function(n){return arguments.length?(u=+n,t):u},alphaDecay:function(n){return arguments.length?(o=+n,t):+o},alphaTarget:function(n){return arguments.length?(f=+n,t):f},velocityDecay:function(n){return arguments.length?(a=1-n,t):1-a},randomSource:function(n){return arguments.length?(d=n,c.forEach(p),t):d},force:function(n,e){return arguments.length>1?(null==e?c.delete(n):c.set(n,p(e)),t):c.get(n)},find:function(t,e,r){var i,u,o,f,a,c=0,l=n.length;for(null==r?r=1/0:r*=r,c=0;c<l;++c)(o=(i=t-(f=n[c]).x)*i+(u=e-f.y)*u)<r&&(a=f,r=o);return a},on:function(n,e){return arguments.length>1?(v.on(n,e),t):v.on(n)}}},n.forceX=function(n){var t,e,r,u=i(.1);function o(n){for(var i,u=0,o=t.length;u<o;++u)(i=t[u]).vx+=(r[u]-i.x)*e[u]*n}function f(){if(t){var i,o=t.length;for(e=new Array(o),r=new Array(o),i=0;i<o;++i)e[i]=isNaN(r[i]=+n(t[i],i,t))?0:+u(t[i],i,t)}}return"function"!=typeof n&&(n=i(null==n?0:+n)),o.initialize=function(n){t=n,f()},o.strength=function(n){return arguments.length?(u="function"==typeof n?n:i(+n),f(),o):u},o.x=function(t){return arguments.length?(n="function"==typeof t?t:i(+t),f(),o):n},o},n.forceY=function(n){var t,e,r,u=i(.1);function o(n){for(var i,u=0,o=t.length;u<o;++u)(i=t[u]).vy+=(r[u]-i.y)*e[u]*n}function f(){if(t){var i,o=t.length;for(e=new Array(o),r=new Array(o),i=0;i<o;++i)e[i]=isNaN(r[i]=+n(t[i],i,t))?0:+u(t[i],i,t)}}return"function"!=typeof n&&(n=i(null==n?0:+n)),o.initialize=function(n){t=n,f()},o.strength=function(n){return arguments.length?(u="function"==typeof n?n:i(+n),f(),o):u},o.y=function(t){return arguments.length?(n="function"==typeof t?t:i(+t),f(),o):n},o},Object.defineProperty(n,"__esModule",{value:!0})}));
+</script>
+
+<script>
+const GRAPH = /*TOOMUX_GRAPH*/null;
+const FOCUS = /*TOOMUX_FOCUS*/null;
+
+(() => {
+"use strict";
+
+/* ------------------------------------------------------------------ basics */
+const $ = (s) => document.querySelector(s);
+const TAU = Math.PI * 2;
+const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const C = {
+  base: "#0f141c", well: "#0b0f15", raised: "#141b26", overlay: "#18202e", sel: "#22304a", hair: "#263041",
+  text: "#dbe2ec", dim: "#97a3b6", muted: "#6d7a8e", accent: "#7dd3fc", working: "#f5a623", attention: "#f7788c", finished: "#3ecf8e",
+};
+const rgba = (hex, a) => { const v = parseInt(hex.slice(1), 16); return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${a})`; };
+const MONO = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim();
+const nfmt = new Intl.NumberFormat("en-AU");
+const nf = (x) => nfmt.format(x);
+const plural = (n, one, many) => nf(n) + " " + (n === 1 ? one : (many || one + "s"));
+const dDate = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", year: "numeric" });
+const dDay = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short" });
+const dMon = new Intl.DateTimeFormat("en-AU", { month: "short" });
+const dTime = new Intl.DateTimeFormat("en-AU", { hour: "numeric", minute: "2-digit", hour12: true });
+const when = (ms) => ms ? dDate.format(ms) + ", " + dTime.format(ms).replace(/\s/g, " ").toLowerCase() : "unknown";
+function ago(ms) {
+  if (!ms) return "";
+  const s = (Date.now() - ms) / 1000;
+  if (s < 50) return "just now";
+  const m = s / 60; if (m < 55) return plural(Math.max(1, Math.round(m)), "minute") + " ago";
+  const h = m / 60; if (h < 22) return plural(Math.round(h), "hour") + " ago";
+  const d = h / 24; if (d < 1.5) return "yesterday";
+  if (d < 13) return plural(Math.round(d), "day") + " ago";
+  if (d < 60) return plural(Math.round(d / 7), "week") + " ago";
+  if (d < 350) return plural(Math.round(d / 30.4), "month") + " ago";
+  return plural(Math.round(d / 365), "year") + " ago";
+}
+function agoShort(ms) {
+  if (!ms) return "";
+  const s = (Date.now() - ms) / 1000, m = s / 60, h = m / 60, d = h / 24;
+  if (m < 1) return "now"; if (h < 1) return Math.round(m) + "m"; if (d < 1) return Math.round(h) + "h";
+  if (d < 14) return Math.round(d) + "d"; if (d < 60) return Math.round(d / 7) + "w"; if (d < 350) return Math.round(d / 30.4) + "mo";
+  return Math.round(d / 365) + "y";
+}
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const glyph = (kind) => el("span", "g g-" + kind);
+function lcg(seed) { let s = seed >>> 0; return () => ((s = (1664525 * s + 1013904223) >>> 0) / 4294967296); }
+
+const KIND = {
+  project: { name: "Project", many: "projects" },
+  index: { name: "Memory index", many: "memory indexes" },
+  file: { name: "Memory file", many: "memory files" },
+  note: { name: "Memory note", many: "memory notes" },
+  session: { name: "Session", many: "sessions" },
+  handover: { name: "Handover brief", many: "briefs" },
+  turn: { name: "Turn", many: "turns" },
+  output: { name: "Kept output", many: "outputs" },
+};
+const kindName = (k) => (KIND[k] || { name: k }).name;
+const FINE = new Set(["turn", "output"]);
+const LAYERS = [
+  { key: "project", name: "Projects", glyph: "project", on: true },
+  { key: "memory", name: "Memory files", glyph: "memory", on: true },
+  { key: "session", name: "Sessions", glyph: "session", on: true },
+  { key: "brief", name: "Briefs", glyph: "handover", on: true },
+  { key: "turn", name: "Turns", glyph: "turn", on: false },
+  { key: "output", name: "Outputs", glyph: "output", on: false },
+  { key: "recall", name: "Recalls", glyph: "recall", on: true },
+];
+const LAYER_OF = { project: "project", index: "memory", file: "memory", note: "memory", session: "session", handover: "brief", turn: "turn", output: "output" };
+const layerOn = Object.fromEntries(LAYERS.map((l) => [l.key, l.on]));
+
+/* ------------------------------------------------------------------ data */
+const RAW = GRAPH && Array.isArray(GRAPH.nodes) ? GRAPH : null;
+const nodes = (RAW ? RAW.nodes : []).map((d, i) => ({
+  i, id: String(d.id), kind: KIND[d.kind] ? d.kind : "file", label: String(d.label || d.id || "").replace(/\s+/g, " ").trim() || "(untitled)",
+  at: +d.at || 0, last: +d.last || +d.at || 0, size: +d.size || 0, text: String(d.text || ""), path: d.path ? String(d.path) : "",
+  entry: d.entry ? String(d.entry) : "", pid: d.project, p: -1, x: 0, y: 0, r: 1, adj: [], kids: null, parent: -1,
+  members: 0, fine: false, clusterR: 0, orbitR: 0, charge: -20,
+}));
+const N = nodes.length;
+const byId = new Map(nodes.map((n) => [n.id, n]));
+for (const n of nodes) {
+  n.fine = FINE.has(n.kind);
+  if (n.pid && byId.has(n.pid) && n.kind !== "project") n.p = byId.get(n.pid).i;
+}
+const edges = [];
+for (const e of RAW ? RAW.edges || [] : []) {
+  const s = e.s | 0, t = e.t | 0;
+  if (s < 0 || t < 0 || s >= N || t >= N || s === t) continue;
+  const ed = { s, t, kind: String(e.kind), n: +e.n || 1 };
+  edges.push(ed); nodes[s].adj.push(ed); nodes[t].adj.push(ed);
+  if (ed.kind === "holds") { (nodes[s].kids ||= []).push(t); nodes[t].parent = s; }
+}
+const projects = nodes.filter((n) => n.kind === "project");
+/* project names for the chart: worktrees read as repo:agent, repeated names get the nearest folder above that tells them apart */
+{
+  for (const n of nodes) n.name = n.label;
+  const same = new Map();
+  for (const p of projects) {
+    const path = p.path || p.id.slice(2);
+    const wt = path.match(/\/([^/]+)\/\.claude\/worktrees\/([^/]+)$/);
+    if (wt) { p.name = wt[1] + ":" + wt[2].slice(0, 11); continue; }
+    if (!same.has(p.label)) same.set(p.label, []);
+    same.get(p.label).push(p);
+  }
+  for (const [label, ps] of same) {
+    if (ps.length < 2) continue;
+    // folders above what the label already carries ("acme/api"), nearest first; the home folder reads as ~
+    const k = label.split("/").length;
+    const ups = ps.map((p) => {
+      const segs = (p.path || p.id.slice(2)).split("/").filter(Boolean);
+      if (segs[0] === "home" && segs.length > 1) segs.splice(0, 2, "~");
+      return segs.slice(0, Math.max(0, segs.length - k)).reverse();
+    });
+    const tail = (u, d) => u.slice(0, d).join("/");
+    ps.forEach((p, j) => {
+      const u = ups[j];
+      let d = 1;
+      while (d < u.length && ups.some((o, m) => m !== j && tail(o, d) === tail(u, d))) d++;
+      // name the folder that differs; more than one folder between it and the label folds to …
+      p.name = d <= 2 ? [...u.slice(0, d)].reverse().concat(label).join("/") : u[d - 1] + "/…/" + label;
+    });
+    // folding can still collide (same differing folder, different middles): spell those out
+    const names = new Map();
+    for (const p of ps) names.set(p.name, (names.get(p.name) || 0) + 1);
+    ps.forEach((p, j) => { if (names.get(p.name) > 1) p.name = [...ups[j]].reverse().concat(label).join("/"); });
+  }
+}
+for (const n of nodes) if (n.p >= 0 && !n.fine) nodes[n.p].members++;
+const count = (...ks) => nodes.reduce((a, n) => a + (ks.includes(n.kind) ? 1 : 0), 0);
+const COUNTS = {
+  memory: count("file", "index", "note"), index: count("index"), session: count("session"), brief: count("handover"),
+  turn: count("turn"), output: count("output"), project: projects.length,
+  recall: edges.reduce((a, e) => a + (e.kind === "read" || e.kind === "found" ? 1 : 0), 0),
+};
+let tMin = Infinity, tMax = -Infinity;
+for (const n of nodes) if (n.at > 0) { if (n.at < tMin) tMin = n.at; if (n.at > tMax) tMax = n.at; }
+if (!(tMax > tMin)) { tMin = Date.now() - 864e5; tMax = Date.now(); }
+
+/* sizes, in world units */
+function baseR(n) {
+  switch (n.kind) {
+    case "project": return Math.min(15, 4.5 + Math.sqrt(n.members) * 0.75);
+    case "index": return 3.4;
+    case "file": case "note": return 1.35 + Math.min(1.6, Math.sqrt(n.size) / 62);
+    case "session": return 2.3 + Math.min(8, Math.sqrt(n.size) * 0.62);
+    case "handover": return 3.1;
+    case "turn": return 0.72;
+    default: return 0.85;
+  }
+}
+const screenR = (n, k) => n.fine ? Math.min(4.2, Math.max(n.r * k, MIN_PX[n.kind])) : Math.max(n.r * k, MIN_PX[n.kind]);
+const MIN_PX = { project: 3.2, index: 2.4, file: 1.05, note: 1.05, session: 1.9, handover: 2.3, turn: 0.9, output: 0.9 };
+for (const n of nodes) n.r = baseR(n);
+
+/* ------------------------------------------------------------------ layout */
+const core = nodes.filter((n) => !n.fine);
+let sim = null;
+function buildSim() {
+  const rnd = lcg(20260930);
+  const projs = projects.slice().sort((a, b) => b.members - a.members);
+  const estR = (p) => p.r + 4 + 4.6 * Math.sqrt(p.members);
+  projs.forEach((p, j) => { const a = j * 2.39996323, d = 34 * Math.sqrt(j + 0.6); p.x = Math.cos(a) * d * 2.2; p.y = Math.sin(a) * d * 2.2; p.estR = estR(p); p.charge = -140; });
+  for (const n of core) {
+    if (n.kind === "project") continue;
+    n.charge = n.kind === "session" ? -34 : n.kind === "index" ? -40 : n.kind === "handover" ? -26 : -16;
+    if (n.p >= 0) { const P = nodes[n.p], a = rnd() * TAU, d = P.r + 4 + rnd() * P.estR; n.x = P.x + Math.cos(a) * d; n.y = P.y + Math.sin(a) * d; }
+    else { const a = rnd() * TAU, d = 200 + rnd() * 200; n.x = Math.cos(a) * d; n.y = Math.sin(a) * d; }
+  }
+  const links = [];
+  for (const n of core) if (n.p >= 0) { const P = nodes[n.p]; links.push({ source: n, target: P, d: P.r + n.r + 6 + Math.min(26, Math.sqrt(P.members) * 1.7), w: 0.22 }); }
+  for (const e of edges) {
+    const a = nodes[e.s], b = nodes[e.t];
+    if (a.fine || b.fine) continue;
+    if (e.kind === "links") links.push({ source: a, target: b, d: 14, w: a.p === b.p ? 0.2 : 0.012 });
+    else if (e.kind === "wrote" || e.kind === "continued") links.push({ source: a, target: b, d: 12 + a.r + b.r, w: a.p === b.p ? 0.45 : 0.05 });
+  }
+  // projects that share a parent folder drift together, like districts
+  const parentOf = (p) => (p.path || p.id.slice(2)).replace(/\/[^/]*\/?$/, "");
+  const fam = new Map();
+  for (const p of projs) { const k = parentOf(p); if (!fam.has(k)) fam.set(k, []); fam.get(k).push(p); }
+  for (const [, ps] of fam) for (let j = 1; j < ps.length; j++) links.push({ source: ps[0], target: ps[j], d: ps[0].estR + ps[j].estR + 30, w: 0.018 });
+  // and sit near the nearest project folder that contains them (not the home folder)
+  const pathOf = (p) => (p.path || p.id.slice(2)).replace(/\/+$/, "");
+  for (const p of projs) {
+    const me = pathOf(p); let best = null;
+    for (const q of projs) { const qp = pathOf(q); if (q !== p && me.startsWith(qp + "/") && qp.split("/").length > 3 && (!best || qp.length > pathOf(best).length)) best = q; }
+    if (best) links.push({ source: p, target: best, d: p.estR + best.estR + 24, w: 0.05 });
+  }
+  let sepTick = 0;
+  function separate(alpha) {
+    // every so often, measure how big each cluster really is
+    if (++sepTick % 20 === 0) {
+      const far = new Map();
+      for (const n of core) if (n.p >= 0) { const P = nodes[n.p]; const d = Math.hypot(n.x - P.x, n.y - P.y) + n.r; if (!far.has(P.i)) far.set(P.i, []); far.get(P.i).push(d); }
+      for (const p of projs) { const ds = far.get(p.i); if (!ds || !ds.length) continue; ds.sort((a, b) => a - b); const m = ds[Math.floor((ds.length - 1) * 0.9)]; p.estR = 0.5 * p.estR + 0.5 * Math.max(p.r + 6, m + 4); }
+    }
+    for (let a = 0; a < projs.length; a++) {
+      const p = projs[a];
+      for (let b = a + 1; b < projs.length; b++) {
+        const q = projs[b];
+        let dx = q.x - p.x, dy = q.y - p.y, d = Math.sqrt(dx * dx + dy * dy) || 1e-3;
+        const min = p.estR + q.estR + 18;
+        if (d < min) { const f = ((min - d) / d) * alpha * 0.35, wp = q.estR / (p.estR + q.estR); dx *= f; dy *= f; p.vx -= dx * wp; p.vy -= dy * wp; q.vx += dx * (1 - wp); q.vy += dy * (1 - wp); }
+      }
+    }
+  }
+  sim = d3.forceSimulation(core)
+    .force("link", d3.forceLink(links).distance((l) => l.d).strength((l) => l.w).iterations(1))
+    .force("charge", d3.forceManyBody().strength((n) => n.charge).theta(0.92).distanceMax(240))
+    .force("collide", d3.forceCollide((n) => n.r + (n.kind === "project" ? 5 : 1.4)).iterations(1).strength(0.8))
+    .force("x", d3.forceX(0).strength((n) => (n.kind === "project" ? 0.016 : 0.004)))
+    .force("y", d3.forceY(0).strength((n) => (n.kind === "project" ? 0.036 : 0.008)))
+    .force("sep", separate)
+    .alphaDecay(1 - Math.pow(0.001, 1 / 320))
+    .stop();
+}
+function finishLayout() {
+  // cluster radius per project (for its territory ring)
+  const dist = new Map(projects.map((p) => [p.i, []]));
+  for (const n of core) if (n.p >= 0) { const P = nodes[n.p]; dist.get(P.i).push(Math.hypot(n.x - P.x, n.y - P.y) + n.r); }
+  for (const p of projects) {
+    const ds = dist.get(p.i).sort((a, b) => a - b);
+    p.clusterR = ds.length ? Math.max(p.r + 6, ds[Math.floor((ds.length - 1) * 0.94)] + 5) : p.r + 6;
+  }
+  placeOrbits();
+}
+/* a session's turns and outputs sit on a clockwise spiral, oldest at twelve o'clock */
+function placeOrbits() {
+  const rnd = lcg(7);
+  for (const s of nodes) {
+    if (!s.kids) continue;
+    const kids = s.kids.map((i) => nodes[i]).sort((a, b) => a.at - b.at || a.i - b.i);
+    s.orbit = kids.map((k) => k.i);
+    const gap = 2.7, b = gap / TAU, r0 = s.r + 3.4;
+    let th = 0, r = r0;
+    for (const k of kids) {
+      r = r0 + b * th;
+      const rr = r + (k.kind === "output" ? 1.1 : 0);
+      k.x = s.x + Math.cos(th - Math.PI / 2) * rr; k.y = s.y + Math.sin(th - Math.PI / 2) * rr;
+      th += 2.35 / r;
+    }
+    s.orbitR = r + 1.5;
+  }
+  for (const n of nodes) if (n.fine && n.parent < 0) {
+    const P = n.p >= 0 ? nodes[n.p] : null, a = rnd() * TAU, d = (P ? P.clusterR : 80) * (0.3 + rnd() * 0.7);
+    n.x = (P ? P.x : 0) + Math.cos(a) * d; n.y = (P ? P.y : 0) + Math.sin(a) * d;
+  }
+}
+
+/* ------------------------------------------------------------------ view state */
+const sky = $("#sky"), ctx = sky.getContext("2d", { alpha: false });
+let W = 0, H = 0, DPR = 1;
+const cam = { x: 0, y: 0, k: 1 };
+let sel = -1, hover = -1, cursor = -1, legendKind = null;
+let T = Infinity;               // time cut-off (ms); Infinity = everything
+let playing = false;
+const expanded = new Set();     // sessions showing their turns and outputs
+let selNbr = new Set();
+const backStack = [];
+let matches = null, matchOn = false;  // search highlight
+let settled = false;
+let flowUntil = 0;
+let edgeR = Infinity, edgeB = Infinity;  // where the open panel starts covering the chart
+let covers = [];  // boxes of the controls floating over the chart
+
+const vis = new Uint8Array(N);
+let visNodes = [], visEdges = [];
+let quad = null, quadDirty = true;
+const SX = new Float32Array(N), SY = new Float32Array(N), SR = new Float32Array(N), ON = new Uint8Array(N);
+
+function computeVisible() {
+  vis.fill(0); visNodes = [];
+  for (let i = 0; i < N; i++) {
+    const n = nodes[i];
+    if (n.at > T) continue;
+    let on = layerOn[LAYER_OF[n.kind]];
+    if (!on && n.fine) on = (n.parent >= 0 && expanded.has(n.parent)) || i === sel || selNbr.has(i);
+    if (on) { vis[i] = 1; visNodes.push(i); }
+  }
+  visEdges = [];
+  for (const e of edges) {
+    if (!vis[e.s] || !vis[e.t]) continue;
+    if ((e.kind === "read" || e.kind === "found") && !layerOn.recall) continue;
+    visEdges.push(e);
+  }
+  // draw order: big and structural first, bright points last
+  const order = { project: 0, session: 1, handover: 2, index: 3, file: 4, note: 4, output: 5, turn: 5 };
+  visNodes.sort((a, b) => order[nodes[a].kind] - order[nodes[b].kind]);
+  quadDirty = true;
+}
+
+/* neighbourhood of the focused node, plus its whole handover chain */
+function chainOf(i) {
+  const seen = new Set([i]), stack = [i];
+  while (stack.length) {
+    const n = nodes[stack.pop()];
+    for (const e of n.adj) if (e.kind === "wrote" || e.kind === "continued") {
+      const o = e.s === n.i ? e.t : e.s;
+      if (!seen.has(o)) { seen.add(o); stack.push(o); }
+    }
+  }
+  return seen;
+}
+let focusCache = { key: "", val: null };
+function focus() {
+  const f = hover >= 0 ? hover : sel;
+  if (legendKind && f < 0) {
+    const key = "L" + legendKind;
+    if (focusCache.key !== key) {
+      const set = new Set();
+      for (const i of visNodes) if (LAYER_OF[nodes[i].kind] === legendKind) set.add(i);
+      focusCache = { key, val: { f: -1, set, chain: new Set(), kind: legendKind } };
+    }
+    return focusCache.val;
+  }
+  if (f < 0 || !vis[f]) return null;
+  const key = f + ":" + visEdges.length + ":" + T;
+  if (focusCache.key === key) return focusCache.val;
+  const n = nodes[f], set = new Set([f]);
+  for (const e of n.adj) if (vis[e.s] && vis[e.t]) { set.add(e.s); set.add(e.t); }
+  if (n.kind === "project") for (const i of visNodes) if (nodes[i].p === f) set.add(i);
+  if (n.p >= 0 && vis[n.p]) set.add(n.p);
+  if (n.parent >= 0 && vis[n.parent]) set.add(n.parent);
+  let chain = new Set();
+  if (n.kind === "session" || n.kind === "handover") { chain = chainOf(f); if (chain.size < 2) chain = new Set(); for (const c of chain) if (vis[c]) set.add(c); }
+  focusCache = { key, val: { f, set, chain } };
+  return focusCache.val;
+}
+
+/* ------------------------------------------------------------------ camera */
+const focal = () => {
+  const open = !$("#panel").hidden;
+  if (open && W >= 900) return [(W - parseFloat(getComputedStyle(document.body).getPropertyValue("--panel-w")) - 24) / 2, H / 2 + 12];
+  if (open) return [W / 2, (H * 0.42) / 2 + 40];
+  return [W / 2, H / 2 + 6];
+};
+const toScreenX = (x) => (x - cam.x) * cam.k + W / 2;
+const toScreenY = (y) => (y - cam.y) * cam.k + H / 2;
+const toWorld = (sx, sy) => [(sx - W / 2) / cam.k + cam.x, (sy - H / 2) / cam.k + cam.y];
+let kMin = 0.05, kMax = 60;
+
+function zoomAt(sx, sy, k2) {
+  k2 = Math.max(kMin, Math.min(kMax, k2));
+  const [wx, wy] = toWorld(sx, sy);
+  cam.k = k2; cam.x = wx - (sx - W / 2) / k2; cam.y = wy - (sy - H / 2) / k2;
+  kick();
+}
+/* van Wijk and Nuij smooth zoom, as in d3-interpolate (ISC) */
+function interpZoom(a, b) {
+  const rho = Math.SQRT2, ux0 = a[0], uy0 = a[1], w0 = a[2], ux1 = b[0], uy1 = b[1], w1 = b[2];
+  const dx = ux1 - ux0, dy = uy1 - uy0, d2 = dx * dx + dy * dy;
+  let f, S;
+  if (d2 < 1e-12) { S = Math.log(w1 / w0) / rho; f = (t) => [ux0 + t * dx, uy0 + t * dy, w0 * Math.exp(rho * t * S)]; }
+  else {
+    const d1 = Math.sqrt(d2), b0 = (w1 * w1 - w0 * w0 + 4 * d2) / (2 * w0 * 2 * d1), b1 = (w1 * w1 - w0 * w0 - 4 * d2) / (2 * w1 * 2 * d1);
+    const r0 = Math.log(Math.sqrt(b0 * b0 + 1) - b0), r1 = Math.log(Math.sqrt(b1 * b1 + 1) - b1);
+    S = (r1 - r0) / rho;
+    f = (t) => { const s = t * S, c0 = Math.cosh(r0), u = (w0 / (2 * d1)) * (c0 * Math.tanh(rho * s + r0) - Math.sinh(r0)); return [ux0 + u * dx, uy0 + u * dy, (w0 * c0) / Math.cosh(rho * s + r0)]; };
+  }
+  f.duration = Math.max(280, Math.min(1400, Math.abs(S) * 1000 * 0.62));
+  return f;
+}
+let flight = null;
+function flyTo(x, y, k, instant) {
+  k = Math.max(kMin, Math.min(kMax, k));
+  const [fx, fy] = focal();
+  const tx = x - (fx - W / 2) / k, ty = y - (fy - H / 2) / k;
+  const S = Math.max(W, H);
+  if (flight) { anim.delete(flight); flight = null; }
+  if (instant || RM || !settled) { cam.x = tx; cam.y = ty; cam.k = k; kick(); return; }
+  const f = interpZoom([cam.x, cam.y, S / cam.k], [tx, ty, S / k]);
+  const t0 = performance.now();
+  flight = (now) => {
+    const t = Math.min(1, (now - t0) / f.duration), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const v = f(e); cam.x = v[0]; cam.y = v[1]; cam.k = S / v[2];
+    return t < 1;
+  };
+  anim.add(flight); kick();
+}
+function boundsOf(list) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of list) { const n = nodes[i], r = n.kind === "project" ? n.clusterR || n.r : n.r; if (n.x - r < x0) x0 = n.x - r; if (n.x + r > x1) x1 = n.x + r; if (n.y - r < y0) y0 = n.y - r; if (n.y + r > y1) y1 = n.y + r; }
+  return [x0, y0, x1, y1];
+}
+function viewBox() {
+  const narrow = W < 900, open = !$("#panel").hidden;
+  const top = narrow ? 96 : 64, bottom = narrow ? (open ? H * 0.58 : 150) : 96;
+  const left = narrow ? 16 : 232;
+  let right = open && !narrow ? parseFloat(getComputedStyle(document.body).getPropertyValue("--panel-w")) + 40 : 24;
+  const rl = document.getElementById("results");
+  if (!narrow && rl && !rl.hidden) right = Math.max(right, rl.getBoundingClientRect().width + 40);
+  return { left, top, w: Math.max(80, W - left - right), h: Math.max(80, H - top - bottom) };
+}
+function fitTo(list, instant, pad = 1, kCap = kMax) {
+  if (!list.length) { cam.x = 0; cam.y = 0; cam.k = 1; kick(); return; }
+  const [x0, y0, x1, y1] = boundsOf(list), vb = viewBox();
+  const k = Math.min(vb.w / Math.max(1, x1 - x0), vb.h / Math.max(1, y1 - y0)) * pad;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const kk = Math.max(0.02, Math.min(kCap, k));
+  // centre of the free area, not of the window
+  const sx = vb.left + vb.w / 2, sy = vb.top + vb.h / 2;
+  const tx = cx - (sx - W / 2) / kk, ty = cy - (sy - H / 2) / kk;
+  if (flight) { anim.delete(flight); flight = null; }
+  if (instant || RM || !settled) { cam.x = tx; cam.y = ty; cam.k = kk; kick(); return; }
+  const S = Math.max(W, H), f = interpZoom([cam.x, cam.y, S / cam.k], [tx, ty, S / kk]), t0 = performance.now();
+  flight = (now) => { const t = Math.min(1, (now - t0) / f.duration), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2, v = f(e); cam.x = v[0]; cam.y = v[1]; cam.k = S / v[2]; return t < 1; };
+  anim.add(flight); kick();
+}
+function fitAll(instant) { fitTo(visNodes.filter((i) => !nodes[i].fine || true), instant, 0.96); }
+function kFor(n) {
+  const vb = viewBox(), m = Math.min(vb.w, vb.h);
+  if (n.kind === "project") return (m * 0.46) / Math.max(20, n.clusterR);
+  if (n.kind === "session" && n.orbitR) return Math.max(cam.k, Math.min((m * 0.26) / n.orbitR, 10));
+  if (n.fine) return Math.max(cam.k, 7);
+  return Math.max(cam.k, 3.2);
+}
+
+/* ------------------------------------------------------------------ render loop */
+const anim = new Set();
+let raf = 0;
+function kick() { if (!raf) raf = requestAnimationFrame(frame); }
+function frame(now) {
+  raf = 0;
+  for (const a of [...anim]) if (!a(now)) anim.delete(a);
+  draw(now);
+  if (anim.size || now < flowUntil) kick();
+}
+
+function resize() {
+  DPR = Math.min(2.5, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  sky.width = Math.round(W * DPR); sky.height = Math.round(H * DPR);
+  document.body.classList.toggle("wide", W >= 900);
+  syncEdges();
+  syncChips();
+  drawHist();
+  kick();
+}
+function syncEdges() {
+  edgeR = edgeB = Infinity;
+  covers = [];
+  for (const id of ["layers", "zoom", "timebar"]) {
+    const c = document.getElementById(id), r = c.getBoundingClientRect();
+    if (r.width && getComputedStyle(c).visibility !== "hidden") covers.push([r.left - 4, r.top - 4, r.right + 4, r.bottom + 4]);
+  }
+  const panel = document.getElementById("panel");
+  if (panel.hidden) return;
+  const r = panel.getBoundingClientRect();
+  if (W >= 900) edgeR = r.left - 6; else edgeB = r.top - 4;
+}
+
+/* ------------------------------------------------------------------ drawing */
+function drawGrid() {
+  // a faint chart graticule: dots at a spacing that stays between 56 and 112 px
+  let step = 1;
+  while (step * cam.k < 56) step *= 2;
+  while (step * cam.k > 112) step /= 2;
+  const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
+  const gx0 = Math.floor(x0 / step) * step, gy0 = Math.floor(y0 / step) * step;
+  ctx.fillStyle = "rgba(52,65,90,.55)";
+  for (let gx = gx0; gx <= x1; gx += step) {
+    const sx = Math.round(toScreenX(gx)) - 0.5;
+    const major = Math.round(gx / step) % 4 === 0;
+    for (let gy = gy0; gy <= y1; gy += step) {
+      const sy = Math.round(toScreenY(gy)) - 0.5;
+      if (major && Math.round(gy / step) % 4 === 0) { ctx.fillRect(sx - 3, sy, 7, 1); ctx.fillRect(sx, sy - 3, 1, 7); }
+      else ctx.fillRect(sx, sy, 1, 1);
+    }
+  }
+}
+
+const EDGE = {
+  links: { c: [151, 163, 182], a: 0.1, lit: 0.6, w: 1 },
+  in: { c: [109, 122, 142], a: 0, lit: 0.3, w: 1 },
+  holds: { c: [125, 211, 252], a: 0, lit: 0.4, w: 1 },
+  // dashes are drawn with flat ends (round ends double the raster cost), so each is a cap longer than before
+  read: { c: [62, 207, 142], a: 0.2, lit: 0.85, w: 1.1, dash: [3, 2] },
+  found: { c: [62, 207, 142], a: 0.13, lit: 0.75, w: 1, dash: [2.5, 2.5] },
+};
+const col = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+/* a line cut to the screen: zoomed in, an edge to a far-off node can run tens of thousands of pixels,
+   and dashing that whole length stalls a frame. The start moves in whole dash periods so dashes stay put. */
+let cT0 = 0, cT1 = 1;
+const clipT = (p, q) => { if (p === 0) return q >= 0; const r = q / p; if (p < 0) { if (r > cT1) return false; if (r > cT0) cT0 = r; } else { if (r < cT0) return false; if (r < cT1) cT1 = r; } return true; };
+function lineOnScreen(x0, y0, x1, y1, period) {
+  const dx = x1 - x0, dy = y1 - y0, m = 24; cT0 = 0; cT1 = 1;
+  if (!clipT(-dx, x0 + m) || !clipT(dx, W + m - x0) || !clipT(-dy, y0 + m) || !clipT(dy, H + m - y0)) return;
+  if (period && cT0 > 0) { const len = Math.hypot(dx, dy); cT0 = (Math.floor((cT0 * len) / period) * period) / len; }
+  ctx.moveTo(x0 + dx * cT0, y0 + dy * cT0); ctx.lineTo(x0 + dx * cT1, y0 + dy * cT1);
+}
+
+function draw(now) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = C.base; ctx.fillRect(0, 0, W, H);
+  drawGrid();
+  if (!N) return;
+  const k = cam.k, hw = W / 2, hh = H / 2, M = 40;
+  for (const i of visNodes) {
+    const n = nodes[i];
+    const x = (n.x - cam.x) * k + hw, y = (n.y - cam.y) * k + hh, r = screenR(n, k);
+    SX[i] = x; SY[i] = y; SR[i] = r;
+    ON[i] = x > -M - r && x < W + M + r && y > -M - r && y < H + M + r ? 1 : 0;
+  }
+  const F = focus();
+  const dimAll = !!F || (matchOn && matches && matches.size > 0);
+  const lit = (i) => (F ? F.set.has(i) : matchOn && matches ? matches.has(i) : true);
+  const fade = (T === Infinity || !playing) ? null : Math.max(1, (tMax - tMin) * 0.018);
+
+  /* project territories */
+  if (layerOn.project) {
+    ctx.lineWidth = 1;
+    for (const p of projects) {
+      if (!vis[p.i] || p.members < 4) continue;
+      const R = p.clusterR * k;
+      if (R < 16 || R > 6000) continue;
+      const x = SX[p.i], y = SY[p.i];
+      if (x + R < 0 || x - R > W || y + R < 0 || y - R > H) continue;
+      const isF = F && (F.f === p.i || (F.f >= 0 && nodes[F.f].p === p.i));
+      ctx.beginPath(); ctx.arc(x, y, R, 0, TAU);
+      ctx.fillStyle = isF ? "rgba(34,48,74,.22)" : "rgba(20,27,38,.34)"; ctx.fill();
+      ctx.strokeStyle = isF ? "rgba(125,211,252,.28)" : dimAll ? "rgba(38,48,65,.5)" : "rgba(38,48,65,.95)";
+      ctx.stroke();
+    }
+  }
+
+  /* plain edges, batched */
+  const buckets = { links: [[], []], in: [[], []], holds: [[], []], read: [[], []], found: [[], []] };
+  const chainE = [];
+  for (const e of visEdges) {
+    if (!ON[e.s] && !ON[e.t]) continue;
+    if (e.kind === "wrote" || e.kind === "continued") { chainE.push(e); continue; }
+    const b = buckets[e.kind]; if (!b) continue;
+    const isLit = F ? (F.f >= 0 && (e.s === F.f || e.t === F.f)) : matchOn && matches ? (matches.has(e.s) && matches.has(e.t)) : false;
+    b[isLit ? 1 : 0].push(e);
+  }
+  ctx.lineCap = "round";
+  for (const kind in buckets) {
+    const st = EDGE[kind];
+    for (let L = 0; L < 2; L++) {
+      const list = buckets[kind][L];
+      if (!list.length) continue;
+      let a = L ? st.lit : st.a;
+      if (!L && dimAll) a *= 0.3;
+      if (a <= 0.004) continue;
+      ctx.strokeStyle = col(st.c, a); ctx.lineWidth = st.w * (L ? 1.15 : 1);
+      ctx.lineCap = st.dash ? "butt" : "round";
+      if (st.dash) { ctx.setLineDash(st.dash); ctx.lineDashOffset = L && now < flowUntil + 1 ? -((now / 90) % 10) : 0; }
+      const period = st.dash ? st.dash[0] + st.dash[1] : 0;
+      ctx.beginPath();
+      for (const e of list) lineOnScreen(SX[e.s], SY[e.s], SX[e.t], SY[e.t], period);
+      ctx.stroke();
+      if (st.dash) ctx.setLineDash([]);
+    }
+  }
+  ctx.lineCap = "round";
+
+  /* spiral threads through an expanded session's turns */
+  for (const s of nodes) {
+    if (!s.orbit || !vis[s.i] || !ON[s.i]) continue;
+    let started = false, cnt = 0;
+    const isF = F && (F.f === s.i || (F.f >= 0 && nodes[F.f].parent === s.i));
+    ctx.beginPath();
+    for (const i of s.orbit) { if (!vis[i]) continue; cnt++; if (!started) { ctx.moveTo(SX[s.i], SY[s.i]); started = true; } ctx.lineTo(SX[i], SY[i]); }
+    if (cnt < 1) continue;
+    ctx.strokeStyle = isF ? "rgba(125,211,252,.34)" : dimAll ? "rgba(125,211,252,.05)" : "rgba(125,211,252,.13)";
+    ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  /* handover chains: luminous arcs from the older end to the newer */
+  if (chainE.length) {
+    ctx.globalCompositeOperation = "lighter";
+    for (let pass = 0; pass < 2; pass++) {
+      for (const e of chainE) {
+        const inChain = F && F.chain && F.chain.has(e.s) && F.chain.has(e.t);
+        const litE = inChain || (F && F.f >= 0 && (e.s === F.f || e.t === F.f));
+        let a = litE ? 1 : dimAll ? 0.18 : 0.62;
+        const x0 = SX[e.s], y0 = SY[e.s], x1 = SX[e.t], y1 = SY[e.t];
+        const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+        if (len < 0.5) continue;
+        const bend = Math.min(40, len * 0.18), cx = (x0 + x1) / 2 - (dy / len) * bend, cy = (y0 + y1) / 2 + (dx / len) * bend;
+        if (pass === 0) {
+          ctx.strokeStyle = `rgba(245,166,35,${0.07 * a})`; ctx.lineWidth = litE ? 7 : 4.5;
+        } else {
+          const g = ctx.createLinearGradient(x0, y0, x1, y1);
+          g.addColorStop(0, `rgba(245,166,35,${0.22 * a})`); g.addColorStop(1, `rgba(255,205,120,${0.85 * a})`);
+          ctx.strokeStyle = g; ctx.lineWidth = litE ? 1.6 : 1.1;
+        }
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo(cx, cy, x1, y1); ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /* nodes */
+  const DIM = 0.17;
+  for (let L = 0; L < 2; L++) {
+    // pass 0: dimmed nodes; pass 1: lit nodes
+    if (L === 0 && !dimAll) continue;
+    ctx.globalAlpha = L === 0 ? DIM : 1;
+    drawNodes((i) => (dimAll ? (L === 1) === lit(i) : true), now, fade);
+  }
+  ctx.globalAlpha = 1;
+
+  /* appearing nodes bloom during replay */
+  if (fade) {
+    ctx.lineWidth = 1;
+    for (const i of visNodes) {
+      if (!ON[i]) continue;
+      const n = nodes[i], age = (T - n.at) / fade;
+      if (age < 0 || age >= 1) continue;
+      const c = n.kind === "handover" ? C.working : n.kind === "session" || n.fine ? C.accent : C.text;
+      ctx.strokeStyle = rgba(c, 0.55 * (1 - age));
+      ctx.beginPath(); ctx.arc(SX[i], SY[i], SR[i] + 2 + age * 14, 0, TAU); ctx.stroke();
+    }
+  }
+
+  /* search matches */
+  if (matchOn && matches) {
+    ctx.strokeStyle = rgba(C.attention, 0.85); ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    let c = 0;
+    for (const i of matches) { if (!vis[i] || !ON[i] || c++ > 400) continue; ctx.moveTo(SX[i] + SR[i] + 3.5, SY[i]); ctx.arc(SX[i], SY[i], SR[i] + 3.5, 0, TAU); }
+    ctx.stroke();
+  }
+
+  /* selection reticle, j/k cursor */
+  if (sel >= 0 && vis[sel]) reticle(SX[sel], SY[sel], SR[sel], C.text, 1);
+  if (cursor >= 0 && vis[cursor] && cursor !== sel) {
+    ctx.setLineDash([3, 3]); ctx.strokeStyle = C.accent; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(SX[cursor], SY[cursor], SR[cursor] + 5, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  }
+  if (hover >= 0 && hover !== sel && vis[hover]) {
+    ctx.strokeStyle = "rgba(219,226,236,.55)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(SX[hover], SY[hover], SR[hover] + 3, 0, TAU); ctx.stroke();
+  }
+
+  drawLabels(F, dimAll, lit);
+}
+
+function reticle(x, y, r, c, a) {
+  const R = r + 6;
+  ctx.strokeStyle = c; ctx.globalAlpha = a; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.stroke();
+  ctx.beginPath();
+  for (let q = 0; q < 4; q++) { const ang = q * Math.PI / 2; ctx.moveTo(x + Math.cos(ang) * (R + 3), y + Math.sin(ang) * (R + 3)); ctx.lineTo(x + Math.cos(ang) * (R + 8), y + Math.sin(ang) * (R + 8)); }
+  ctx.stroke(); ctx.globalAlpha = 1;
+}
+
+function drawNodes(take, now, fade) {
+  const baseA = ctx.globalAlpha;
+  const alphaOf = fade ? (n) => Math.min(1, 0.25 + ((T - n.at) / fade) * 0.75) : null;
+  // projects: dark bodies with a hairline rim and a pale core
+  for (const i of visNodes) {
+    const n = nodes[i];
+    if (n.kind !== "project" || !ON[i] || !take(i)) continue;
+    const x = SX[i], y = SY[i], r = SR[i];
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU);
+    ctx.fillStyle = "#18202e"; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = i === sel || i === hover ? "#8391a8" : "#44536c"; ctx.stroke();
+    if (r > 9) { ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, TAU); ctx.strokeStyle = "rgba(68,83,108,.55)"; ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(x, y, Math.max(1, Math.min(2.2, r * 0.18)), 0, TAU); ctx.fillStyle = C.dim; ctx.fill();
+  }
+  // sessions: sky discs with a rim
+  ctx.lineWidth = 1.1;
+  const sess = [];
+  for (const i of visNodes) if (nodes[i].kind === "session" && ON[i] && take(i)) sess.push(i);
+  if (sess.length) {
+    ctx.fillStyle = "rgba(125,211,252,.26)"; ctx.strokeStyle = C.accent;
+    for (const i of sess) {
+      const r = SR[i];
+      if (alphaOf) ctx.globalAlpha = baseA * alphaOf(nodes[i]);
+      ctx.beginPath(); ctx.arc(SX[i], SY[i], r, 0, TAU);
+      if (r < 2.6) { ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(125,211,252,.26)"; }
+      else { ctx.fill(); ctx.stroke(); if (r > 5) { ctx.beginPath(); ctx.arc(SX[i], SY[i], Math.min(2, r * 0.22), 0, TAU); ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(125,211,252,.26)"; } }
+    }
+    ctx.globalAlpha = baseA;
+  }
+  // briefs: amber diamonds
+  for (const i of visNodes) {
+    const n = nodes[i];
+    if (n.kind !== "handover" || !ON[i] || !take(i)) continue;
+    const x = SX[i], y = SY[i], r = SR[i] * 1.2;
+    if (alphaOf) ctx.globalAlpha = baseA * alphaOf(n);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.beginPath(); ctx.arc(x, y, r * 2.6, 0, TAU); ctx.fillStyle = "rgba(245,166,35,.08)"; ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+    ctx.fillStyle = C.working; ctx.fill();
+    if (r > 5) { ctx.beginPath(); ctx.moveTo(x, y - r * 0.45); ctx.lineTo(x + r * 0.45, y); ctx.lineTo(x, y + r * 0.45); ctx.lineTo(x - r * 0.45, y); ctx.closePath(); ctx.fillStyle = "#ffe2b0"; ctx.fill(); }
+  }
+  ctx.globalAlpha = baseA;
+  // indexes: pale rings with a centre
+  ctx.lineWidth = 1.3; ctx.strokeStyle = C.text; ctx.fillStyle = C.text;
+  for (const i of visNodes) {
+    const n = nodes[i];
+    if (n.kind !== "index" || !ON[i] || !take(i)) continue;
+    if (alphaOf) ctx.globalAlpha = baseA * alphaOf(n);
+    const r = SR[i];
+    ctx.beginPath(); ctx.arc(SX[i], SY[i], r, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(SX[i], SY[i], Math.max(0.8, r * 0.3), 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = baseA;
+  // memory files: bright points with a faint halo
+  const files = [];
+  for (const i of visNodes) { const kd = nodes[i].kind; if ((kd === "file" || kd === "note") && ON[i] && take(i)) files.push(i); }
+  if (files.length) {
+    if (!alphaOf) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = "rgba(219,226,236,.07)"; ctx.beginPath();
+      for (const i of files) { const r = SR[i] * 2.6 + 1.2; ctx.moveTo(SX[i] + r, SY[i]); ctx.arc(SX[i], SY[i], r, 0, TAU); }
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "#e4eaf3"; ctx.beginPath();
+      for (const i of files) { const r = SR[i]; ctx.moveTo(SX[i] + r, SY[i]); ctx.arc(SX[i], SY[i], r, 0, TAU); }
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "#e4eaf3";
+      for (const i of files) { ctx.globalAlpha = baseA * alphaOf(nodes[i]); ctx.beginPath(); ctx.arc(SX[i], SY[i], SR[i], 0, TAU); ctx.fill(); }
+      ctx.globalAlpha = baseA;
+    }
+  }
+  // turns (sky dots) and outputs (small squares)
+  ctx.fillStyle = "rgba(125,211,252,.85)"; ctx.beginPath();
+  let any = false;
+  for (const i of visNodes) { if (nodes[i].kind !== "turn" || !ON[i] || !take(i)) continue; const r = SR[i]; ctx.moveTo(SX[i] + r, SY[i]); ctx.arc(SX[i], SY[i], r, 0, TAU); any = true; }
+  if (any) ctx.fill();
+  ctx.fillStyle = C.dim;
+  for (const i of visNodes) { if (nodes[i].kind !== "output" || !ON[i] || !take(i)) continue; const r = SR[i] * 1.05; ctx.fillRect(SX[i] - r, SY[i] - r, r * 2, r * 2); }
+}
+
+/* labels: projects first, then by importance, never overlapping */
+const widthCache = new Map();
+function measure(font, s) { const key = font + "|" + s; let w = widthCache.get(key); if (w == null) { ctx.font = font; w = ctx.measureText(s).width; widthCache.set(key, w); } return w; }
+const FONT_P = `600 10px ${MONO}`, FONT_L = `11px ${MONO}`, FONT_B = `500 11.5px ${MONO}`;
+function drawLabels(F, dimAll, lit) {
+  const k = cam.k, cands = [];
+  for (const i of visNodes) {
+    if (!ON[i]) continue;
+    const n = nodes[i];
+    let pr = -1;
+    const focused = F && F.set.has(i);
+    const ringPx = n.kind === "project" ? n.clusterR * k : 0;
+    if (i === sel) pr = 1e9;
+    else if (i === hover) pr = 9e8;
+    else if (i === cursor) pr = 8e8;
+    else if (F && F.f >= 0 && focused) pr = 5e8 + (n.kind === "project" ? 1e6 : 0) + (i === F.f ? 0 : n.kind === "session" ? n.size * 10 : n.size / 100);
+    else if (matchOn && matches && matches.has(i)) pr = 4e8 - (matches.rank.get(i) || 0);
+    else if (n.kind === "project") pr = ringPx >= 30 || SR[i] >= 6 ? 3e8 + n.members : -1;
+    else if (dimAll) pr = -1;
+    else if (n.kind === "session" && (SR[i] >= 6 || k > 2)) pr = 2e8 + n.size;
+    else if (n.kind === "handover" && k > 2.2) pr = 1.5e8;
+    else if (n.kind === "index" && k > 1.6) pr = 1.4e8;
+    else if ((n.kind === "file" || n.kind === "note") && k > 2.8) pr = 1e8 + n.size / 100;
+    else if (n.fine && k > 8) pr = 5e7;
+    if (pr >= 0) cands.push([pr, i]);
+  }
+  cands.sort((a, b) => b[0] - a[0]);
+  // a coarse grid of placed boxes keeps the overlap test cheap
+  const G = 64, grid = new Map();
+  const cells = (x0, y0, x1, y1, fn) => { for (let gx = Math.floor(x0 / G); gx <= Math.floor(x1 / G); gx++) for (let gy = Math.floor(y0 / G); gy <= Math.floor(y1 / G); gy++) if (fn(gx * 4096 + gy)) return true; return false; };
+  const hit = (b) => cells(b[0], b[1], b[2], b[3], (key) => { const l = grid.get(key); if (l) for (const o of l) if (b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) return true; return false; });
+  const put = (b) => cells(b[0], b[1], b[2], b[3], (key) => { if (!grid.has(key)) grid.set(key, []); grid.get(key).push(b); return false; });
+  // an open session's spiral of dots blocks labels, so turn labels only leave from its outer edge
+  // labels don't slide under the controls either
+  for (const b of covers) put(b);
+  const orbitOpen = new Map();
+  for (const s of expanded) {
+    const S = nodes[s]; if (!vis[s] || !S.orbit) continue;
+    orbitOpen.set(s, S.orbitR * k);
+    if (ON[s]) { const r = SR[s] + 4; put([SX[s] - r, SY[s] - r, SX[s] + r, SY[s] + r]); }
+    for (const j of S.orbit) if (vis[j] && ON[j]) { const r = SR[j] + 1.5; put([SX[j] - r, SY[j] - r, SX[j] + r, SY[j] + r]); }
+  }
+  ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+  let drawn = 0;
+  for (const [pr, i] of cands) {
+    if (drawn > 180) break;
+    const n = nodes[i];
+    const isP = n.kind === "project";
+    const must = pr >= 8e8, strong = pr >= 4e8;
+    if (SX[i] > edgeR || SY[i] > edgeB) continue;
+    const font = isP ? FONT_P : strong ? FONT_B : FONT_L;
+    let text = isP ? clip(n.name, 30).toUpperCase() : clip(n.name, must ? 60 : strong ? 42 : 32);
+    let w = measure(font, text) + (isP ? text.length * 1.2 : 0);
+    let x, y, align;
+    if (isP) {
+      const R = n.clusterR * k, ring = R >= 16 && n.members >= 4 && layerOn.project;
+      x = SX[i]; y = ring ? SY[i] - R - 8 : SY[i] + SR[i] + 10; align = "center";
+      if (ring && y < 76) y = SY[i] + SR[i] + 10;
+    } else if (orbitOpen.has(i) && orbitOpen.get(i) > 36) {
+      // an open session names itself above its spiral
+      x = SX[i]; y = SY[i] - orbitOpen.get(i) - 12; align = "center";
+    } else if (n.fine && orbitOpen.has(n.parent)) {
+      // turns label outwards, away from the session
+      const out = SX[i] >= SX[n.parent]; y = SY[i];
+      if (out) { x = SX[i] + SR[i] + 5; align = "left"; } else { x = SX[i] - SR[i] - 5; align = "right"; }
+    } else { x = SX[i] + SR[i] + 5; y = SY[i]; align = "left"; }
+    const boxAt = () => align === "center" ? [x - w / 2 - 3, y - 7, x + w / 2 + 3, y + 7] : align === "right" ? [x - w - 3, y - 7, x + 2, y + 7] : [x - 2, y - 7, x + w + 3, y + 7];
+    let box = boxAt();
+    if (box[2] < 0 || box[0] > W || box[3] < 0 || box[1] > H || box[3] > edgeB) continue;
+    // keep labels on the part of the chart you can see: the open panel covers its right, the window ends at the left
+    const xR = Math.min(W, edgeR) - 2;
+    if (align === "center") { x = Math.max(w / 2 + 5, Math.min(x, xR - w / 2 - 3)); box = boxAt(); }
+    else if (box[0] < 2 || box[2] > xR) {
+      // flip to the other side of the node if it fits there, else shorten it
+      const a0 = align, x0 = x;
+      align = a0 === "left" ? "right" : "left"; x = a0 === "left" ? SX[i] - SR[i] - 5 : SX[i] + SR[i] + 5; box = boxAt();
+      if (box[0] < 2 || box[2] > xR || (!must && hit(box))) {
+        align = a0; x = x0;
+        const fit = Math.floor((align === "left" ? xR - x - 3 : x - 5) / (w / text.length));
+        if (fit < (must ? 4 : 8)) continue;
+        text = clip(text, fit); w = measure(font, text); box = boxAt();
+      }
+    }
+    if (!must && hit(box)) {
+      if (isP || !strong || align !== "left") continue;
+      // try the left side before giving up
+      x = SX[i] - SR[i] - 5; align = "right"; box = boxAt();
+      if (box[0] < 2 || hit(box)) continue;
+    }
+    put(box);
+    ctx.font = font; ctx.textAlign = align;
+    if (isP && "letterSpacing" in ctx) ctx.letterSpacing = "1.2px";
+    ctx.lineWidth = 3.5; ctx.strokeStyle = "rgba(15,20,28,.92)";
+    ctx.strokeText(text, x, y);
+    let c;
+    if (i === sel || i === hover) c = C.text;
+    else if (isP) c = F && !F.set.has(i) ? "rgba(151,163,182,.35)" : (F && F.set.has(i)) ? C.text : "#8e9bb0";
+    else if (strong) c = n.kind === "handover" ? "#ffd89a" : n.kind === "session" || n.fine ? "#bfe8fd" : "#e4eaf3";
+    else c = C.dim;
+    ctx.fillStyle = c; ctx.fillText(text, x, y);
+    if (isP && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
+    drawn++;
+  }
+}
+
+/* ------------------------------------------------------------------ hit testing */
+function buildQuad() {
+  quad = d3.quadtree().x((i) => nodes[i].x).y((i) => nodes[i].y).addAll(visNodes);
+  quadDirty = false;
+}
+function pick(sx, sy, slop = 10) {
+  if (!N) return -1;
+  if (quadDirty) buildQuad();
+  const [wx, wy] = toWorld(sx, sy), k = cam.k;
+  const R = (slop + 30) / k + 16;
+  let best = -1, bestD = Infinity;
+  quad.visit((q, x0, y0, x1, y1) => {
+    if (!q.length) { let d = q; do { const i = d.data, n = nodes[i]; const r = screenR(n, k);
+      const dist = Math.hypot((n.x - wx) * k, (n.y - wy) * k) - r;
+      // small things win ties over the big body they sit on
+      const score = dist + (n.kind === "project" ? 4 : 0);
+      if (dist < slop && score < bestD) { bestD = score; best = i; } } while ((d = d.next)); }
+    return x0 > wx + R || x1 < wx - R || y0 > wy + R || y1 < wy - R;
+  });
+  return best;
+}
+
+/* ------------------------------------------------------------------ selection */
+function neighboursOf(i) { const s = new Set(); for (const e of nodes[i].adj) { s.add(e.s); s.add(e.t); } s.delete(i); return s; }
+function select(i, opts = {}) {
+  if (i === sel && !opts.force) { if (opts.fly !== false && i >= 0) flySel(i); return; }
+  if (sel >= 0 && opts.push !== false && i !== sel) backStack.push(sel);
+  sel = i; cursor = -1;
+  expanded.clear();
+  if (i >= 0) {
+    const n = nodes[i];
+    if (n.kind === "session" && n.kids) expanded.add(i);
+    if (n.fine && n.parent >= 0) expanded.add(n.parent);
+    selNbr = neighboursOf(i);
+    // a node outside the time window or in a hidden layer still gets shown when asked for
+    if (n.at > T) { T = Infinity; syncScrub(); }
+    const L = LAYER_OF[n.kind];
+    if (!layerOn[L] && !n.fine) { layerOn[L] = true; syncLayers(); }
+    flowUntil = performance.now() + 5000;
+  } else selNbr = new Set();
+  computeVisible();
+  renderPanel();
+  try { window.history.replaceState(null, "", i >= 0 ? "#" + encodeURIComponent(nodes[i].id) : location.pathname + location.search); } catch (_) {}
+  if (i >= 0 && opts.fly !== false) flySel(i, opts.instant);
+  kick();
+}
+/* a brief, or a session without turns, frames its whole handover chain; everything else centres itself */
+function flySel(i, instant) {
+  const n = nodes[i];
+  if (n.kind === "handover" || (n.kind === "session" && !n.orbit)) {
+    const ch = [...chainOf(i)].filter((j) => vis[j]);
+    // labels run out to the right of each stop: leave them room
+    if (ch.length >= 3) { fitTo(ch, instant, 0.74, 3.6); return; }
+  }
+  flyTo(n.x, n.y, kFor(n), instant);
+}
+function back() { if (!backStack.length) return; const i = backStack.pop(); select(i, { push: false }); }
+
+/* ------------------------------------------------------------------ panel */
+const panel = $("#panel"), pbody = $("#p-body");
+const REL_ORDER = ["Handover chain", "Continued from", "Wrote brief", "Written by", "Picked up by", "Read", "Found in its searches", "Read by", "Found by searches in",
+  "Links to", "Linked from", "Session", "Turns", "Kept outputs", "Memory files", "Memory indexes", "Sessions", "Briefs", "Other"];
+function relations(n) {
+  const g = new Map();
+  const add = (key, i) => { if (!g.has(key)) g.set(key, new Map()); g.get(key).set(i, 1); };
+  for (const e of n.adj) {
+    const out = e.s === n.i, o = out ? e.t : e.s, ok = nodes[o].kind;
+    switch (e.kind) {
+      case "continued": add(out ? "Picked up by" : "Continued from", o); break;
+      case "wrote": add(out ? "Wrote brief" : "Written by", o); break;
+      case "read": add(out ? "Read" : "Read by", o); break;
+      case "found": add(out ? "Found in its searches" : "Found by searches in", o); break;
+      case "links": add(out ? "Links to" : "Linked from", o); break;
+      case "holds": add(out ? (ok === "output" ? "Kept outputs" : "Turns") : "Session", o); break;
+      case "in": break;
+      default: add("Other", o);
+    }
+  }
+  if (n.kind === "project") {
+    for (const m of nodes) if (m.p === n.i && !m.fine) add(m.kind === "session" ? "Sessions" : m.kind === "handover" ? "Briefs" : m.kind === "index" ? "Memory indexes" : "Memory files", m.i);
+  }
+  const out = [];
+  for (const key of REL_ORDER) if (g.has(key)) {
+    let items = [...g.get(key).keys()];
+    if (key === "Turns" || key === "Kept outputs") items.sort((a, b) => nodes[a].at - nodes[b].at);
+    else items.sort((a, b) => nodes[b].last - nodes[a].last);
+    out.push([key, items]);
+  }
+  return out;
+}
+function sizeText(n) {
+  if (n.kind === "session") return plural(n.size, "turn");
+  if (n.kind === "project") return plural(n.size, "entry", "entries") + " in memory";
+  return plural(n.size, "character");
+}
+function copyBtn(text) {
+  const b = el("button", null, "Copy"); b.type = "button"; b.setAttribute("aria-label", "Copy " + text);
+  b.addEventListener("click", async () => {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (_) {
+      const ta = el("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch (_) {} ta.remove();
+    }
+    b.textContent = ok ? "Copied" : "Failed"; b.classList.toggle("done", ok);
+    setTimeout(() => { b.textContent = "Copy"; b.classList.remove("done"); }, 1400);
+  });
+  return b;
+}
+function copyRow(text, extra) { const d = el("div", "copy" + (extra ? " " + extra : "")); d.append(el("code", null, text), copyBtn(text)); return d; }
+let cursorList = [];
+function relButton(i) {
+  const n = nodes[i], b = el("button"); b.type = "button"; b.dataset.i = i;
+  if (!vis[i]) b.classList.add("hid");
+  b.append(glyph(n.kind), el("span", "lbl", n.name), el("span", "age", agoShort(n.last || n.at)));
+  b.title = kindName(n.kind) + " · " + n.label;
+  b.addEventListener("click", () => select(i));
+  b.addEventListener("mouseenter", () => { hover = i; kick(); });
+  b.addEventListener("mouseleave", () => { if (hover === i) { hover = -1; kick(); } });
+  return b;
+}
+function renderPanel() {
+  cursorList = [];
+  if (sel < 0) { panel.hidden = true; document.body.classList.remove("panel-open"); syncEdges(); return; }
+  const n = nodes[sel];
+  panel.hidden = false; document.body.classList.add("panel-open"); syncEdges();
+  $("#p-kind").replaceChildren(glyph(n.kind), document.createTextNode("  " + kindName(n.kind)));
+  $("#p-kind").style.display = "flex"; $("#p-kind").style.alignItems = "center"; $("#p-kind").style.gap = "8px";
+  $("#p-back").disabled = !backStack.length;
+  const f = document.createDocumentFragment();
+  f.append(el("h2", "p-title", n.name));
+  if (n.p >= 0) {
+    const pr = el("div", "p-proj"); pr.append("in ");
+    const b = el("button", null, nodes[n.p].name); b.type = "button"; b.addEventListener("click", () => select(n.p));
+    pr.append(b); const pp = nodes[n.p].path ? nodes[n.p].path.replace(/^\/home\/[^/]+/, "~") : ""; if (pp && pp !== nodes[n.p].name) pr.append(el("span", null, "  " + clip(pp, 48)));
+    f.append(pr);
+  } else if (n.kind === "project" && n.path) f.append(el("div", "p-proj", n.path.replace(/^\/home\/[^/]+/, "~")));
+  const dl = el("dl", "facts");
+  const fact = (k, v, sub) => { dl.append(el("dt", null, k)); const dd = el("dd"); if (typeof v === "string") { dd.append(v); if (sub) dd.append(el("span", null, " · " + sub)); } else dd.append(v); dl.append(dd); };
+  if (n.at) fact(n.kind === "session" ? "Started" : "First seen", when(n.at), ago(n.at));
+  if (n.last && n.last - n.at > 60000) fact("Last touched", when(n.last), ago(n.last));
+  fact("Size", sizeText(n));
+  if (n.kind === "project") fact("Members", `${plural(n.members, "entry", "entries")} shown`);
+  if (n.entry) fact("Memory id", copyRow(n.entry));
+  if (n.path && n.kind !== "project") fact("Path", copyRow(n.path));
+  if (n.kind === "project" && n.path) fact("Folder", copyRow(n.path));
+  f.append(dl);
+  // a command to act on it
+  let cmd = null;
+  if (n.kind === "session") cmd = "toomux jump " + n.id.slice(2, 10);
+  else if (n.kind === "output") cmd = "toomux out " + n.id.slice(2);
+  if (cmd) f.append(copyRow(cmd, "cmd"));
+  // handover chain, in time order, drawn as a line of stops
+  if (n.kind === "session" || n.kind === "handover") {
+    const ch = [...chainOf(sel)];
+    if (ch.length > 1) {
+      ch.sort((a, b) => nodes[a].at - nodes[b].at || a - b);
+      const ns = ch.filter((i) => nodes[i].kind === "session").length, nb = ch.length - ns;
+      const sec = el("section", "p-sec"), h = el("h3", null, "Handover chain");
+      h.append(el("span", "c", plural(ns, "session") + ", " + plural(nb, "brief")));
+      const line = el("div", "line");
+      line.setAttribute("role", "list");
+      for (const i of ch) {
+        const m = nodes[i], b = el("button", "stop s-" + m.kind + (i === sel ? " here" : "")); b.type = "button";
+        b.setAttribute("role", "listitem");
+        b.title = `${kindName(m.kind)} · ${when(m.at)}\n${m.name}`;
+        b.setAttribute("aria-label", `${kindName(m.kind)}, ${when(m.at)}: ${m.name}`);
+        b.append(el("span"));
+        b.addEventListener("click", () => select(i));
+        b.addEventListener("mouseenter", () => { hover = i; kick(); });
+        b.addEventListener("mouseleave", () => { if (hover === i) { hover = -1; kick(); } });
+        line.append(b);
+      }
+      const pos = ch.indexOf(sel);
+      const cap = el("div", "line-cap", `${dDay.format(nodes[ch[0]].at)} to ${dDay.format(nodes[ch[ch.length - 1]].at)} · this is stop ${pos + 1} of ${ch.length}`);
+      sec.append(h, line, cap); f.append(sec);
+    }
+  }
+  // preview
+  const ps = el("section", "p-sec"), ph = el("h3", null, n.kind === "session" ? "First prompt" : "Preview");
+  const pre = el("div", "preview" + (n.text.trim() ? "" : " empty"), n.text.trim() || "No text kept for this entry.");
+  if (n.text.length >= 470) ph.append(el("span", "c", "first " + plural(n.text.length, "character")));
+  ps.append(ph, pre); f.append(ps);
+  // relations
+  for (const [key, items] of relations(n)) {
+    const sec = el("section", "p-sec"), h = el("h3", null, key); h.append(el("span", "c", nf(items.length)));
+    const ul = el("ul", "rel"), LIM = 14;
+    const show = (list) => { for (const i of list) { const li = el("li"); li.append(relButton(i)); ul.append(li); } };
+    show(items.slice(0, LIM));
+    sec.append(h, ul);
+    if (items.length > LIM) {
+      const more = el("button", "all", `Show all ${nf(items.length)}`); more.type = "button";
+      more.addEventListener("click", () => { more.remove(); show(items.slice(LIM)); collectCursor(); });
+      sec.append(more);
+    }
+    f.append(sec);
+  }
+  pbody.replaceChildren(f); pbody.scrollTop = 0;
+  collectCursor();
+}
+function collectCursor() { cursorList = [...pbody.querySelectorAll(".rel button[data-i]")]; }
+function moveCursor(d) {
+  if (!cursorList.length) return;
+  let j = cursorList.findIndex((b) => +b.dataset.i === cursor && b.classList.contains("cursor"));
+  cursorList.forEach((b) => b.classList.remove("cursor"));
+  j = j < 0 ? (d > 0 ? 0 : cursorList.length - 1) : (j + d + cursorList.length) % cursorList.length;
+  const b = cursorList[j]; b.classList.add("cursor"); b.scrollIntoView({ block: "nearest" });
+  cursor = +b.dataset.i;
+  if (!vis[cursor]) { selNbr.add(cursor); computeVisible(); }
+  kick();
+}
+$("#p-close").addEventListener("click", () => { select(-1, { fly: false }); });
+$("#p-back").addEventListener("click", back);
+
+/* ------------------------------------------------------------------ hover card */
+const card = $("#card");
+function showCard(i, sx, sy) {
+  if (i < 0) { card.hidden = true; return; }
+  const n = nodes[i];
+  const meta = [n.p >= 0 ? nodes[n.p].name : n.kind === "project" ? n.path.replace(/^\/home\/[^/]+/, "~") || "" : "", n.at ? ago(n.last || n.at) : "", sizeText(n)].filter(Boolean).join(" · ");
+  const line = n.text.replace(/\s+/g, " ").trim();
+  card.innerHTML = `<div class="k"><span class="g g-${n.kind}"></span>${esc(kindName(n.kind))}</div><div class="t">${esc(n.name)}</div><div class="m">${esc(meta)}</div>` +
+    (line && line !== n.label ? `<div class="x">${esc(clip(line, 200))}</div>` : "");
+  card.hidden = false;
+  const cw = card.offsetWidth, ch = card.offsetHeight;
+  let x = sx + 16, y = sy + 16;
+  if (x + cw > W - 8) x = sx - cw - 16;
+  if (y + ch > H - 8) y = sy - ch - 16;
+  card.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, y)}px)`;
+}
+
+/* ------------------------------------------------------------------ pointer */
+const pointers = new Map();
+let drag = null, pinch = null, moved = false;
+sky.addEventListener("pointerdown", (ev) => {
+  sky.setPointerCapture(ev.pointerId);
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (flight) { anim.delete(flight); flight = null; }
+  if (pointers.size === 1) { drag = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y }; moved = false; }
+  else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: cam.k, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, w: toWorld((a.x + b.x) / 2, (a.y + b.y) / 2) };
+    drag = null; moved = true;
+  }
+});
+sky.addEventListener("pointermove", (ev) => {
+  const p = pointers.get(ev.pointerId);
+  if (p) { p.x = ev.clientX; p.y = ev.clientY; }
+  if (pinch && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    cam.k = Math.max(kMin, Math.min(kMax, pinch.k * d / Math.max(1, pinch.d)));
+    cam.x = pinch.w[0] - (mx - W / 2) / cam.k; cam.y = pinch.w[1] - (my - H / 2) / cam.k;
+    kick(); return;
+  }
+  if (drag) {
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if (!moved && Math.hypot(dx, dy) > 4) { moved = true; sky.classList.add("grab"); if (hover >= 0) { hover = -1; card.hidden = true; } }
+    if (moved) { cam.x = drag.cx - dx / cam.k; cam.y = drag.cy - dy / cam.k; kick(); }
+    return;
+  }
+  if (ev.pointerType === "mouse") {
+    const i = pick(ev.clientX, ev.clientY, 8);
+    if (i !== hover) { hover = i; sky.classList.toggle("point", i >= 0); if (i >= 0) flowUntil = Math.max(flowUntil, performance.now() + 4000); kick(); }
+    showCard(i, ev.clientX, ev.clientY);
+  }
+});
+function endPointer(ev) {
+  const had = pointers.delete(ev.pointerId);
+  if (pinch && pointers.size < 2) { pinch = null; if (pointers.size === 1) { const [p] = [...pointers.values()]; drag = { x: p.x, y: p.y, cx: cam.x, cy: cam.y }; } return; }
+  if (drag && had && ev.type === "pointerup" && !moved) {
+    const i = pick(ev.clientX, ev.clientY, ev.pointerType === "mouse" ? 8 : 16);
+    if (i >= 0) select(i); else if (sel >= 0) select(-1, { fly: false });
+  }
+  if (!pointers.size) { drag = null; sky.classList.remove("grab"); }
+}
+sky.addEventListener("pointerup", endPointer);
+sky.addEventListener("pointercancel", endPointer);
+sky.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse" && !drag) { hover = -1; card.hidden = true; kick(); } });
+sky.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  if (flight) { anim.delete(flight); flight = null; }
+  const f = -ev.deltaY * (ev.deltaMode === 1 ? 0.05 : ev.deltaMode ? 1 : 0.002) * (ev.ctrlKey ? 5 : 1);
+  zoomAt(ev.clientX, ev.clientY, cam.k * Math.pow(2, f));
+  card.hidden = true;
+}, { passive: false });
+sky.addEventListener("dblclick", (ev) => { const [wx, wy] = toWorld(ev.clientX, ev.clientY); const k2 = Math.min(kMax, cam.k * 2.2); const tx = wx - (ev.clientX - W / 2) / k2, ty = wy - (ev.clientY - H / 2) / k2; flyTo(tx + (focal()[0] - W / 2) / k2, ty + (focal()[1] - H / 2) / k2, k2); });
+$("#zoom").addEventListener("click", (ev) => {
+  const z = ev.target.closest("button")?.dataset.z; if (!z) return;
+  if (z === "fit") return fitAll();
+  const [fx, fy] = [W / 2, H / 2], [wx, wy] = toWorld(fx, fy), k2 = cam.k * (z === "in" ? 1.6 : 1 / 1.6);
+  flyTo(wx + (focal()[0] - W / 2) / Math.max(kMin, Math.min(kMax, k2)), wy + (focal()[1] - H / 2) / Math.max(kMin, Math.min(kMax, k2)), k2);
+});
+
+/* ------------------------------------------------------------------ layers */
+const layerBox = $("#layers"), chips = $("#chips");
+function syncChips() {
+  const max = chips.scrollWidth - chips.clientWidth;
+  layerBox.classList.toggle("more-l", max > 2 && chips.scrollLeft > 2);
+  layerBox.classList.toggle("more-r", max > 2 && chips.scrollLeft < max - 2);
+}
+chips.addEventListener("scroll", syncChips, { passive: true });
+for (const b of layerBox.querySelectorAll(".more")) b.addEventListener("click", () => chips.scrollBy({ left: +b.dataset.by * chips.clientWidth * 0.7, behavior: RM ? "auto" : "smooth" }));
+function syncLayers() { for (const b of layerBox.querySelectorAll("button[data-l]")) b.setAttribute("aria-pressed", String(!!layerOn[b.dataset.l])); }
+function toggleLayer(key) {
+  layerOn[key] = !layerOn[key]; syncLayers(); computeVisible(); focusCache.key = ""; kick();
+}
+LAYERS.forEach((l, j) => {
+  const b = el("button"); b.type = "button"; b.dataset.l = l.key;
+  b.title = `${l.on ? "Hide" : "Show"} ${l.name.toLowerCase()} (${j + 1})`;
+  b.append(glyph(l.glyph), el("span", null, l.name), el("span", "n", nf(COUNTS[l.key] || 0)));
+  if (l.key === "turn" || l.key === "output") b.setAttribute("aria-description", "When off, they still show around the selected session");
+  b.addEventListener("click", () => toggleLayer(l.key));
+  b.addEventListener("mouseenter", () => { if (layerOn[l.key] && l.key !== "recall") { legendKind = l.key; focusCache.key = ""; kick(); } });
+  b.addEventListener("mouseleave", () => { legendKind = null; focusCache.key = ""; kick(); });
+  chips.append(b);
+});
+const hint = el("div", "hint");
+hint.innerHTML = "<span><b>/</b> search</span><span><b>j k</b> step</span><span><b>↵</b> open</span><span><b>⌫</b> back</span><span><b>f</b> fit</span><span><b>space</b> replay</span>";
+layerBox.append(hint);
+syncLayers();
+
+/* ------------------------------------------------------------------ search */
+const q = $("#q"), results = $("#results");
+const HAY = nodes.map((n) => [n.label.toLowerCase(), n.path.toLowerCase(), n.text.toLowerCase(), (n.id + " " + n.entry).toLowerCase()]);
+const KBOOST = { project: 6, index: 4, file: 4, note: 4, session: 3, handover: 3, turn: 0, output: 0 };
+function subseq(needle, hay) { let j = 0; for (let i = 0; i < hay.length && j < needle.length; i++) if (hay[i] === needle[j]) j++; return j === needle.length; }
+function search(str) {
+  const s = str.trim().toLowerCase(); if (!s) return [];
+  const toks = s.split(/\s+/).filter(Boolean), out = [];
+  for (let i = 0; i < N; i++) {
+    const [l, p, t, id] = HAY[i]; let score = 0, ok = true;
+    for (const tok of toks) {
+      const li = l.indexOf(tok);
+      if (li === 0) score += 14;
+      else if (li > 0) score += /[\s\-_/.:@"'(\[]/.test(l[li - 1]) ? 11 : 8;
+      else if (p.includes(tok)) score += 6;
+      else if (id.includes(tok)) score += 6;
+      else if (t.includes(tok)) score += 3;
+      else if (tok.length >= 3 && subseq(tok, l)) score += 1;
+      else { ok = false; break; }
+    }
+    if (!ok) continue;
+    const n = nodes[i];
+    score += KBOOST[n.kind] + (n.last ? (n.last - tMin) / (tMax - tMin + 1) * 1.5 : 0);
+    out.push([score, i]);
+  }
+  out.sort((a, b) => b[0] - a[0]);
+  return out.map((x) => x[1]);
+}
+function hl(text, toks) {
+  let h = esc(text);
+  for (const tok of toks) { if (tok.length < 2) continue; const re = new RegExp("(" + esc(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"); h = h.replace(re, "<mark>$1</mark>"); }
+  return h;
+}
+let hits = [], active = -1;
+function runSearch() {
+  const s = q.value;
+  hits = search(s);
+  matches = null; matchOn = false;
+  if (s.trim()) {
+    // turns and outputs that are hidden light up their session instead
+    const set = new Set(), rank = new Map();
+    hits.forEach((i, j) => { const n = nodes[i]; const t = n.fine && !vis[i] && n.parent >= 0 ? n.parent : i; if (!set.has(t)) { set.add(t); rank.set(t, j); } });
+    set.rank = rank; matches = set; matchOn = true;
+  }
+  active = hits.length ? 0 : -1;
+  renderResults();
+  focusCache.key = ""; kick();
+  // once typing pauses, bring the best matches into view
+  clearTimeout(runSearch._fly);
+  if (s.trim() && hits.length) runSearch._fly = setTimeout(() => {
+    if (sel >= 0 || !matchOn) return;
+    const top = [];
+    for (const i of hits.slice(0, 12)) { const n = nodes[i], t = n.fine && !vis[i] && n.parent >= 0 ? n.parent : i; if (vis[t]) top.push(t); }
+    if (!top.length) return;
+    const vb = viewBox();
+    const inView = top.every((t) => { const x = toScreenX(nodes[t].x), y = toScreenY(nodes[t].y); return x > vb.left && x < vb.left + vb.w && y > vb.top && y < vb.top + vb.h; });
+    if (!inView) fitTo(top, false, 0.8, 2.4);
+  }, 420);
+}
+function renderResults() {
+  const s = q.value.trim();
+  if (!s) { results.hidden = true; q.setAttribute("aria-expanded", "false"); return; }
+  const toks = s.toLowerCase().split(/\s+/);
+  const LIM = 12;
+  results.innerHTML = "";
+  if (!hits.length) { const li = el("li", "more", "Nothing matches. Try fewer words, or part of a path."); results.append(li); }
+  hits.slice(0, LIM).forEach((i, j) => {
+    const n = nodes[i], li = el("li"); li.id = "r" + j; li.setAttribute("role", "option"); li.setAttribute("aria-selected", String(j === active));
+    const inLabel = HAY[i][0].includes(toks[0]);
+    let meta = kindName(n.kind) + (n.p >= 0 ? " · " + nodes[n.p].name : n.kind === "project" && n.path ? " · " + n.path.replace(/^\/home\/[^/]+/, "~") : "");
+    if (!inLabel) {
+      const src = HAY[i][1].includes(toks[0]) ? n.path : n.text.replace(/\s+/g, " "), at = src.toLowerCase().indexOf(toks[0]);
+      if (at >= 0) meta = kindName(n.kind) + " · …" + src.slice(Math.max(0, at - 24), at + 60);
+    }
+    li.innerHTML = `<span class="g g-${n.kind}"></span><span class="lbl">${hl(n.name, toks)}</span><span class="age">${esc(agoShort(n.last || n.at))}</span><span class="meta">${hl(meta, toks)}</span>`;
+    li.addEventListener("mousedown", (ev) => { ev.preventDefault(); choose(j); });
+    results.append(li);
+  });
+  if (hits.length > LIM) results.append(el("li", "more", `${plural(hits.length - LIM, "more match", "more matches")}. Add a word to narrow it down.`));
+  results.hidden = false; q.setAttribute("aria-expanded", "true");
+  if (active >= 0) q.setAttribute("aria-activedescendant", "r" + active); else q.removeAttribute("aria-activedescendant");
+}
+function choose(j) {
+  const i = hits[j]; if (i == null) return;
+  results.hidden = true; q.setAttribute("aria-expanded", "false"); matchOn = false;
+  select(i, { force: true }); q.blur();
+}
+q.addEventListener("input", () => { clearTimeout(q._t); q._t = setTimeout(runSearch, N > 3000 ? 60 : 0); });
+q.addEventListener("focus", () => { if (q.value.trim()) { runSearch(); } });
+q.addEventListener("keydown", (ev) => {
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault(); if (!hits.length) return;
+    active = (active + (ev.key === "ArrowDown" ? 1 : -1) + Math.min(12, hits.length)) % Math.min(12, hits.length); renderResults();
+    const i = hits[active]; const n = nodes[i]; const t = n.fine && !vis[i] && n.parent >= 0 ? n.parent : i;
+    if (vis[t]) flyTo(nodes[t].x, nodes[t].y, Math.max(cam.k, 1.4));
+  } else if (ev.key === "Enter") { ev.preventDefault(); if (active >= 0) choose(active); }
+  else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); if (q.value) { q.value = ""; runSearch(); } else q.blur(); }
+});
+q.addEventListener("blur", () => { setTimeout(() => { if (document.activeElement === q) return; results.hidden = true; q.setAttribute("aria-expanded", "false"); if (matchOn && document.activeElement !== q) { matchOn = !!q.value.trim(); kick(); } }, 120); });
+
+/* ------------------------------------------------------------------ time */
+const scrub = $("#scrub"), hist = $("#hist"), whenEl = $("#when"), playBtn = $("#play");
+const PLAY = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1l7 4-7 4z"/></svg>', PAUSE = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1h2v8H2zM6 1h2v8H6z"/></svg>';
+playBtn.innerHTML = PLAY;
+const DAY = 864e5;
+const bins = (() => {
+  const nb = Math.max(1, Math.ceil((tMax - tMin) / DAY) + 1), a = new Float32Array(nb), s = new Float32Array(nb), h = new Float32Array(nb);
+  for (const n of nodes) { if (!n.at || n.fine || n.kind === "project") continue; const b = Math.min(nb - 1, Math.floor((n.at - tMin) / DAY)); if (n.kind === "session") s[b]++; else if (n.kind === "handover") h[b]++; else a[b]++; }
+  return { nb, a, s, h };
+})();
+function drawHist() {
+  const w = hist.clientWidth, h = hist.clientHeight; if (!w || !h) return;
+  hist.width = Math.round(w * DPR); hist.height = Math.round(h * DPR);
+  const g = hist.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, w, h);
+  const { nb, a, s, hh = bins.h } = bins; let max = 1;
+  for (let b = 0; b < nb; b++) max = Math.max(max, Math.log1p(a[b] + s[b] + hh[b]));
+  const bw = w / nb, cut = T === Infinity ? Infinity : (T - tMin) / DAY;
+  for (let b = 0; b < nb; b++) {
+    const past = b <= cut, x = b * bw, tot = a[b] + s[b] + hh[b]; if (!tot) continue;
+    const H0 = Math.max(2, (Math.log1p(tot) / max) * (h - 3)), fs = s[b] / tot, fh = hh[b] / tot;
+    const bx = x + Math.max(0.3, bw * 0.16), bwid = Math.max(1, bw * 0.68);
+    let y = h;
+    const seg = (frac, c) => { const hh2 = H0 * frac; if (hh2 <= 0) return; g.fillStyle = c; g.fillRect(bx, y - hh2, bwid, hh2); y -= hh2; };
+    seg(1 - fs - fh, past ? "rgba(219,226,236,.62)" : "rgba(109,122,142,.28)");
+    seg(fs, past ? "rgba(125,211,252,.75)" : "rgba(109,122,142,.34)");
+    seg(fh, past ? "rgba(245,166,35,.9)" : "rgba(109,122,142,.4)");
+  }
+  g.fillStyle = C.hair; g.fillRect(0, h - 0.5, w, 0.5);
+  // month ticks
+  const axis = $("#axis"); axis.innerHTML = "";
+  const d = new Date(tMin); d.setDate(1); d.setHours(0, 0, 0, 0); d.setMonth(d.getMonth() + 1);
+  const months = []; while (d.getTime() <= tMax) { months.push(d.getTime()); d.setMonth(d.getMonth() + 1); }
+  const every = Math.max(1, Math.ceil(months.length / Math.max(1, Math.floor(w / 58))));
+  months.forEach((m, j) => {
+    const x = ((m - tMin) / (tMax - tMin)) * w;
+    g.fillStyle = "rgba(52,65,90,.9)"; g.fillRect(Math.round(x), h - 4, 1, 4);
+    if (j % every || x > w - 18) return;
+    const sp = el("span", null, dMon.format(m)); sp.style.left = x + "px"; axis.append(sp);
+  });
+}
+function valueToT(v) { return v >= 1000 ? Infinity : tMin + (v / 1000) * (tMax - tMin); }
+function syncScrub() { scrub.value = T === Infinity ? 1000 : Math.round(((T - tMin) / (tMax - tMin)) * 1000); updateWhen(); drawHist(); }
+function updateWhen() {
+  let m = 0, s = 0, b = 0;
+  for (const n of nodes) if (n.at <= T) { if (n.kind === "session") s++; else if (n.kind === "handover") b++; else if (n.kind === "file" || n.kind === "index" || n.kind === "note") m++; }
+  const head = T === Infinity ? "Everything so far" : "Up to " + dDate.format(T);
+  whenEl.innerHTML = `<b>${esc(head)}</b><span>${plural(m, "memory file")} · ${plural(s, "session")} · ${plural(b, "brief")}</span>`;
+}
+scrub.addEventListener("input", () => { stopPlay(); T = valueToT(+scrub.value); computeVisible(); updateWhen(); drawHist(); kick(); });
+let playT0 = 0, playFrom = 0;
+const PLAY_MS = 16000;
+function playStep(now) {
+  if (!playing) return false;
+  const t = (now - playT0) / PLAY_MS;
+  T = playFrom + t * (tMax - tMin);
+  if (T >= tMax) { T = Infinity; playing = false; playBtn.innerHTML = PLAY; playBtn.setAttribute("aria-label", "Replay memory growing over time"); }
+  computeVisible();
+  scrub.value = T === Infinity ? 1000 : Math.round(((T - tMin) / (tMax - tMin)) * 1000);
+  if (((now / 120) | 0) !== playStep._b || !playing) { playStep._b = (now / 120) | 0; updateWhen(); drawHist(); }
+  return playing;
+}
+function startPlay() {
+  if (playing) return;
+  if (sel >= 0) select(-1, { fly: false });
+  if (q.value) { q.value = ""; runSearch(); }
+  fitAll();
+  playing = true; playBtn.innerHTML = PAUSE; playBtn.setAttribute("aria-label", "Pause the replay");
+  if (T === Infinity || T >= tMax) T = tMin - (tMax - tMin) * 0.01;
+  playFrom = tMin; playT0 = performance.now() - ((T - tMin) / (tMax - tMin)) * PLAY_MS;
+  anim.add(playStep); kick();
+}
+function stopPlay() { if (!playing) return; playing = false; anim.delete(playStep); playBtn.innerHTML = PLAY; playBtn.setAttribute("aria-label", "Replay memory growing over time"); updateWhen(); drawHist(); kick(); }
+playBtn.addEventListener("click", () => (playing ? stopPlay() : startPlay()));
+
+/* ------------------------------------------------------------------ keyboard */
+document.addEventListener("keydown", (ev) => {
+  const typing = ev.target === q || /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) && ev.target !== scrub;
+  if (ev.key === "/" && !typing) { ev.preventDefault(); q.focus(); q.select(); return; }
+  if (ev.key === "Escape") {
+    if (typing && ev.target === q) return;
+    if (playing) { stopPlay(); return; }
+    if (cursor >= 0) { cursor = -1; cursorList.forEach((b) => b.classList.remove("cursor")); kick(); return; }
+    if (q.value) { q.value = ""; runSearch(); return; }
+    if (sel >= 0) { select(-1, { fly: false }); return; }
+    return;
+  }
+  if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.target.tagName === "BUTTON" && (ev.key === "Enter" || ev.key === " ")) return;
+  switch (ev.key) {
+    case "j": case "ArrowDown": if (sel >= 0) { ev.preventDefault(); moveCursor(1); } break;
+    case "k": case "ArrowUp": if (sel >= 0) { ev.preventDefault(); moveCursor(-1); } break;
+    case "Enter": case "l": case "ArrowRight": if (cursor >= 0) { ev.preventDefault(); select(cursor); } break;
+    case "Backspace": case "h": case "ArrowLeft": if (backStack.length) { ev.preventDefault(); back(); } break;
+    case "f": case "0": fitAll(); break;
+    case "+": case "=": zoomAt(W / 2, H / 2, cam.k * 1.5); break;
+    case "-": case "_": zoomAt(W / 2, H / 2, cam.k / 1.5); break;
+    case " ": ev.preventDefault(); playing ? stopPlay() : startPlay(); break;
+    default:
+      if (/^[1-7]$/.test(ev.key)) toggleLayer(LAYERS[+ev.key - 1].key);
+  }
+});
+
+/* ------------------------------------------------------------------ boot */
+function header() {
+  const parts = [[COUNTS.memory, "memory file"], [COUNTS.session, "session"], [COUNTS.brief, "brief"], [COUNTS.turn, "turn"], [COUNTS.output, "output"], [COUNTS.project, "project"]];
+  const bits = parts.map(([n, w]) => `<span class="c"><b>${nf(n)}</b> ${w}${n === 1 ? "" : "s"}</span>`);
+  if (COUNTS.recall) bits.push(`<span class="c"><b>${nf(COUNTS.recall)}</b> recall${COUNTS.recall === 1 ? "" : "s"}</span>`);
+  const made = RAW && RAW.made ? `<span class="made">made ${esc(when(RAW.made))}</span>` : "";
+  $("#counts").innerHTML = bits.join('<span class="sep">·</span>') + (made ? '<span class="sep">·</span>' + made : "");
+  $("#counts").title = $("#counts").textContent;
+}
+window.addEventListener("resize", () => { resize(); });
+
+resize();
+if (!N) {
+  for (const s of ["#layers", "#timebar", "#zoom", ".search", "#counts"]) $(s).style.display = "none";
+  $("#empty").hidden = false;
+  $("#empty-h").textContent = RAW ? "Nothing remembered yet" : "No graph in this page";
+  $("#empty-p").innerHTML = RAW
+    ? "Sessions, handover briefs and memory files appear here once toomux has indexed them. Open the graph again after a session or two."
+    : "This page is a template. Run <code>toomux graph --open</code> to fill it with your memory.";
+  kick();
+  return;
+}
+header();
+updateWhen();
+buildSim();
+computeVisible();
+const status = $("#status");
+// settle the layout over a few frames, drawing as it goes, then stop for good
+fitAll(true);
+status.textContent = "Arranging";
+anim.add(function settle(now) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < 14 && sim.alpha() > sim.alphaMin()) sim.tick();
+  placeOrbits();
+  if (!FOCUS) fitAll(true);
+  const done = sim.alpha() <= sim.alphaMin();
+  if (done) {
+    finishLayout();
+    settled = true; status.textContent = "";
+    computeVisible();
+    let start = -1;
+    if (FOCUS != null) {
+      const f = String(FOCUS);
+      const n = byId.get(f) || nodes.find((x) => x.entry === f) || nodes.find((x) => x.id.slice(2).startsWith(f)) || nodes.find((x) => x.id.includes(f));
+      if (n) start = n.i;
+    } else if (location.hash.length > 1) {
+      const n = byId.get(decodeURIComponent(location.hash.slice(1))); if (n) start = n.i;
+    }
+    if (start >= 0) { settled = false; select(start, { instant: true, force: true }); settled = true; }
+    else fitAll(true);
+  }
+  return !done;
+});
+kick();
+})();
+</script>
+</body>
+</html>

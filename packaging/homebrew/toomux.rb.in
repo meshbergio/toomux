@@ -1,0 +1,38 @@
+# Rendered into meshbergio/homebrew-tap by packaging/homebrew/render.sh when a
+# release is made. Prebuilt binaries per platform, laio-style.
+class Toomux < Formula
+  desc "Control center for Claude Code sessions in tmux"
+  homepage "https://github.com/meshbergio/toomux"
+  version "@VERSION@"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  depends_on "tmux"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/meshbergio/toomux/releases/download/v@VERSION@/toomux-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA_aarch64-apple-darwin@"
+    else
+      url "https://github.com/meshbergio/toomux/releases/download/v@VERSION@/toomux-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA_x86_64-apple-darwin@"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/meshbergio/toomux/releases/download/v@VERSION@/toomux-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "@SHA_aarch64-unknown-linux-musl@"
+    else
+      url "https://github.com/meshbergio/toomux/releases/download/v@VERSION@/toomux-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "@SHA_x86_64-unknown-linux-musl@"
+    end
+  end
+
+  def install
+    bin.install "toomux"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/toomux --version")
+  end
+end

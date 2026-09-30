@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: tmux for the tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: cargo build --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  macos:
+    # The macOS layer (libproc, sysctl, the Keychain) only runs for real here.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: tmux for the tests
+        run: brew install tmux
+      - run: cargo build --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      # What only a Mac can answer: that toomux reads a signed claude's
+      # environment and tty, and uses the Keychain without a prompt.
+      - name: a real claude and the login keychain
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          sock="$RUNNER_TEMP/rig.sock"
+          tmux -S "$sock" new-session -d -x 120 -y 40 env CLAUDE_CONFIG_DIR="$RUNNER_TEMP/cc" "$HOME/.local/bin/claude"
+          sleep 8
+          TOOMUX_CHECK_PID="$(tmux -S "$sock" display -p '#{pane_pid}')"
+          TOOMUX_CHECK_TTY="$(tmux -S "$sock" display -p '#{pane_tty}')"
+          export TOOMUX_CHECK_PID TOOMUX_CHECK_TTY
+          ps eww -p "$TOOMUX_CHECK_PID" | tr " " "\n" | grep -E "^(CLAUDE_CONFIG_DIR|TMUX_PANE)=" || true
+          cargo test --locked -- --ignored a_real_claude the_login_keychain
+          tmux -S "$sock" kill-server
