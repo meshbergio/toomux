@@ -403,7 +403,7 @@ pub fn sync_pins(cfg: &Config, sessions: &[Session]) {
         .filter(|p| st.pins.iter().flatten().any(|q| q.id == p.id && q != p))
         .collect();
     if !fresh.is_empty() {
-        crate::state::State::update(|st| {
+        let _ = crate::state::State::update(|st| {
             for p in fresh {
                 st.refresh_pin(p);
             }

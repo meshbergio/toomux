@@ -11,6 +11,9 @@
 //! kind of login file is never shared by accident.
 
 use anyhow::{bail, Context, Result};
+use std::ffi::OsString;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Component;
 use std::path::{Path, PathBuf};
 
 /// Folders every account shares.
@@ -42,6 +45,7 @@ pub const SHARED_FILES: &[&str] = &["settings.json", "settings.local.json", "CLA
 
 /// Never shared: what makes an account itself.
 pub const OWN: &[&str] = &[".credentials.json", ".claude.json"];
+const ACCOUNT_MARKER: &str = ".toomux-account";
 
 /// The default group's folder.
 pub fn shared_dir(home: &Path) -> PathBuf {
@@ -69,6 +73,173 @@ pub fn valid_name(name: &str) -> Result<()> {
         bail!("\"{name}\" is kept for group folders");
     }
     Ok(())
+}
+
+/// Resolve a user-supplied account root once, without following its final
+/// symlink. Keeping the spelling of an existing symlink matters on macOS:
+/// Claude Code's Keychain item is named after the configured folder path.
+pub fn absolute_root(path: &Path) -> Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("reading the current folder")?
+            .join(path)
+    };
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    bail!("account folder escapes the filesystem root");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    Ok(out)
+}
+
+fn real_or_self(path: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    // Resolve the nearest existing ancestor, then append the missing tail.
+    // Otherwise a new account below a symlinked parent could disguise HOME
+    // or another protected location.
+    let mut probe = path.to_path_buf();
+    let mut tail: Vec<OsString> = Vec::new();
+    while std::fs::symlink_metadata(&probe).is_err() {
+        let Some(name) = probe.file_name().map(OsString::from) else {
+            return path.to_path_buf();
+        };
+        tail.push(name);
+        let Some(parent) = probe.parent() else {
+            return path.to_path_buf();
+        };
+        probe = parent.to_path_buf();
+    }
+    let mut out = std::fs::canonicalize(&probe).unwrap_or(probe);
+    for name in tail.into_iter().rev() {
+        out.push(name);
+    }
+    out
+}
+
+/// Existing content that identifies a folder as Claude Code state. An empty
+/// folder is also safe to adopt; toomux will populate its settings itself.
+pub fn looks_like_account(path: &Path) -> bool {
+    std::fs::symlink_metadata(path.join(ACCOUNT_MARKER)).is_ok()
+        || OWN
+            .iter()
+            .chain(SHARED_DIRS)
+            .chain(SHARED_FILES)
+            .any(|name| std::fs::symlink_metadata(path.join(name)).is_ok())
+}
+
+fn strongly_looks_like_account(path: &Path) -> bool {
+    std::fs::symlink_metadata(path.join(ACCOUNT_MARKER)).is_ok()
+        || [".credentials.json", ".claude.json", "projects", "sessions", "session-env"]
+            .iter()
+            .any(|name| std::fs::symlink_metadata(path.join(name)).is_ok())
+}
+
+/// Mark a folder that toomux has deliberately adopted as an account. Later
+/// recursive deletion can then distinguish it from an unrelated directory
+/// that merely happens to contain a settings.json.
+pub fn mark_account(path: &Path) -> Result<()> {
+    use std::io::Write;
+    let marker = path.join(ACCOUNT_MARKER);
+    if marker.exists() {
+        return Ok(());
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&marker)
+        .with_context(|| format!("marking {} as a toomux account", path.display()))?;
+    file.write_all(b"managed by toomux\n")?;
+    Ok(())
+}
+
+fn empty_dir(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
+}
+
+/// Validate an account root against broad or sensitive locations. protected
+/// contains toomux's own config/state/data/runtime folders. Both an ancestor
+/// of one of those folders and a child inside one are rejected.
+///
+/// Existing paths are compared by their real targets as well, so a symlink
+/// cannot disguise HOME, /, or another protected location.
+pub fn validate_root(path: &Path, home: &Path, protected: &[PathBuf]) -> Result<PathBuf> {
+    let path = absolute_root(path)?;
+    let real = real_or_self(&path);
+    let home = real_or_self(home);
+    let protected: Vec<PathBuf> = protected.iter().map(|p| real_or_self(p)).collect();
+
+    let root = Path::new("/");
+    if real == root
+        || real.parent() == Some(root)
+        || home == real
+        || home.starts_with(&real)
+        || protected
+            .iter()
+            .any(|p| p == &real || p.starts_with(&real) || real.starts_with(p))
+    {
+        bail!(
+            "{} is too broad or contains protected toomux/user state; choose a dedicated Claude Code account folder",
+            path.display()
+        );
+    }
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_group_dir)
+    {
+        bail!("{} is a shared account group, not an account root", path.display());
+    }
+    if path.exists() && !path.is_dir() {
+        bail!("{} is a file, not a folder", path.display());
+    }
+    Ok(path)
+}
+
+/// An existing populated directory may only be adopted when it already looks
+/// like a Claude Code config directory. This prevents account add --dir from
+/// installing hooks/settings into an unrelated folder by mistake.
+pub fn validate_adoption(path: &Path) -> Result<()> {
+    if path.is_dir() && !empty_dir(path) && !looks_like_account(path) {
+        bail!(
+            "{} is not empty and does not look like a Claude Code account; choose an empty folder or an existing Claude config folder",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Re-check immediately before recursive deletion. A configured path may have
+/// been edited since it was added, so deletion does not trust configuration
+/// provenance alone.
+pub fn validate_delete(path: &Path, home: &Path, protected: &[PathBuf]) -> Result<PathBuf> {
+    let path = validate_root(path, home, protected)?;
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!(
+            "{} is a symlink; refusing recursive deletion of an ambiguous account root",
+            path.display()
+        );
+    }
+    if path.is_dir() && !empty_dir(&path) && !strongly_looks_like_account(&path) {
+        bail!(
+            "{} no longer looks like a Claude Code account; refusing recursive deletion",
+            path.display()
+        );
+    }
+    Ok(path)
 }
 
 /// The group folder an account's links point into; None when it stands alone.
@@ -403,6 +574,65 @@ mod tests {
     fn names_and_group_folders() {
         assert!(valid_name("home-2").is_ok() && valid_name("a b").is_err() && valid_name("shared").is_err());
         assert!(is_group_dir(".claude-shared") && is_group_dir(".claude-shared-x") && !is_group_dir(".claude-sharedx"));
+    }
+
+    #[test]
+    fn account_roots_cannot_be_broad_protected_or_disguised() {
+        let h = rig("roots");
+        let home = h.join("home");
+        let config = home.join(".config/toomux");
+        let state = home.join(".local/state/toomux");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        let protected = vec![config.clone(), state.clone()];
+
+        assert!(validate_root(Path::new("/"), &home, &protected).is_err());
+        assert!(validate_root(Path::new("/tmp"), &home, &protected).is_err());
+        assert!(validate_root(&home, &home, &protected).is_err());
+        assert!(validate_root(&home.join(".config"), &home, &protected).is_err());
+        assert!(validate_root(&config.join("account"), &home, &protected).is_err());
+        assert!(validate_root(&home.join(".claude-shared"), &home, &protected).is_err());
+        assert!(validate_root(&home.join(".claude-work"), &home, &protected).is_ok());
+
+        let alias = h.join("home-alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        assert!(validate_root(&alias, &home, &protected).is_err());
+        assert!(validate_root(&alias.join("new-account"), &home, &protected).is_ok());
+        let protected_alias = h.join("protected-alias");
+        std::os::unix::fs::symlink(&config, &protected_alias).unwrap();
+        assert!(validate_root(&protected_alias.join("new-account"), &home, &protected).is_err());
+        let _ = std::fs::remove_dir_all(h);
+    }
+
+    #[test]
+    fn only_empty_or_claude_shaped_folders_are_adopted_or_deleted() {
+        let h = rig("adopt");
+        let empty = h.join("empty");
+        let unrelated = h.join("documents");
+        let claude = h.join("claude");
+        for p in [&empty, &unrelated, &claude] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(unrelated.join("notes.txt"), "important").unwrap();
+        std::fs::write(claude.join("settings.json"), "{}").unwrap();
+
+        assert!(validate_adoption(&empty).is_ok());
+        assert!(validate_adoption(&unrelated).is_err());
+        assert!(validate_adoption(&claude).is_ok());
+        assert!(!looks_like_account(&unrelated));
+        assert!(looks_like_account(&claude));
+
+        let home = h.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(validate_delete(&unrelated, &home, &[]).is_err());
+        assert!(validate_delete(&empty, &home, &[]).is_ok());
+        assert!(validate_delete(&claude, &home, &[]).is_err(), "settings alone are not enough to authorize recursive deletion");
+        mark_account(&claude).unwrap();
+        assert!(validate_delete(&claude, &home, &[]).is_ok());
+        let alias = h.join("claude-alias");
+        std::os::unix::fs::symlink(&claude, &alias).unwrap();
+        assert!(validate_delete(&alias, &home, &[]).is_err());
+        let _ = std::fs::remove_dir_all(h);
     }
 
     #[test]

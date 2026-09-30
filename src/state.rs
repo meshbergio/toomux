@@ -47,7 +47,7 @@ impl State {
         s
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
+    fn save_unlocked(&self) -> std::io::Result<()> {
         let p = path();
         std::fs::create_dir_all(p.parent().unwrap())?;
         let tmp = p.with_extension(format!("json.{}", std::process::id()));
@@ -55,13 +55,21 @@ impl State {
         std::fs::rename(tmp, p)
     }
 
-    /// Change the state on disk. Re-reads first so a concurrent writer's
-    /// changes to other entries aren't lost.
-    pub fn update<R>(f: impl FnOnce(&mut State) -> R) -> R {
+    pub fn save(&self) -> std::io::Result<()> {
+        let p = path();
+        let _guard = crate::lock::exclusive(&p.with_extension("lock"))?;
+        self.save_unlocked()
+    }
+
+    /// Change the state on disk under one lock, so concurrent status lines,
+    /// hooks and UI actions cannot overwrite one another's changes.
+    pub fn update<R>(f: impl FnOnce(&mut State) -> R) -> std::io::Result<R> {
+        let p = path();
+        let _guard = crate::lock::exclusive(&p.with_extension("lock"))?;
         let mut s = State::load();
         let r = f(&mut s);
-        let _ = s.save();
-        r
+        s.save_unlocked()?;
+        Ok(r)
     }
 
     pub fn slot_of(&self, id: &str) -> Option<usize> {
@@ -120,5 +128,49 @@ mod tests {
             s.pin(pin(&format!("x{i}")));
         }
         assert_eq!(s.pin(pin("overflow")), None);
+    }
+
+    #[test]
+    fn concurrent_updates_do_not_lose_each_other() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-state-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+
+        let mut threads = Vec::new();
+        for i in 0..24 {
+            threads.push(std::thread::spawn(move || {
+                State::update(|s| {
+                    s.names.insert(format!("session-{i}"), format!("name-{i}"));
+                })
+                .unwrap();
+            }));
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+        let s = State::load();
+        assert_eq!(s.names.len(), 24);
+        for i in 0..24 {
+            assert_eq!(s.names.get(&format!("session-{i}")), Some(&format!("name-{i}")));
+        }
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn corrupt_state_falls_back_without_destroying_future_writes() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-state-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        std::fs::create_dir_all(crate::paths::state()).unwrap();
+        std::fs::write(path(), "{broken").unwrap();
+        assert!(State::load().names.is_empty());
+        State::update(|s| {
+            s.names.insert("recovered".into(), "yes".into());
+        })
+        .unwrap();
+        assert_eq!(State::load().names.get("recovered").map(String::as_str), Some("yes"));
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

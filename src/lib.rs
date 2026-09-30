@@ -9,6 +9,7 @@ pub mod config;
 pub mod control;
 pub mod credentials;
 pub mod live;
+pub mod lock;
 pub mod mcp;
 pub mod memory;
 pub mod paths;

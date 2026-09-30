@@ -470,7 +470,7 @@ pub fn rename(cfg: &Config, s: &Session, name: &str, for_you: bool) -> Result<St
             && let Some(p) = st.pins[n].as_mut() {
                 p.title = if name.is_empty() { s.title.clone() } else { name.clone() };
             }
-    });
+    })?;
     if name.is_empty() {
         return Ok(format!("{} goes back to its own title", s.title));
     }

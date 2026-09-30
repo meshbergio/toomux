@@ -26,9 +26,11 @@ fn file(pid: i32) -> PathBuf {
     dir().join(format!("{pid}.json"))
 }
 
-/// The queued move for a live session, if one is still waiting. Stale records
-/// (either process gone or its pid reused) are cleaned up on sight.
-pub fn get(pid: i32, proc_start: Option<&str>) -> Option<Queued> {
+fn lock_file(pid: i32) -> PathBuf {
+    dir().join(format!("{pid}.lock"))
+}
+
+fn get_unlocked(pid: i32, proc_start: Option<&str>) -> Option<Queued> {
     let path = file(pid);
     let raw = std::fs::read_to_string(&path).ok()?;
     let q: Queued = serde_json::from_str(&raw).ok()?;
@@ -40,8 +42,18 @@ pub fn get(pid: i32, proc_start: Option<&str>) -> Option<Queued> {
     Some(q)
 }
 
+/// The queued move for a live session, if one is still waiting. Stale records
+/// (either process gone or its pid reused) are cleaned up on sight.
+pub fn get(pid: i32, proc_start: Option<&str>) -> Option<Queued> {
+    let _guard = crate::lock::exclusive(&lock_file(pid)).ok()?;
+    get_unlocked(pid, proc_start)
+}
+
 /// Record that this process is waiting to move `pid` to `to`.
 pub fn put(pid: i32, proc_start: Option<&str>, to: &str) {
+    let Ok(_guard) = crate::lock::exclusive(&lock_file(pid)) else {
+        return;
+    };
     let me = std::process::id() as i32;
     let q = Queued {
         pid,
@@ -61,6 +73,9 @@ pub fn put(pid: i32, proc_start: Option<&str>, to: &str) {
 
 /// Drop the record, but only if this process is the one that wrote it.
 pub fn done(pid: i32) {
+    let Ok(_guard) = crate::lock::exclusive(&lock_file(pid)) else {
+        return;
+    };
     let me = std::process::id() as i32;
     let path = file(pid);
     let mine = std::fs::read_to_string(&path)
@@ -74,8 +89,42 @@ pub fn done(pid: i32) {
 
 /// Stop a waiting move.
 pub fn cancel(pid: i32, proc_start: Option<&str>) -> bool {
-    let Some(q) = get(pid, proc_start) else { return false };
+    let Ok(_guard) = crate::lock::exclusive(&lock_file(pid)) else {
+        return false;
+    };
+    let Some(q) = get_unlocked(pid, proc_start) else { return false };
     unsafe { libc::kill(q.waiter, libc::SIGTERM) };
     let _ = std::fs::remove_file(file(pid));
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stale_or_reused_session_pid_drops_its_queue_record() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-queue-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
+        put(424_242, Some("old-process"), "other");
+        assert!(file(424_242).exists());
+        assert!(get(424_242, Some("reused-pid")).is_none());
+        assert!(!file(424_242).exists());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn only_the_writer_can_remove_a_queued_move() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-queue-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
+        put(424_243, Some("same"), "other");
+        assert!(file(424_243).exists());
+        done(424_243);
+        assert!(!file(424_243).exists());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 }

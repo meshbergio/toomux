@@ -73,11 +73,9 @@ fn visible_panes() -> Vec<String> {
 pub fn update(cfg: &Config, sessions: &[Session], now: i64) -> Vec<Notice> {
     let _ = std::fs::create_dir_all(dir());
     // Several status lines can run at once (one per tmux client); serialise.
-    let lock = std::fs::OpenOptions::new().create(true).append(true).open(dir().join("watch.lock"));
-    let _guard = lock.as_ref().ok().inspect(|f| {
-        use std::os::fd::AsRawFd;
-        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
-    });
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("watch.lock")) else {
+        return Vec::new();
+    };
 
     let mut book = load();
     let first_run = book.seen.is_empty();
@@ -171,5 +169,39 @@ pub fn announce_text(cfg: &Config, msg: &str, kind: &str, title: &str, id: &str)
         if let Err(e) = spawned {
             let _ = writeln!(std::io::stderr(), "notify_command: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_notice_state_is_ignored() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-watch-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(dir().join("watch.json"), "{broken").unwrap();
+        assert!(notices().is_empty());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn notice_messages_keep_the_session_title() {
+        let n = Notice {
+            pid: 1,
+            id: "s".into(),
+            title: "Deploy".into(),
+            kind: Kind::NeedsYou,
+            took_ms: 0,
+            at_ms: 0,
+        };
+        assert_eq!(message(&n), "Deploy needs you");
+        let mut finished = n;
+        finished.kind = Kind::Finished;
+        finished.took_ms = 90_000;
+        assert_eq!(message(&finished), "Deploy finished after 1m");
     }
 }

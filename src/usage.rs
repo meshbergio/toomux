@@ -126,23 +126,20 @@ fn cached_book<R>(f: impl FnOnce(&Book) -> R) -> R {
 }
 
 /// Read-modify-write under a lock: status lines from many sessions land at once.
-fn update<R>(f: impl FnOnce(&mut Book) -> (R, bool)) -> R {
-    let _ = std::fs::create_dir_all(dir());
-    let lock = std::fs::OpenOptions::new().create(true).append(true).open(dir().join("usage.lock"));
-    let _guard = lock.as_ref().ok().inspect(|f| {
-        use std::os::fd::AsRawFd;
-        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
-    });
+fn update<R>(f: impl FnOnce(&mut Book) -> (R, bool)) -> Option<R> {
+    std::fs::create_dir_all(dir()).ok()?;
+    let _guard = crate::lock::exclusive(&dir().join("usage.lock")).ok()?;
     let mut book = load_book();
     let (r, changed) = f(&mut book);
-    if changed
-        && let Ok(json) = serde_json::to_string(&book) {
+    if changed {
+        let json = serde_json::to_string(&book).ok()?;
+        {
             let tmp = dir().join(format!(".usage.{}", std::process::id()));
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(tmp, dir().join("usage.json"));
-            }
+            std::fs::write(&tmp, json).ok()?;
+            std::fs::rename(tmp, dir().join("usage.json")).ok()?;
         }
-    r
+    }
+    Some(r)
 }
 
 fn window(v: Option<&Value>, percent_key: &str) -> Option<Window> {
@@ -239,7 +236,7 @@ pub fn statusline(cfg: &Config) -> String {
     };
     let sid = v.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string();
     let name = account.map(|i| cfg.accounts[i].name.clone());
-    update(|b| {
+    let _ = update(|b| {
         let mut changed = false;
         if !sid.is_empty() {
             let prev = b.sessions.get(&sid);
@@ -609,7 +606,7 @@ pub fn fetch_due(cfg: &Config) -> Vec<String> {
     for i in due(cfg, now) {
         let name = cfg.accounts[i].name.clone();
         // Claim the slot first so a status bar tick doesn't start another.
-        update(|b| {
+        let _ = update(|b| {
             let f = &mut b.accounts.entry(name.clone()).or_default().fetch;
             f.last_try_ms = now;
             f.next_ms = now + FETCH_EVERY_MS;
@@ -624,7 +621,7 @@ pub fn fetch_due(cfg: &Config) -> Vec<String> {
             (_, Some(e)) => format!("{name}: {e}"),
             _ => unreachable!(),
         });
-        update(|b| {
+        let _ = update(|b| {
             let a = b.accounts.entry(name.clone()).or_default();
             if let Some(r) = &report {
                 a.absorb(r, true);
@@ -722,6 +719,7 @@ pub fn crossed(cfg: &Config, usage: &[Usage]) -> Vec<String> {
         let changed = !out.is_empty();
         (out, changed)
     })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]

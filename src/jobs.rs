@@ -82,6 +82,9 @@ pub fn log_path(id: &str) -> PathBuf {
 fn followers_path(id: &str) -> PathBuf {
     dir().join(format!("{id}.followers"))
 }
+fn lock_path(id: &str) -> PathBuf {
+    dir().join(format!("{id}.lock"))
+}
 
 pub fn load(id: &str) -> Option<Job> {
     std::fs::read_to_string(path(id)).ok().and_then(|r| serde_json::from_str(&r).ok())
@@ -97,6 +100,7 @@ fn save(j: &Job) -> Result<()> {
 
 /// Change a job on disk (re-reading first; the host and followers share it).
 fn update(id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
+    let _guard = crate::lock::exclusive(&lock_path(id))?;
     let mut j = load(id).with_context(|| format!("no job {id}"))?;
     f(&mut j);
     save(&j)?;
@@ -449,8 +453,51 @@ pub fn prune() {
         _ => j.started_ms < now - 7 * 86_400_000,
     };
     for j in all().into_iter().filter(old) {
-        for p in [path(&j.id), log_path(&j.id), followers_path(&j.id)] {
+        for p in [path(&j.id), log_path(&j.id), followers_path(&j.id), lock_path(&j.id)] {
             let _ = std::fs::remove_file(p);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_job_updates_are_serialised() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-jobs-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        create("race", "true", "/tmp", "session", 0).unwrap();
+
+        let mut threads = Vec::new();
+        for _ in 0..12 {
+            threads.push(std::thread::spawn(|| {
+                for _ in 0..25 {
+                    update("race", |j| j.shown += 1).unwrap();
+                }
+            }));
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(load("race").unwrap().shown, 300);
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn malformed_job_records_are_ignored_by_listing() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-jobs-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(path("bad"), "{bad").unwrap();
+        create("good", "true", "/tmp", "session", 0).unwrap();
+        let jobs = all();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "good");
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

@@ -81,6 +81,9 @@ fn entry(cfg: &Config, s: &Session) -> Entry {
 /// Bring running.json up to date. Cheap when nothing changed: it compares
 /// session ids and places before doing any tmux lookups or writes.
 pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("snapshot.lock")) else {
+        return;
+    };
     let boot = boot_id();
     let mut snap: Snap = read("running.json");
     if snap.boot != boot {
@@ -167,6 +170,9 @@ pub fn restorable(running: &[Session]) -> Restore {
 
 /// Stop offering these (restored, or dismissed).
 pub fn forget(ids: &[String]) {
+    let Ok(_guard) = crate::lock::exclusive(&dir().join("snapshot.lock")) else {
+        return;
+    };
     let mut r: Restore = read("restore.json");
     let before = r.entries.len();
     r.entries.retain(|e| !ids.contains(&e.id));
@@ -204,5 +210,19 @@ mod tests {
         earlier(&cfg);
         assert!(!reopen_due(), "off: only offered");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn truncated_snapshot_files_are_treated_as_empty() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-snapshot-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        std::fs::create_dir_all(dir()).unwrap();
+        std::fs::write(dir().join("running.json"), "{").unwrap();
+        std::fs::write(dir().join("restore.json"), "not-json").unwrap();
+        assert_eq!(recorded(), (0, vec![]));
+        assert!(restorable(&[]).entries.is_empty());
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }
