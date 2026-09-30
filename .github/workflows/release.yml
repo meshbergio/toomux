@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -28,9 +28,10 @@ jobs:
             runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - name: musl toolchain (sqlite and zstd are C)
         if: runner.os == 'Linux'
@@ -46,7 +47,7 @@ jobs:
           if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
           # The Intel build can't run on an Apple silicon runner without Rosetta.
           if [ "${{ matrix.target }}" != x86_64-apple-darwin ]; then "./$name/toomux" --version; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: toomux-${{ matrix.target }}
           path: toomux-${{ matrix.target }}.tar.gz*
@@ -58,20 +59,43 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      attestations: write
     env:
       TAP_KEY: ${{ secrets.HOMEBREW_TAP_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: src
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           merge-multiple: true
+      - name: verify build checksums
+        run: |
+          for sum in toomux-*.tar.gz.sha256; do
+            sha256sum -c "$sum"
+          done
+      - name: software bill of materials
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: src
+          format: spdx-json
+          output-file: toomux.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: attest release provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: "toomux-*.tar.gz"
+      - name: attest release SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-path: "toomux-*.tar.gz"
+          sbom-path: toomux.spdx.json
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes toomux-*.tar.gz*
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes toomux-*.tar.gz* toomux.spdx.json
       - name: homebrew tap
         # HOMEBREW_TAP_KEY is the private half of a write deploy key on
         # meshbergio/homebrew-tap: it can push there and nowhere else.
@@ -91,7 +115,7 @@ jobs:
           git add Formula/toomux.rb
           git commit -m "toomux $version"
           git push
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: env.NPM_TOKEN != ''
         with:
           node-version: 22

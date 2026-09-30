@@ -47,8 +47,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 url="https://github.com/$repo/releases/latest/download/toomux-$target.tar.gz"
 echo "downloading $url"
-curl -fsSL "$url" -o "$tmp/toomux.tar.gz"
-curl -fsSL "$url.sha256" -o "$tmp/toomux.tar.gz.sha256"
+curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$tmp/toomux.tar.gz"
+curl --proto '=https' --tlsv1.2 -fsSL "$url.sha256" -o "$tmp/toomux.tar.gz.sha256"
 (cd "$tmp" && sed "s/ .*/  toomux.tar.gz/" toomux.tar.gz.sha256 | check)
 tar xzf "$tmp/toomux.tar.gz" -C "$tmp"
 mkdir -p "$dir"

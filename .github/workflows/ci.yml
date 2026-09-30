@@ -6,40 +6,93 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
+    # Public pull requests must stay on GitHub-hosted infrastructure.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       - name: tmux for the tests
         run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: cargo fmt --all -- --check
       - run: cargo build --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
+  msrv:
+    name: msrv (Rust 1.88.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: msrv
+      - name: tmux for the tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: cargo build --locked
+      - run: cargo test --locked
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: security-tools
+      - name: install locked security tools
+        run: |
+          cargo install --locked cargo-audit --version 0.22.2
+          cargo install --locked cargo-deny --version 0.19.8
+      - run: cargo audit --deny warnings
+      - run: cargo deny check
+
   macos:
     # The macOS layer (libproc, sysctl, the Keychain) only runs for real here.
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       - name: tmux for the tests
         run: brew install tmux
       - run: cargo build --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       # What only a Mac can answer: that toomux reads a signed claude's
-      # environment and tty, and uses the Keychain without a prompt.
+      # environment and tty, and uses the Keychain without a prompt. Pin the
+      # compatibility fixture so an upstream release cannot silently change
+      # this repository's CI result.
       - name: a real claude and the login keychain
         run: |
-          curl -fsSL https://claude.ai/install.sh | bash
+          curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh | bash -s 2.1.285
           sock="$RUNNER_TEMP/rig.sock"
           tmux -S "$sock" new-session -d -x 120 -y 40 env CLAUDE_CONFIG_DIR="$RUNNER_TEMP/cc" "$HOME/.local/bin/claude"
           sleep 8
