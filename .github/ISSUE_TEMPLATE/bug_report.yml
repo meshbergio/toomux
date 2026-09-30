@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible toomux problem
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials or private transcript content. Security vulnerabilities belong in the private security-reporting flow described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: toomux version / commit
+      placeholder: "toomux 0.1.0 or git SHA"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Linux distribution, macOS version, or WSL 2"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps that reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true

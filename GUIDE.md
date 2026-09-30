@@ -40,6 +40,7 @@ registry change arrives. Pane listings of the server you're looking at come over
 the same connection; each other server is asked at most once every 10s, and
 the status line shares those answers. Measured with eight servers: 48 small
 `tmux list-panes` a minute, ~0.5% CPU at rest, about 9MB of memory.
+The repeatable resource-measurement procedure is in [BENCHMARKS.md](BENCHMARKS.md).
 
 | key | |
 |---|---|
@@ -559,7 +560,7 @@ and `brew upgrade` keeps it current. Or use the installer below, with
 `brew install tmux` if you haven't got it.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
 toomux init --apply      # tmux and Claude Code set up; lists what toomux does by itself
 toomux account setup     # optional: name your accounts, choose which share history
 ```

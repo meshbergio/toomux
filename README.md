@@ -241,7 +241,7 @@ money went. Once a day, a one-line digest of yesterday arrives as a notice.
 ## Get it
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
 toomux init --apply
 ```
 
@@ -262,5 +262,8 @@ finished git worktrees once a day, and never touches branches or uncommitted
 work. Every key and setting is in [the guide](GUIDE.md).
 
 If it helps, a star is appreciated.
+
+Project notes: [security](SECURITY.md) · [contributing](CONTRIBUTING.md) ·
+[changelog](CHANGELOG.md) · [reproducible performance measurements](BENCHMARKS.md).
 
 <p id="licence">MIT or Apache 2.0, your pick: <a href="LICENSE-MIT">MIT</a>, <a href="LICENSE-APACHE">Apache 2.0</a>.</p>
