@@ -24,6 +24,7 @@ pub mod price;
 pub mod queue;
 pub mod redact;
 pub mod registry;
+pub mod remote;
 pub mod scene;
 pub mod setup;
 pub mod snapshot;

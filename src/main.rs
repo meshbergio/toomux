@@ -3,7 +3,8 @@ mod account_cli;
 use toomux::setup::{BEGIN, END};
 use toomux::{
     actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths, queue,
-    registry, scene, setup, snapshot, state, tmux, tokens, ui, upkeep, usage, voyage, watch,
+    registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep, usage, voyage,
+    watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -225,6 +226,11 @@ enum Cmd {
         #[command(subcommand)]
         what: Option<account_cli::AccountCmd>,
     },
+    /// Native phone/tablet access over a ByteTraverse mesh
+    Remote {
+        #[command(subcommand)]
+        what: RemoteCmd,
+    },
     /// Take back what `init --apply` added; with --purge, remove what toomux keeps too
     Uninstall {
         /// Say what it would change, change nothing
@@ -265,6 +271,21 @@ enum VoyageCmd {
         #[arg(long, default_value_t = 80)]
         width: usize,
     },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Run the authenticated mobile API on the ByteTraverse mesh
+    Serve {
+        #[arg(long, default_value = remote::DEFAULT_BIND)]
+        bind: String,
+    },
+    /// Make a one-time eight-digit code for a phone or tablet
+    Pair,
+    /// Show paired Android devices
+    Devices,
+    /// Revoke one device id, or `all`
+    Revoke { device: String },
 }
 
 fn main() -> Result<()> {
@@ -487,6 +508,12 @@ fn main() -> Result<()> {
         Some(Cmd::Account { what }) => {
             account_cli::run(what.unwrap_or(account_cli::AccountCmd::List))
         }
+        Some(Cmd::Remote { what }) => match what {
+            RemoteCmd::Serve { bind } => remote::serve(cfg, &bind),
+            RemoteCmd::Pair => remote::pair(),
+            RemoteCmd::Devices => remote::devices(),
+            RemoteCmd::Revoke { device } => remote::revoke(&device),
+        },
         Some(Cmd::Uninstall { dry_run, purge }) => uninstall(dry_run, purge),
         Some(Cmd::Statusline) => {
             print!("{}", usage::statusline(&cfg));

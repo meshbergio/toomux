@@ -177,6 +177,33 @@ status bar tells you the moment something needs you.
 `ctrl-n` starts a new session in a recent folder, on the right account.
 `ctrl-o` pulls a session running in a plain terminal into tmux.
 
+## Android over ByteTraverse
+
+The native Android client in [`android/`](android/) is a window onto the real
+Toomux shell, not a second mobile dashboard. The host runs an isolated
+`toomux shell` for the paired device; Android renders that exact ANSI cell grid
+natively and sends touch, keyboard and mouse-equivalent input back to it.
+Grouping, filters, account limits, session menus, the live Claude pane, usage,
+help and the `alt-m` memory graph therefore use the same code and interaction
+model as the desktop TUI.
+
+The normal app surface is a native Kotlin `View`, not a WebView. From the
+memory TUI, `o browser` opens Toomux's existing self-contained GUI memory
+explorer full-screen on the device; that isolated page is the only WebView
+surface and external network requests are blocked.
+
+Remote access is opt-in. `toomux remote serve` listens on `10.30.0.1:7462` by
+default and refuses non-ByteTraverse addresses and peers. `toomux remote pair`
+makes a one-time eight-digit code; the Android app exchanges that for a
+per-device token, which is held under Android Keystore. Joining the ByteTraverse
+mesh alone is not authority to control toomux.
+
+ByteTraverse remains the network layer rather than being copied into the app.
+That keeps its VPN/transport lifecycle separate, keeps Toomux's MIT/Apache
+licensing boundary clear, and means the remote API is reachable only after the
+device can already reach `10.30.0.1` over ByteTraverse. Setup and the exact
+security boundary are in [the Android guide](android/README.md).
+
 ## Accounts and limits
 
 When an account hits its limit, `ctrl-a` moves the conversation to one with room,
@@ -234,9 +261,6 @@ money went. Once a day, a one-line digest of yesterday arrives as a notice.
 
 - **Codex.** Codex sessions in the same list as Claude Code ones.
 - **Local models.** Sessions running on models you host yourself.
-- **toomux remote.** All of toomux from your phone. Claude Code's own Remote
-  Control already works, and stays on through a handover, an account move and
-  a reboot.
 
 ## Get it
 

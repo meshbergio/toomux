@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="base">#0F141C</color>
+    <color name="raised">#141B26</color>
+    <color name="well">#0B0F15</color>
+    <color name="overlay">#18202E</color>
+    <color name="text">#DBE2EC</color>
+    <color name="dim">#97A3B6</color>
+    <color name="muted">#6D7A8E</color>
+    <color name="faint">#263041</color>
+    <color name="accent">#7DD3FC</color>
+    <color name="working">#F5A623</color>
+    <color name="attention">#F7788C</color>
+    <color name="finished">#3ECF8E</color>
+    <color name="selection">#22304A</color>
+</resources>
