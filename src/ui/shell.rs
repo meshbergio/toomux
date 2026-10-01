@@ -191,6 +191,24 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
         while let Ok(m) = rx.try_recv() {
             app.handle(m);
         }
+        let mut operation_finished = false;
+        while let Ok(done) = app.done_rx.try_recv() {
+            app.working_on = None;
+            match done {
+                Ok(m) => app.say(m, app.pal.finished),
+                Err(e) => app.say(e, app.pal.attention),
+            }
+            operation_finished = true;
+        }
+        while let Ok(done) = app.account_done_rx.try_recv() {
+            app.working_on = None;
+            app.finish_account_done(done);
+            operation_finished = true;
+        }
+        if operation_finished {
+            app.changed = true;
+            app.dirty = true;
+        }
         app.flush();
         let now = Instant::now();
         let reload_due = now >= app.loaded_at + Duration::from_secs(2)

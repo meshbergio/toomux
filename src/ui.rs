@@ -5550,6 +5550,47 @@ mod tests {
     }
 
     #[test]
+    fn account_login_watch_finishes_when_credentials_appear() {
+        let dir =
+            std::env::temp_dir().join(format!("toomux-ui-login-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".credentials.json"), "{}").unwrap();
+
+        let mut c = cfg();
+        c.accounts[0].config_dir = dir.display().to_string();
+        let mut app = App::with(c, sample());
+        let mut view = AccountsView::new(&app.cfg, 0);
+        let mut flow = AddFlow::new(&app.cfg);
+        flow.step = AddStep::Login;
+        flow.name = "work".into();
+        flow.added = Some((0, dir.clone()));
+        flow.waiting_login = true;
+        view.flow = Some(flow);
+        view.login_watch = Some(LoginWatch {
+            index: 0,
+            name: "work".into(),
+            dir: dir.clone(),
+        });
+        app.mode = Mode::Accounts(view);
+
+        app.check_account_login();
+
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        assert!(view.login[0]);
+        assert!(view.login_watch.is_none());
+        assert!(view.flow.is_none());
+        assert!(
+            app.flash
+                .as_ref()
+                .is_some_and(|(m, _, _)| m.contains("signed in"))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn help_advertises_accounts_shortcut() {
         let mut app = App::with(cfg(), sample());
         app.exec(Cmd::Help);
