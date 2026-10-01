@@ -3,6 +3,7 @@ package io.github.meshbergio.toomux
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
@@ -19,7 +20,6 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 
@@ -39,9 +39,13 @@ class TuiView @JvmOverloads constructor(
     var listener: Listener? = null
 
     private val parser = AnsiFrameParser()
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
         typeface = Typeface.MONOSPACE
-        isSubpixelText = false
+        isSubpixelText = true
+    }
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.SQUARE
     }
     private val handler = Handler(Looper.getMainLooper())
 
@@ -193,8 +197,11 @@ class TuiView @JvmOverloads constructor(
             resources.displayMetrics.density * resources.configuration.fontScale
         paint.textSize = fontSp * scaledDensity
         val fm = paint.fontMetrics
-        cellHeight = ceil((fm.descent - fm.ascent).toDouble()).toFloat().coerceAtLeast(1f)
-        cellWidth = ceil(paint.measureText("M").toDouble()).toFloat().coerceAtLeast(1f)
+        // Keep the terminal cell on the font's actual floating-point metrics.
+        // Rounding each cell up by even a fraction of a pixel compounds across
+        // a 100+ column TUI and makes later borders/text visibly drift left.
+        cellHeight = (fm.descent - fm.ascent).coerceAtLeast(1f)
+        cellWidth = paint.measureText("M").coerceAtLeast(1f)
         baselineOffset = -fm.ascent
 
         val nextCols = floor(w / cellWidth).toInt().coerceIn(MIN_COLS, MAX_COLS)
@@ -235,7 +242,7 @@ class TuiView @JvmOverloads constructor(
                 paint.isUnderlineText = run.attrs and TerminalAttrs.UNDERLINE != 0
                 paint.isStrikeThruText = run.attrs and TerminalAttrs.STRIKE != 0
                 paint.textSkewX = if (run.attrs and TerminalAttrs.ITALIC != 0) -0.18f else 0f
-                canvas.drawText(run.text, left, baseline, paint)
+                drawRunText(canvas, run, top, baseline, value.cols)
             }
         }
 
@@ -284,6 +291,135 @@ class TuiView @JvmOverloads constructor(
     private fun cellAt(x: Float, y: Float): Pair<Int, Int> =
         ((floor(x / cellWidth).toInt() + 1).coerceIn(1, gridCols.coerceAtLeast(1))) to
             ((floor(y / cellHeight).toInt() + 1).coerceIn(1, gridRows.coerceAtLeast(1)))
+
+    /**
+     * Android may fall back to another font for box-drawing and symbol glyphs.
+     * Drawing an entire run lets those fallback advances accumulate, while a
+     * terminal requires every glyph to occupy an exact cell. Paint each
+     * grapheme cluster into its explicit terminal slot so later columns can
+     * never drift. The common Toomux box characters are drawn geometrically
+     * to keep vertical/horizontal joins pixel-perfect across Android fonts.
+     */
+    private fun drawRunText(
+        canvas: Canvas,
+        run: TerminalRun,
+        top: Float,
+        baseline: Float,
+        maxCols: Int,
+    ) {
+        var terminalCol = run.start
+        var offset = 0
+        while (offset < run.text.length && terminalCol < maxCols) {
+            val codePoint = Character.codePointAt(run.text, offset)
+            val width = AnsiFrameParser.cellWidth(codePoint)
+            if (width == 0) {
+                offset += Character.charCount(codePoint)
+                continue
+            }
+
+            val cluster = StringBuilder().appendCodePoint(codePoint)
+            offset += Character.charCount(codePoint)
+            while (offset < run.text.length) {
+                val next = Character.codePointAt(run.text, offset)
+                if (AnsiFrameParser.cellWidth(next) != 0) break
+                cluster.appendCodePoint(next)
+                offset += Character.charCount(next)
+            }
+
+            val used = width.coerceAtMost(maxCols - terminalCol)
+            val slotLeft = terminalCol * cellWidth
+            val slotWidth = used * cellWidth
+            if (!drawBoxGlyph(canvas, codePoint, slotLeft, top, slotWidth, cellHeight, paint.color)) {
+                val text = cluster.toString()
+                if (text != " ") {
+                    val advance = paint.measureText(text)
+                    val x = slotLeft + ((slotWidth - advance) * 0.5f)
+                    canvas.drawText(text, x, baseline, paint)
+                }
+            }
+            terminalCol += used
+        }
+    }
+
+    private fun drawBoxGlyph(
+        canvas: Canvas,
+        codePoint: Int,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+        color: Int,
+    ): Boolean {
+        linePaint.color = color
+        linePaint.alpha = paint.alpha
+        linePaint.strokeWidth = max(1f, resources.displayMetrics.density * 0.72f)
+        if (codePoint in ROUNDED_BOXES) {
+            drawRoundedBoxCorner(canvas, codePoint, left, top, width, height)
+            return true
+        }
+        val mask = when (codePoint) {
+            0x2500 -> BOX_LEFT or BOX_RIGHT
+            0x2502 -> BOX_UP or BOX_DOWN
+            0x250C -> BOX_RIGHT or BOX_DOWN
+            0x2510 -> BOX_LEFT or BOX_DOWN
+            0x2514 -> BOX_RIGHT or BOX_UP
+            0x2518 -> BOX_LEFT or BOX_UP
+            0x251C -> BOX_RIGHT or BOX_UP or BOX_DOWN
+            0x2524 -> BOX_LEFT or BOX_UP or BOX_DOWN
+            0x252C -> BOX_LEFT or BOX_RIGHT or BOX_DOWN
+            0x2534 -> BOX_LEFT or BOX_RIGHT or BOX_UP
+            0x253C -> BOX_LEFT or BOX_RIGHT or BOX_UP or BOX_DOWN
+            else -> return false
+        }
+        val cx = left + width * 0.5f
+        val cy = top + height * 0.5f
+        if (mask and BOX_LEFT != 0) canvas.drawLine(left, cy, cx, cy, linePaint)
+        if (mask and BOX_RIGHT != 0) canvas.drawLine(cx, cy, left + width, cy, linePaint)
+        if (mask and BOX_UP != 0) canvas.drawLine(cx, top, cx, cy, linePaint)
+        if (mask and BOX_DOWN != 0) canvas.drawLine(cx, cy, cx, top + height, linePaint)
+        return true
+    }
+
+    private fun drawRoundedBoxCorner(
+        canvas: Canvas,
+        codePoint: Int,
+        left: Float,
+        top: Float,
+        width: Float,
+        height: Float,
+    ) {
+        val cx = left + width * 0.5f
+        val cy = top + height * 0.5f
+        val radius = minOf(width, height) * 0.28f
+        val path = Path()
+        when (codePoint) {
+            0x256D -> {
+                path.moveTo(left + width, cy)
+                path.lineTo(cx + radius, cy)
+                path.quadTo(cx, cy, cx, cy + radius)
+                path.lineTo(cx, top + height)
+            }
+            0x256E -> {
+                path.moveTo(left, cy)
+                path.lineTo(cx - radius, cy)
+                path.quadTo(cx, cy, cx, cy + radius)
+                path.lineTo(cx, top + height)
+            }
+            0x2570 -> {
+                path.moveTo(left + width, cy)
+                path.lineTo(cx + radius, cy)
+                path.quadTo(cx, cy, cx, cy - radius)
+                path.lineTo(cx, top)
+            }
+            0x256F -> {
+                path.moveTo(left, cy)
+                path.lineTo(cx - radius, cy)
+                path.quadTo(cx, cy, cx, cy - radius)
+                path.lineTo(cx, top)
+            }
+        }
+        canvas.drawPath(path, linePaint)
+    }
 
     override fun onCheckIsTextEditor(): Boolean = true
 
@@ -392,6 +528,11 @@ class TuiView @JvmOverloads constructor(
         private const val MAX_ROWS = 96
         private const val DEFAULT_BG = -0xF0EBE4
         private const val DEFAULT_FG = -0x241D14
+        private const val BOX_LEFT = 1
+        private const val BOX_RIGHT = 1 shl 1
+        private const val BOX_UP = 1 shl 2
+        private const val BOX_DOWN = 1 shl 3
+        private val ROUNDED_BOXES = setOf(0x256D, 0x256E, 0x2570, 0x256F)
         private val TOUCH_SHORTCUTS = listOf(
             "alt-s sessions" to "M-s",
             "alt-u usage" to "M-u",
