@@ -236,7 +236,9 @@ class MainActivity : Activity(), TuiView.Listener {
                     lastFrame = frame.sha256
                     main.post {
                         tui.applyFrame(frame)
-                        memoryTuiOpen = tui.containsText("memory ›")
+                        memoryTuiOpen =
+                            tui.containsText("memory ›") ||
+                                (tui.containsText("memory index") && tui.containsText("◉ project"))
                         hideConnectionStatus()
                     }
                 } else {
