@@ -1,10 +1,9 @@
 name: release
 
-# A tag v* builds static Linux binaries and macOS binaries and publishes them
-# as a release. Run by hand, it builds them and keeps them as workflow
-# artifacts only. GitHub's runners: releases are made once the repository is
-# public, the Linux arm64 build needs an arm64 machine, and macOS builds need
-# Apple's SDK, so they run on macOS (Apple silicon, building both).
+# A tag v* builds Linux and macOS binaries and publishes them as a release.
+# Windows enters the Linux build through WSL 2. The signed Android APK is
+# produced with the maintainer-held release key and attached to the release
+# after the tag workflow succeeds.
 on:
   push:
     tags: ["v*"]

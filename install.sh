@@ -1,11 +1,13 @@
 #!/bin/sh
-# Install toomux: the latest release for this machine, checked against its
+# Install toomux: the latest release for this machine, or $TOOMUX_VERSION when
+# supplied, checked against its
 # checksum, into ~/.local/bin (or $TOOMUX_BIN_DIR). Nothing else is changed;
 # `toomux init --apply` sets it up afterwards, and says what it will do.
 set -eu
 
 repo="meshbergio/toomux"
 dir="${TOOMUX_BIN_DIR:-$HOME/.local/bin}"
+version="${TOOMUX_VERSION:-latest}"
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -45,7 +47,12 @@ fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-url="https://github.com/$repo/releases/latest/download/toomux-$target.tar.gz"
+case "$version" in
+  latest) base="https://github.com/$repo/releases/latest/download" ;;
+  v*) base="https://github.com/$repo/releases/download/$version" ;;
+  *) base="https://github.com/$repo/releases/download/v$version" ;;
+esac
+url="$base/toomux-$target.tar.gz"
 echo "downloading $url"
 curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$tmp/toomux.tar.gz"
 curl --proto '=https' --tlsv1.2 -fsSL "$url.sha256" -o "$tmp/toomux.tar.gz.sha256"

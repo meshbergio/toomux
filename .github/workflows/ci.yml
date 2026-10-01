@@ -125,3 +125,27 @@ jobs:
           ps eww -p "$TOOMUX_CHECK_PID" | tr " " "\n" | grep -E "^(CLAUDE_CONFIG_DIR|TMUX_PANE)=" || true
           cargo test --locked -- --ignored a_real_claude the_login_keychain
           tmux -S "$sock" kill-server
+
+  windows:
+    name: windows (WSL 2 npm launcher)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: launcher delegates the matching version to WSL 2
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          Set-Content packaging/npm/toomux/package.json ('{"version":"' + $version + '"}')
+          $capture = Join-Path $env:RUNNER_TEMP 'wsl-args.json'
+          $env:NODE_ENV = 'test'
+          $env:TOOMUX_TEST_PLATFORM = 'win32'
+          $env:TOOMUX_TEST_WSL_CAPTURE = $capture
+          node packaging/npm/toomux/bin/toomux.js --version
+          $args = Get-Content $capture -Raw | ConvertFrom-Json
+          if ($args -notcontains $version) { throw "launcher did not pass package version $version to WSL" }
+          if (($args -join [Environment]::NewLine) -notmatch 'TOOMUX_VERSION') { throw 'launcher did not pin install.sh' }
+          node --check packaging/npm/toomux/bin/toomux.js
