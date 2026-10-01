@@ -27,6 +27,7 @@ class TuiView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
+    private var softwareKeyboardEnabled = false
     interface Listener {
         fun onGeometry(cols: Int, rows: Int)
         fun onTap(col: Int, row: Int, right: Boolean)
@@ -183,14 +184,18 @@ class TuiView @JvmOverloads constructor(
     }
 
     fun showKeyboard() {
+        softwareKeyboardEnabled = true
         requestFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.restartInput(this)
         imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
     fun hideKeyboard() {
+        softwareKeyboardEnabled = false
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(windowToken, 0)
+        imm.restartInput(this)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -436,9 +441,10 @@ class TuiView @JvmOverloads constructor(
         canvas.drawPath(path, linePaint)
     }
 
-    override fun onCheckIsTextEditor(): Boolean = true
+    override fun onCheckIsTextEditor(): Boolean = softwareKeyboardEnabled
 
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        if (!softwareKeyboardEnabled) return null
         outAttrs.inputType =
             InputType.TYPE_CLASS_TEXT or
             InputType.TYPE_TEXT_FLAG_MULTI_LINE or

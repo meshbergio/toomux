@@ -136,6 +136,12 @@ class MainActivity : Activity(), TuiView.Listener {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_ALT_LEFT,
                 KeyEvent.KEYCODE_ALT_RIGHT -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        // Hardware Meta belongs to the terminal. Ensure the
+                        // optional software-keyboard input connection is not
+                        // active before Lenovo's IME can claim the chord.
+                        tui.hideKeyboard()
+                    }
                     hardwareAltDown = event.action != KeyEvent.ACTION_UP
                     // Lenovo's Generic.kcm maps Alt+letters to symbols (for
                     // example Alt+S -> ß). Consume the raw Alt key here so
