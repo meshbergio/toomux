@@ -78,7 +78,13 @@ class MainActivity : Activity(), TuiView.Listener {
 
         endpointEdit.setText(credential?.endpoint ?: store.rememberedEndpoint())
         pairButton.setOnClickListener { pairDevice() }
-        connectionStatus.setOnClickListener { onCommandPalette() }
+        connectionStatus.setOnClickListener {
+            if (connectionStatus.text.toString().startsWith("ByteTraverse path unavailable")) {
+                openByteTraverse()
+            } else {
+                onCommandPalette()
+            }
+        }
         connectionStatus.setOnLongClickListener {
             confirmForget()
             true
@@ -137,10 +143,20 @@ class MainActivity : Activity(), TuiView.Listener {
 
     override fun onTap(col: Int, row: Int, right: Boolean) {
         if (!right) {
-            val shortcut = tui.shortcutAt(col, row)
-            if (shortcut != null) {
-                sendKey(shortcut)
-                return
+            when (val shortcut = tui.shortcutAt(col, row)) {
+                "__memory_browser__" -> {
+                    openMemoryExplorer()
+                    return
+                }
+                "__find__" -> {
+                    sendInput { it.tuiText("/") }
+                    return
+                }
+                null -> Unit
+                else -> {
+                    sendKey(shortcut)
+                    return
+                }
             }
         }
         sendInput { it.tuiTap(col, row, right) }
@@ -166,9 +182,10 @@ class MainActivity : Activity(), TuiView.Listener {
         if (memoryTuiOpen) {
             openMemoryExplorer()
         } else {
-            // The control surface is Toomux's own help overlay, not a second
-            // Android menu with a parallel command vocabulary.
-            sendKey("?")
+            // Keep the control surface inside Toomux itself. alt-? is
+            // reserved by shell mode so this works even while the live
+            // Claude pane owns ordinary keyboard input.
+            sendKey("M-?")
         }
     }
 
@@ -387,6 +404,15 @@ class MainActivity : Activity(), TuiView.Listener {
                 }
             }
             .show()
+    }
+
+    private fun openByteTraverse() {
+        val launch = packageManager.getLaunchIntentForPackage("com.bytetraverse.android")
+        if (launch == null) {
+            toast("ByteTraverse is not installed on this device")
+            return
+        }
+        startActivity(launch)
     }
 
     private fun showPairError(message: String) {

@@ -444,6 +444,13 @@ impl App {
         let focus_live = self.shell_ref().focus_live;
         // Keys toomux keeps, wherever the keyboard is.
         match k.code {
+            // Android's immersive TUI uses alt-? as a focus-independent way
+            // to open Toomux's own help overlay. Plain '?' still belongs to
+            // the live terminal when that pane has the keyboard.
+            KeyCode::Char('?') if alt => {
+                self.mode = Mode::Help;
+                return;
+            }
             KeyCode::Char('s') if alt => {
                 let sh = self.shell_mut();
                 sh.show_list = true;

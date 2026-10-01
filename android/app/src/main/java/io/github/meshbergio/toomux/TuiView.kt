@@ -391,6 +391,16 @@ class TuiView @JvmOverloads constructor(
             "alt-u usage" to "M-u",
             "alt-m memory" to "M-m",
             "alt-b list" to "M-b",
+            "alt-j go there" to "M-j",
+            "enter focus" to "Enter",
+            "enter open" to "Enter",
+            "^a move" to "C-a",
+            "/ find" to "__find__",
+            "o browser" to "__memory_browser__",
+            "esc close" to "Escape",
+            "esc back" to "Escape",
+            "? keys" to "?",
+            "? hide legend" to "?",
         )
     }
 }
