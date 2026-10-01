@@ -6,6 +6,17 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+## 0.2.2 - 2026-10-01
+
+### Fixed
+
+- Preserve unsent Claude prompt text into a completed handover brief before
+  clearing the old input and continuing in a fresh session, instead of
+  retrying indefinitely with `something is typed in its prompt`.
+- Detect the newest visible prompt rather than an older submitted prompt still
+  in scrollback, preserve multi-line drafts, and refuse to clear input if it
+  changes between inspection and handover.
+
 ## 0.2.1 - 2026-10-01
 
 ### Added
