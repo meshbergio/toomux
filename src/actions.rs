@@ -482,29 +482,70 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     in_own_server(None, &name, folder, &Launch { env, cmd })
 }
 
-/// Whether Claude's input box in this pane is empty (only the placeholder),
-/// so typing a command into it can't mix with an unsent draft.
-pub fn prompt_empty(pane: &str) -> bool {
+/// Text that was actually typed into Claude's current input box. Dim
+/// suggestions/placeholders are excluded. None means the prompt can't be
+/// inspected safely (copy mode, no visible prompt, or tmux failure).
+pub fn prompt_draft(pane: &str) -> Option<String> {
     // Scrolled back (copy mode): what's typed can't be seen, and keys would go
     // to copy mode rather than the prompt.
     if tmux::run(&["display-message", "-p", "-t", pane, "#{pane_in_mode}"])
         .is_ok_and(|m| m.trim() != "0")
     {
-        return false;
+        return None;
     }
-    let Some(raw) = tmux::capture(pane, 40) else {
-        return false;
-    };
-    let screen = String::from_utf8_lossy(&raw);
-    let Some(line) = screen
-        .lines()
-        .rev()
-        .find(|l| strip_ansi(l).trim_start().starts_with('❯'))
-    else {
-        return false;
-    };
-    let typed = typed_text(line);
-    typed.is_empty() || typed.starts_with("Try \"")
+    // -J joins terminal soft-wraps, so a long one-line draft stays one logical
+    // line instead of looking like several unrelated screen rows.
+    let screen = tmux::run(&["capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-40"]).ok()?;
+    prompt_draft_in(&screen)
+}
+
+fn prompt_draft_in(screen: &str) -> Option<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|l| strip_ansi(l).trim_start().starts_with('❯'))?;
+    let mut draft = vec![typed_text(lines[start])];
+    for line in lines.iter().skip(start + 1) {
+        let plain = strip_ansi(line);
+        if plain.trim_start().starts_with('─') || plain.trim_start().starts_with('❯') {
+            break;
+        }
+        // Continuation rows do not repeat the prompt mark. Prepend one only
+        // for the style-aware parser so dim suggestions remain excluded.
+        let continued = typed_text(&format!("❯{line}"));
+        if !continued.is_empty() || plain.trim().is_empty() {
+            draft.push(continued);
+        }
+    }
+    while draft.last().is_some_and(String::is_empty) && draft.len() > 1 {
+        draft.pop();
+    }
+    Some(draft.join("\n"))
+}
+
+/// Whether Claude's input box in this pane is empty (only the placeholder),
+/// so typing a command into it can't mix with an unsent draft.
+pub fn prompt_empty(pane: &str) -> bool {
+    prompt_draft(pane).is_some_and(|typed| typed.is_empty() || typed.starts_with("Try \""))
+}
+
+/// Clear exactly the draft we just preserved for a handover. If the prompt
+/// changed between inspection and clearing, leave it alone: that is active
+/// user input, not the stale draft we were asked to migrate.
+pub fn clear_prompt_if(pane: &str, expected: &str) -> Result<()> {
+    let current = prompt_draft(pane).context("can't read Claude's prompt before clearing it")?;
+    if current != expected {
+        bail!("something is typed in its prompt: it changed while handing over");
+    }
+    if current.is_empty() || current.starts_with("Try \"") {
+        return Ok(());
+    }
+    tmux::run(&["send-keys", "-t", pane, "C-u"])?;
+    sleep(Duration::from_millis(250));
+    if !prompt_empty(pane) {
+        bail!("something is typed in its prompt: couldn't clear the preserved draft");
+    }
+    Ok(())
 }
 
 /// Type `text` into an empty Claude prompt and submit it, making sure it went.
@@ -973,7 +1014,7 @@ mod tests {
 
     #[test]
     fn suggestions_and_placeholders_are_not_typed() {
-        use super::typed_text;
+        use super::{prompt_draft_in, typed_text};
         // As captured from real panes (capture-pane -e).
         assert_eq!(
             typed_text("\u{1b}[39m❯\u{a0}\u{1b}[2mkeep going, proceed autonomously\u{1b}[0m"),
@@ -999,6 +1040,30 @@ mod tests {
             "a colour index of 2 isn't dim"
         );
         assert_eq!(typed_text("❯ \u{1b}[38;2;2;2;2mrgb\u{1b}[0m"), "rgb");
+
+        let screen = concat!(
+            "\u{1b}[39m❯\u{a0}\u{1b}[38;2;255;255;255mPlease complete handover\u{1b}[39m\n",
+            "\u{1b}[38;2;153;153;153mWorked for 9s · done\u{1b}[39m\n",
+            "\u{1b}[39m❯\u{a0}'d v9\n",
+        );
+        assert_eq!(
+            prompt_draft_in(screen).as_deref(),
+            Some("'d v9"),
+            "the live prompt wins over an older submitted prompt still on screen"
+        );
+
+        let multiline = concat!(
+            "\u{1b}[39m❯\u{a0}first line\n",
+            "\u{1b}[39m  second line\n",
+            "\u{1b}[39m  third line\n",
+            "\u{1b}[38;2;136;136;136m────────────────────────\u{1b}[39m\n",
+            "  status line\n",
+        );
+        assert_eq!(
+            prompt_draft_in(multiline).as_deref(),
+            Some("first line\nsecond line\nthird line"),
+            "hard newlines in the input box are preserved too"
+        );
     }
 
     #[test]

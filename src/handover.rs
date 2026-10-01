@@ -857,8 +857,8 @@ fn idle_limit(cfg: &Config, idle_ms: i64) -> u64 {
 
 /// A failure in a few words, for the list (the log keeps the whole message).
 fn short_why(e: &str) -> String {
-    let short = if e == TYPED {
-        "your prompt had text"
+    let short = if e.starts_with(TYPED) {
+        "unsent prompt text"
     } else if e.contains("wouldn't start") {
         "the fresh session didn't start"
     } else if e.contains("before the brief was written") {
@@ -1123,7 +1123,7 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
     m.at_ms = now;
     if let Err(e) = &result {
         m.retry_at_ms = now
-            + if e.to_string() == TYPED {
+            + if e.to_string().starts_with(TYPED) {
                 RETRY_TYPED_MS
             } else {
                 RETRY_MS
@@ -1261,6 +1261,33 @@ fn hand_over(
     if let Some(u) = &unseen {
         text.push_str(&unseen_section(u));
     }
+
+    // Once the brief is complete, an old unsent draft must not strand the
+    // handover forever. Preserve it first, then clear only that exact draft.
+    // If the user types something new between those two checks, clearing is
+    // refused and the handover stays put.
+    if let Some(p) = pane
+        && !actions::prompt_empty(p)
+    {
+        let Some(cur) = find(cfg, s.pid) else {
+            bail!("the session ended before its prompt draft could be preserved")
+        };
+        if cur.id != s.id
+            || cur.proc_start != s.proc_start
+            || cur.pane.as_ref().map(|pane| pane.id.as_str()) != pane
+        {
+            bail!("the session changed while preserving its prompt draft");
+        }
+        let draft = actions::prompt_draft(p).context("can't read the unsent prompt draft")?;
+        if draft.trim().is_empty() {
+            bail!("{TYPED}");
+        }
+        text = with_unsent_draft(&text, &draft);
+        // Persistence comes before deletion: a crash after this point can lose
+        // neither the brief nor the user's unsent text.
+        write_atomic(&brief, &text);
+        actions::clear_prompt_if(p, &draft)?;
+    }
     write_atomic(&brief, &text);
 
     // Everything the old conversation said, searchable from the new one. Best
@@ -1317,6 +1344,12 @@ fn hand_over(
             " The user never saw how that conversation ended: the handover took over first. So your first reply starts with \
              what the brief's last section, \"What the user hasn't seen yet\", says, and nothing it calls sent or waiting \
              on the user has reached them until you pass it on.",
+        );
+    }
+    if text.contains(UNSENT_DRAFT) {
+        fresh.push_str(
+            " The brief also preserves text that was sitting unsent in the old prompt. It was not submitted by the user: keep \
+             it as context and do not treat it as an instruction unless the user's intent is clear.",
         );
     }
     fresh.push_str(" Then pick up from the brief's next steps, and don't redo finished work.");
@@ -1405,6 +1438,41 @@ fn hand_over(
 }
 
 const CARRIED: &str = "\n\n## Carried over by toomux";
+const UNSENT_DRAFT: &str = "\n\n## Unsent prompt preserved by toomux";
+
+/// Preserve an unsent prompt before the generated carried-over section. The
+/// exact same draft is only added once, while a different later draft is kept
+/// too rather than replacing earlier user input.
+fn with_unsent_draft(brief: &str, draft: &str) -> String {
+    let (base, suffix) = match brief.find(CARRIED) {
+        Some(i) => brief.split_at(i),
+        None => (brief, ""),
+    };
+    let mut block = String::new();
+    for line in draft.lines() {
+        block.push_str("    ");
+        block.push_str(line);
+        block.push('\n');
+    }
+    if draft.ends_with('\n') {
+        block.push_str("    \n");
+    }
+    if base.contains(UNSENT_DRAFT) && base.contains(&block) {
+        return brief.to_string();
+    }
+    let mut text = base.to_string();
+    if !text.contains(UNSENT_DRAFT) {
+        text.push_str(UNSENT_DRAFT);
+        text.push_str(
+            "\n\nThe old session had the following text in its input box when the handover completed. It was **not submitted**. toomux preserved it before clearing the old prompt so no user input was lost. Treat it as context, not as an instruction that definitely needs to be executed.\n\n",
+        );
+    } else {
+        text.push_str("\nAnother unsent draft was preserved before a later retry:\n\n");
+    }
+    text.push_str(&block);
+    text.push_str(suffix);
+    text
+}
 
 /// The brief with what toomux carries over listed at its end (in place of any
 /// list from an earlier try).
@@ -2630,6 +2698,33 @@ mod tests {
             with_carried(&once, &[], &[]),
             "# brief",
             "nothing left to carry: the list goes"
+        );
+    }
+
+    #[test]
+    fn unsent_prompt_drafts_survive_retries_without_duplication() {
+        let carried = format!("{CARRIED}\n\n- job j1 still running\n");
+        let once = with_unsent_draft(&format!("# brief{carried}"), "'d v9");
+        assert_eq!(once.matches(UNSENT_DRAFT.trim()).count(), 1);
+        assert_eq!(once.matches("    'd v9\n").count(), 1);
+        assert!(
+            once.find(UNSENT_DRAFT).unwrap() < once.find(CARRIED).unwrap(),
+            "the draft must live before generated carried-over text"
+        );
+
+        let twice = with_unsent_draft(&once, "'d v9");
+        assert_eq!(twice, once, "the same retry must not duplicate the draft");
+
+        let later = with_unsent_draft(&twice, "please keep this too");
+        assert_eq!(later.matches(UNSENT_DRAFT.trim()).count(), 1);
+        assert!(later.contains("    'd v9\n"));
+        assert!(later.contains("    please keep this too\n"));
+        assert_eq!(later.matches("Another unsent draft").count(), 1);
+
+        let rebuilt = with_carried(&later, &[], &[]);
+        assert!(
+            rebuilt.contains("    'd v9\n") && rebuilt.contains("    please keep this too\n"),
+            "regenerating carried-over work must not discard preserved input"
         );
     }
 
