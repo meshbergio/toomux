@@ -40,7 +40,11 @@ class TuiView @JvmOverloads constructor(
 
     private val parser = AnsiFrameParser()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-        typeface = Typeface.MONOSPACE
+        // Lenovo's Android build exposes a proportional face through the
+        // static Typeface.MONOSPACE object even though the named "monospace"
+        // family resolves to DroidSansMono. Resolve the family by name so the
+        // terminal cell advance is genuinely fixed across ASCII glyphs.
+        typeface = Typeface.create("monospace", Typeface.NORMAL)
         isSubpixelText = true
     }
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
