@@ -131,11 +131,39 @@ class TuiView @JvmOverloads constructor(
     fun currentGeometry(): Pair<Int, Int> = gridCols to gridRows
 
     fun containsText(needle: String): Boolean =
-        screen?.lines?.any { line ->
-            buildString {
-                line.forEach { append(it.text) }
-            }.contains(needle)
-        } == true
+        screen?.lines?.any { line -> lineText(line).contains(needle) } == true
+
+    /**
+     * The desktop footer remains visually unchanged, but on touch hardware its
+     * printed Alt shortcuts are tappable. This keeps Toomux's own command
+     * vocabulary as the UI instead of adding a second Android toolbar.
+     */
+    fun shortcutAt(col: Int, row: Int): String? {
+        val value = screen ?: return null
+        val line = value.lines.getOrNull(row - 1) ?: return null
+        val text = lineText(line)
+        val zeroCol = col - 1
+        for ((label, key) in TOUCH_SHORTCUTS) {
+            var from = 0
+            while (true) {
+                val start = text.indexOf(label, from)
+                if (start < 0) break
+                if (zeroCol in start until (start + label.length)) return key
+                from = start + label.length
+            }
+        }
+        return null
+    }
+
+    private fun lineText(line: List<TerminalRun>): String {
+        if (line.isEmpty()) return ""
+        val out = StringBuilder()
+        for (run in line) {
+            while (out.length < run.start) out.append(' ')
+            out.append(run.text)
+        }
+        return out.toString()
+    }
 
     fun showKeyboard() {
         requestFocus()
@@ -358,5 +386,11 @@ class TuiView @JvmOverloads constructor(
         private const val MAX_ROWS = 96
         private const val DEFAULT_BG = -0xF0EBE4
         private const val DEFAULT_FG = -0x241D14
+        private val TOUCH_SHORTCUTS = listOf(
+            "alt-s sessions" to "M-s",
+            "alt-u usage" to "M-u",
+            "alt-m memory" to "M-m",
+            "alt-b list" to "M-b",
+        )
     }
 }
