@@ -136,6 +136,13 @@ class MainActivity : Activity(), TuiView.Listener {
     }
 
     override fun onTap(col: Int, row: Int, right: Boolean) {
+        if (!right) {
+            val shortcut = tui.shortcutAt(col, row)
+            if (shortcut != null) {
+                sendKey(shortcut)
+                return
+            }
+        }
         sendInput { it.tuiTap(col, row, right) }
     }
 
