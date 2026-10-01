@@ -161,6 +161,20 @@ fn window(v: Option<&Value>, percent_key: &str) -> Option<Window> {
 
 impl AccountBook {
     fn absorb(&mut self, r: &Report, fetched: bool) {
+        // A session's status line can carry an older account-wide rate-limit
+        // snapshot even though that session itself just talked to the API.
+        // Within one reset window utilization is a high-water mark: it cannot
+        // legitimately go backwards. Reconcile against both sources before
+        // storing the report so stale per-session snapshots do not pollute the
+        // current value or future history.
+        let mut r = r.clone();
+        for prior in [self.live.as_ref(), self.fetched.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            r.five_hour = incoming_window(r.five_hour, prior.five_hour, r.at_ms);
+            r.seven_day = incoming_window(r.seven_day, prior.seven_day, r.at_ms);
+        }
         if fetched {
             self.fetched = Some(r.clone());
         } else {
@@ -196,14 +210,65 @@ impl AccountBook {
         self.history.drain(..excess);
     }
 
-    /// The freshest report, whichever way it arrived.
-    fn latest(&self) -> Option<(&Report, Source)> {
-        match (&self.live, &self.fetched) {
-            (Some(l), Some(f)) if f.at_ms > l.at_ms => Some((f, Source::Fetched)),
-            (Some(l), _) => Some((l, Source::Live)),
-            (None, Some(f)) => Some((f, Source::Fetched)),
-            (None, None) => None,
+    /// The freshest report, with each still-open window reconciled across
+    /// sources. A newer status-line sample may be fresh in time but stale in
+    /// value; for the same reset timestamp the highest utilization wins.
+    fn latest(&self) -> Option<(Report, Source)> {
+        let (at_ms, source) = match (&self.live, &self.fetched) {
+            (Some(l), Some(f)) if f.at_ms > l.at_ms => (f.at_ms, Source::Fetched),
+            (Some(l), _) => (l.at_ms, Source::Live),
+            (None, Some(f)) => (f.at_ms, Source::Fetched),
+            (None, None) => return None,
+        };
+        Some((
+            Report {
+                five_hour: reconciled_window(
+                    self.live
+                        .as_ref()
+                        .and_then(|r| r.five_hour.map(|w| (w, r.at_ms))),
+                    self.fetched
+                        .as_ref()
+                        .and_then(|r| r.five_hour.map(|w| (w, r.at_ms))),
+                ),
+                seven_day: reconciled_window(
+                    self.live
+                        .as_ref()
+                        .and_then(|r| r.seven_day.map(|w| (w, r.at_ms))),
+                    self.fetched
+                        .as_ref()
+                        .and_then(|r| r.seven_day.map(|w| (w, r.at_ms))),
+                ),
+                at_ms,
+            },
+            source,
+        ))
+    }
+}
+
+/// Preserve a previous value when the incoming report is missing that window,
+/// and never accept a lower utilization for the same reset window.
+fn incoming_window(incoming: Option<Window>, prior: Option<Window>, at_ms: i64) -> Option<Window> {
+    match (incoming, prior) {
+        (Some(mut new), Some(old)) if new.resets_at == old.resets_at => {
+            new.used = new.used.max(old.used);
+            Some(new)
         }
+        (Some(new), _) => Some(new),
+        (None, Some(old)) if old.resets_at * 1000 > at_ms => Some(old),
+        (None, _) => None,
+    }
+}
+
+fn reconciled_window(a: Option<(Window, i64)>, b: Option<(Window, i64)>) -> Option<Window> {
+    match (a, b) {
+        (Some((mut a, _)), Some((b, _))) if a.resets_at == b.resets_at => {
+            a.used = a.used.max(b.used);
+            Some(a)
+        }
+        (Some((a, at)), Some((b, bt))) => Some(if at >= bt { a } else { b }),
+        (Some((a, _)), None) => Some(a),
+        (None, Some((b, _))) => Some(b),
+        (None, None) => None,
     }
 }
 
@@ -291,13 +356,9 @@ pub fn statusline(cfg: &Config) -> String {
         ((), changed)
     });
     // Show the account's best-known numbers, not this session's cached ones.
-    let current = name.as_ref().and_then(|n| {
-        cached_book(|b| {
-            b.accounts
-                .get(n)
-                .and_then(|a| a.latest().map(|(r, _)| r.clone()))
-        })
-    });
+    let current = name
+        .as_ref()
+        .and_then(|n| cached_book(|b| b.accounts.get(n).and_then(|a| a.latest().map(|(r, _)| r))));
     let mut line = render_statusline(
         cfg,
         name.as_deref(),
@@ -1028,5 +1089,68 @@ mod tests {
             None,
         );
         assert_eq!((m.used, m.limited), (0.0, false));
+    }
+
+    #[test]
+    fn same_reset_usage_never_goes_backwards() {
+        let reset = 2_000_000_000;
+        let mut a = AccountBook::default();
+        a.absorb(
+            &Report {
+                seven_day: Some(Window {
+                    used: 96.0,
+                    resets_at: reset,
+                }),
+                at_ms: 100,
+                ..Default::default()
+            },
+            true,
+        );
+        // A newer live status line from another session can contain an older
+        // account snapshot. It must not replace the 96% high-water mark.
+        a.absorb(
+            &Report {
+                seven_day: Some(Window {
+                    used: 87.0,
+                    resets_at: reset,
+                }),
+                at_ms: 200,
+                ..Default::default()
+            },
+            false,
+        );
+        let (r, source) = a.latest().unwrap();
+        assert_eq!(source, Source::Live);
+        assert_eq!(r.at_ms, 200);
+        assert_eq!(r.seven_day.unwrap().used, 96.0);
+        assert_eq!(a.live.unwrap().seven_day.unwrap().used, 96.0);
+    }
+
+    #[test]
+    fn a_new_reset_window_can_start_lower() {
+        let mut a = AccountBook::default();
+        a.absorb(
+            &Report {
+                seven_day: Some(Window {
+                    used: 96.0,
+                    resets_at: 1000,
+                }),
+                at_ms: 100,
+                ..Default::default()
+            },
+            true,
+        );
+        a.absorb(
+            &Report {
+                seven_day: Some(Window {
+                    used: 2.0,
+                    resets_at: 2000,
+                }),
+                at_ms: 200,
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(a.latest().unwrap().0.seven_day.unwrap().used, 2.0);
     }
 }

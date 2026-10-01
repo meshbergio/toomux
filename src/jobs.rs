@@ -22,6 +22,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -169,6 +170,19 @@ pub fn running_for(session: &str) -> Vec<Job> {
     all()
         .into_iter()
         .filter(|j| j.session == session && j.status == "running" && alive_group(j.pgid))
+        .collect()
+}
+
+/// Sessions that currently own at least one live background job.
+///
+/// The registry asks this once per refresh so an idle foreground prompt can
+/// still be shown as `tasks running`. Keeping the process-group liveness check
+/// here means stale job records never turn into false background state.
+pub fn running_sessions() -> HashSet<String> {
+    all()
+        .into_iter()
+        .filter(|j| j.status == "running" && alive_group(j.pgid))
+        .map(|j| j.session)
         .collect()
 }
 

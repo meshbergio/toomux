@@ -313,6 +313,7 @@ pub fn alive(pid: i32, start: Option<&str>) -> bool {
 
 pub fn load(cfg: &Config) -> Vec<Session> {
     let st = crate::state::State::load();
+    let background_jobs = crate::jobs::running_sessions();
     let mut panes = tmux::panes_by_tty();
     // Servers of other people's making (`tmux -L work`) are only asked when a
     // session is found in one, by the TMUX its process was started with.
@@ -385,6 +386,12 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 _ if now - since < finished_window => State::Finished,
                 _ => State::Idle,
             };
+            // Claude's foreground turn can return to the prompt while a
+            // command captured by Toomux is still running. Claude then
+            // reports finished/idle even though the session still owns live
+            // work. Fold Toomux's own job registry into the session state so
+            // the list cannot hide those monitors as plain idle sessions.
+            let state = background_state(state, background_jobs.contains(&r.session_id));
             let named = r.name_source.as_deref() == Some("user")
                 && r.name.as_deref().is_some_and(|n| !n.is_empty());
             let name = match &r.name {
@@ -752,8 +759,41 @@ pub fn find<'a>(sessions: &'a [Session], target: &str) -> anyhow::Result<&'a Ses
     }
 }
 
+fn background_state(state: State, has_running_job: bool) -> State {
+    if has_running_job && matches!(state, State::Finished | State::Idle) {
+        State::Background
+    } else {
+        state
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::State;
+
+    #[test]
+    fn live_background_jobs_outlive_the_foreground_turn() {
+        assert_eq!(
+            super::background_state(State::Idle, true),
+            State::Background
+        );
+        assert_eq!(
+            super::background_state(State::Finished, true),
+            State::Background
+        );
+        // Foreground attention/work remains more important than the fact a
+        // monitor also happens to be running.
+        assert_eq!(
+            super::background_state(State::Working, true),
+            State::Working
+        );
+        assert_eq!(
+            super::background_state(State::NeedsYou, true),
+            State::NeedsYou
+        );
+        assert_eq!(super::background_state(State::Idle, false), State::Idle);
+    }
+
     #[test]
     fn durations_read_naturally() {
         let d = super::duration;
