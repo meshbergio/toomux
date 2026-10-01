@@ -180,7 +180,7 @@ status bar tells you the moment something needs you.
 ## Android over ByteTraverse
 
 The native Android client in [`android/`](android/) is a window onto the real
-Toomux shell, not a second mobile dashboard. The host runs an isolated
+toomux shell, not a second mobile dashboard. The host runs an isolated
 `toomux shell` for the paired device; Android renders that exact ANSI cell grid
 natively and sends touch, keyboard and mouse-equivalent input back to it.
 Grouping, filters, account limits, session menus, the live Claude pane, usage,
@@ -188,7 +188,7 @@ help and the `alt-m` memory graph therefore use the same code and interaction
 model as the desktop TUI.
 
 The normal app surface is a native Kotlin `View`, not a WebView. From the
-memory TUI, `o browser` opens Toomux's existing self-contained GUI memory
+memory TUI, `o browser` opens toomux's existing self-contained GUI memory
 explorer full-screen on the device; that isolated page is the only WebView
 surface and external network requests are blocked.
 
@@ -199,7 +199,7 @@ per-device token, which is held under Android Keystore. Joining the ByteTraverse
 mesh alone is not authority to control toomux.
 
 ByteTraverse remains the network layer rather than being copied into the app.
-That keeps its VPN/transport lifecycle separate, keeps Toomux's MIT/Apache
+That keeps its VPN/transport lifecycle separate, keeps toomux's MIT/Apache
 licensing boundary clear, and means the remote API is reachable only after the
 device can already reach `10.30.0.1` over ByteTraverse. Setup and the exact
 security boundary are in [the Android guide](android/README.md).
@@ -277,7 +277,9 @@ brew install meshbergio/tap/toomux
 toomux init --apply
 ```
 
-Or with npm, anywhere: `npm install -g toomux`.
+Or with npm, anywhere: `npm install -g toomux`. On Windows the npm launcher
+hands off to your default WSL 2 distribution and installs the matching toomux
+release there on first run.
 
 Then press `alt-s` in tmux. You'll need Linux or macOS (Windows through WSL 2),
 tmux 3.2 or later, and Claude Code. Everything is on by default, each part turns

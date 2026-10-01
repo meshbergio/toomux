@@ -1,8 +1,8 @@
 # toomux for Android
 
-Native Android Toomux, reached through ByteTraverse.
+Native Android toomux, reached through ByteTraverse.
 
-The main screen is not a mobile reinterpretation of Toomux. The host starts an
+The main screen is not a mobile reinterpretation of toomux. The host starts an
 isolated `toomux shell` for each paired device, captures its ANSI cell grid, and
 the Android app renders that grid natively. Input goes back into the same shell.
 The result is the desktop product by construction: the same session ordering,
@@ -15,24 +15,24 @@ Touch maps onto that grammar rather than replacing it:
 - the desktop footer remains visually unchanged, but its printed commands are
   touch targets: for example `alt-m memory`, `alt-u usage`, `alt-s sessions`,
   `alt-b list`, `enter focus`, `o browser` and `esc close` invoke those exact
-  Toomux commands;
-- long-press a session = the real Toomux right-click menu;
-- double-tap = Toomux's real desktop double-click (for example, open a
+  toomux commands;
+- long-press a session = the real toomux right-click menu;
+- double-tap = toomux's real desktop double-click (for example, open a
   session from the list);
 - tap the rendered `keys → …` footer = open the Android soft keyboard;
 - pinch = change terminal cell size and therefore the host TUI geometry;
-- long-press the Toomux header = the real `?` help overlay in the normal shell;
+- long-press the toomux header = the real `?` help overlay in the normal shell;
 - in the TUI memory graph, tapping its printed `o browser` command (or using the
   header gesture) opens the immersive GUI memory explorer full-screen.
 
-The GUI explorer is Toomux's existing self-contained memory page, loaded into a
+The GUI explorer is toomux's existing self-contained memory page, loaded into a
 locked-down WebView with file/content access disabled and all HTTP(S)
 subrequests blocked. The ordinary TUI remains a native Canvas renderer.
 
 The app is deliberately split from the VPN. ByteTraverse owns the encrypted
-device-to-host path and its Android `VpnService`; Toomux owns the authenticated
+device-to-host path and its Android `VpnService`; toomux owns the authenticated
 application protocol on top. No ByteTraverse Rust/JNI code is linked into the
-Toomux APK.
+toomux APK.
 
 ## Network and authority
 
@@ -67,7 +67,7 @@ Network reachability is not authentication. Pairing creates a separate
    local key/token. `toomux remote revoke <device-id>` and
    `toomux remote revoke all` are the host-side fallback.
 
-The mobile API is intentionally a Toomux protocol, not a general remote shell.
+The mobile API is intentionally a toomux protocol, not a general remote shell.
 Its primary surface is an authenticated TUI frame/input pair backed by a
 per-device tmux server. Text is sent literally, keys are validated, terminal
 mouse events are bounded to the negotiated grid, and revoking the device kills
@@ -143,6 +143,17 @@ For a connected development device:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n io.github.meshbergio.toomux/.MainActivity
 ```
+
+For a signed release build, keep the release key outside the repository and set
+the four `TOOMUX_ANDROID_*` signing variables. From the repository root:
+
+```sh
+scripts/package-android-release.sh dist
+```
+
+That reruns the Android unit/lint gates, builds the release variant, verifies
+the Android signature, and writes `dist/toomux-android.apk` plus its SHA-256
+file. The tagged GitHub release carries that persistently signed APK.
 
 For initial UI testing before the ByteTraverse peer is up, run the host on
 loopback and use ADB reverse:

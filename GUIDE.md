@@ -449,11 +449,28 @@ Each Claude Code login is an account: a folder chosen with `CLAUDE_CONFIG_DIR`,
 named whatever you like and kept wherever you like. toomux finds every `~/.claude`
 and `~/.claude-*` that holds a login; the config lists them from then on.
 
+In the TUI, press `alt-a` to open **Accounts**. It shows each account's folder,
+login state, shared-history group and running-session count. From there:
+
+- `a` adds an account through the guided flow: name, folder, history sharing,
+  then an optional login. Existing Claude config folders can be adopted as they
+  are.
+- `l` starts the selected account and opens Claude's `/login` flow. The
+  Accounts page notices when the credentials appear and marks it signed in.
+- `s` joins a shared-history group, `u` leaves one, and `x` removes the
+  account from toomux with a separate choice to delete its folder.
+- `esc` backs out of a wizard step, then closes the Accounts page.
+
+If an operation would change an account that still has sessions running, the
+TUI asks before using the same forced path as the CLI's `--force`.
+
 Any account can stand alone, or join a group of accounts that share one history.
 In a group, a conversation resumes under any of its accounts and they all read the
 same memory. Accounts join and leave at any time, and nothing is lost either way.
 Any mix works: all separate, all in one group, two sharing and one alone, or
 several groups.
+
+The CLI remains the scriptable equivalent of the Accounts page:
 
 ```sh
 toomux account                   # each account, its folder, and who it shares with
