@@ -12,12 +12,16 @@ menu, live Claude pane, usage view and `alt-m` memory graph.
 Touch maps onto that grammar rather than replacing it:
 
 - tap = terminal mouse click;
+- the desktop footer remains visually unchanged, but its printed commands are
+  touch targets: for example `alt-m memory`, `alt-u usage`, `alt-s sessions`,
+  `alt-b list`, `enter focus`, `o browser` and `esc close` invoke those exact
+  Toomux commands;
 - long-press a session = the real Toomux right-click menu;
 - double-tap = open the Android keyboard;
 - pinch = change terminal cell size and therefore the host TUI geometry;
-- long-press the Toomux header = the real `?` help overlay;
-- in the TUI memory graph, `o` (or the header gesture) opens the immersive GUI
-  memory explorer full-screen.
+- long-press the Toomux header = the real `?` help overlay in the normal shell;
+- in the TUI memory graph, tapping its printed `o browser` command (or using the
+  header gesture) opens the immersive GUI memory explorer full-screen.
 
 The GUI explorer is Toomux's existing self-contained memory page, loaded into a
 locked-down WebView with file/content access disabled and all HTTP(S)
