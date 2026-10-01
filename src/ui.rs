@@ -261,6 +261,13 @@ enum Cmd {
     UsageToggle,
     /// alt-m: the memory graph.
     MemoryToggle,
+    /// alt-a: account management.
+    Accounts,
+    AccountAdd,
+    AccountLogin,
+    AccountShare,
+    AccountUnshare,
+    AccountRemove,
     /// An entry of the right-click menu.
     MenuPick(usize),
 }
@@ -277,6 +284,25 @@ enum Pending {
     Unqueue(i32),
     /// Several at once, one after another: (what, pids, account for moves).
     Many(Batch, Vec<i32>),
+    Account(AccountPending),
+}
+
+#[derive(Clone)]
+enum AccountPending {
+    Share {
+        index: usize,
+        group: String,
+        force: bool,
+    },
+    Unshare {
+        index: usize,
+        force: bool,
+    },
+    Remove {
+        index: usize,
+        delete: bool,
+        force: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -330,6 +356,112 @@ impl NewFlow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddStep {
+    Name,
+    Folder,
+    Sharing,
+    NewGroup,
+    Creating,
+    Login,
+}
+
+struct AddFlow {
+    step: AddStep,
+    name: String,
+    folder: String,
+    share_sel: usize,
+    groups: Vec<String>,
+    new_group: String,
+    hint: Option<String>,
+    notes: Vec<String>,
+    added: Option<(usize, std::path::PathBuf)>,
+    waiting_login: bool,
+}
+
+impl AddFlow {
+    fn new(cfg: &Config) -> Self {
+        Self {
+            step: AddStep::Name,
+            name: String::new(),
+            folder: String::new(),
+            share_sel: 0,
+            groups: account_groups(cfg),
+            new_group: String::new(),
+            hint: None,
+            notes: Vec::new(),
+            added: None,
+            waiting_login: false,
+        }
+    }
+}
+
+enum AccountAction {
+    Share { groups: Vec<String>, sel: usize },
+}
+
+struct LoginWatch {
+    index: usize,
+    name: String,
+    dir: std::path::PathBuf,
+}
+
+fn account_groups(cfg: &Config) -> Vec<String> {
+    let mut groups = vec![crate::accounts::DEFAULT_GROUP.to_string()];
+    for i in 0..cfg.accounts.len() {
+        let Some(group) = crate::accounts::group_of(&cfg.account_dir(i)) else {
+            continue;
+        };
+        let Some(name) = group.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let group = if name == ".claude-shared" {
+            crate::accounts::DEFAULT_GROUP
+        } else if let Some(name) = name.strip_prefix(".claude-shared-") {
+            name
+        } else {
+            continue;
+        };
+        if !groups.iter().any(|g| g == group) {
+            groups.push(group.to_string());
+        }
+    }
+    groups
+}
+
+struct AccountsView {
+    sel: usize,
+    flow: Option<AddFlow>,
+    action: Option<AccountAction>,
+    login: Vec<bool>,
+    login_watch: Option<LoginWatch>,
+}
+
+impl AccountsView {
+    fn new(cfg: &Config, sel: usize) -> Self {
+        Self {
+            sel: sel.min(cfg.accounts.len().saturating_sub(1)),
+            flow: None,
+            action: None,
+            login: cfg
+                .accounts
+                .iter()
+                .enumerate()
+                .map(|(i, _)| crate::credentials::present(&cfg.account_dir(i)))
+                .collect(),
+            login_watch: None,
+        }
+    }
+}
+
+enum AccountDone {
+    Added(Result<crate::account_ops::Added, String>),
+    Changed {
+        sel: usize,
+        result: Result<Vec<String>, String>,
+    },
+}
+
 enum Mode {
     Normal,
     Help,
@@ -343,6 +475,7 @@ enum Mode {
     Choose(Vec<usize>),
     /// Right-click (or long-press) actions for one session.
     Menu(Menu),
+    Accounts(AccountsView),
 }
 
 struct Menu {
@@ -393,6 +526,8 @@ pub struct App {
     loaded_at: Instant,
     done_tx: Sender<Result<String, String>>,
     done_rx: Receiver<Result<String, String>>,
+    account_done_tx: Sender<AccountDone>,
+    account_done_rx: Receiver<AccountDone>,
     quit: bool,
     attach: Option<Session>,
     attach_pane: Option<String>,
@@ -454,6 +589,7 @@ impl App {
 
     fn with(cfg: Config, sessions: Vec<Session>) -> Self {
         let (done_tx, done_rx) = mpsc::channel();
+        let (account_done_tx, account_done_rx) = mpsc::channel();
         let pal = Palette::new(&cfg);
         let sel = sessions.first().map(|s| s.pid);
         let mut app = Self {
@@ -475,6 +611,8 @@ impl App {
             loaded_at: Instant::now(),
             done_tx,
             done_rx,
+            account_done_tx,
+            account_done_rx,
             quit: false,
             attach: None,
             attach_pane: None,
@@ -523,6 +661,11 @@ impl App {
                     Ok(m) => self.say(m, self.pal.finished),
                     Err(e) => self.say(e, self.pal.attention),
                 }
+                reload = true;
+            }
+            while let Ok(done) = self.account_done_rx.try_recv() {
+                self.working_on = None;
+                self.finish_account_done(done);
                 reload = true;
             }
             if reload {
@@ -609,12 +752,109 @@ impl App {
             .collect();
         self.loaded_at = Instant::now();
         self.rebuild();
+        self.check_account_login();
         // Redraw only when something you'd see is different.
         let seen = self.fingerprint();
         if seen != self.seen {
             self.seen = seen;
             self.dirty = true;
         }
+    }
+
+    fn refresh_config(&mut self) -> Result<()> {
+        self.cfg = Config::load()?;
+        self.pal = Palette::new(&self.cfg);
+        self.usage = crate::usage::summary(&self.cfg, &self.sessions, now_ms());
+        self.plans = (0..self.cfg.accounts.len())
+            .map(|i| crate::usage::plan(&self.cfg, i))
+            .collect();
+        Ok(())
+    }
+
+    fn finish_account_done(&mut self, done: AccountDone) {
+        match done {
+            AccountDone::Added(Ok(added)) => {
+                let _ = self.refresh_config();
+                let mut view = AccountsView::new(&self.cfg, added.index);
+                let mut flow = AddFlow::new(&self.cfg);
+                flow.step = AddStep::Login;
+                flow.name = self
+                    .cfg
+                    .accounts
+                    .get(added.index)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                flow.folder = tilde(&added.dir.display().to_string());
+                flow.notes = added.notes;
+                flow.added = Some((added.index, added.dir));
+                view.flow = Some(flow);
+                self.mode = Mode::Accounts(view);
+            }
+            AccountDone::Added(Err(e)) => {
+                let attempted = match &self.mode {
+                    Mode::Accounts(view) => view.flow.as_ref().map(|f| f.name.clone()),
+                    _ => None,
+                };
+                let _ = self.refresh_config();
+                if let Some(index) = attempted
+                    .as_deref()
+                    .and_then(|name| self.cfg.account_by_name(name))
+                {
+                    self.mode = Mode::Accounts(AccountsView::new(&self.cfg, index));
+                    self.say(
+                        format!(
+                            "{} was created, but its setup needs attention: {e}",
+                            self.cfg.accounts[index].name
+                        ),
+                        self.pal.attention,
+                    );
+                } else {
+                    if let Mode::Accounts(view) = &mut self.mode
+                        && let Some(flow) = &mut view.flow
+                    {
+                        flow.step = AddStep::Sharing;
+                        flow.hint = Some(e.clone());
+                    }
+                    self.say(e, self.pal.attention);
+                }
+            }
+            AccountDone::Changed { sel, result } => {
+                let _ = self.refresh_config();
+                self.mode = Mode::Accounts(AccountsView::new(&self.cfg, sel));
+                match result {
+                    Ok(notes) => {
+                        if !notes.is_empty() {
+                            self.say(notes.join(" · "), self.pal.finished);
+                        }
+                    }
+                    Err(e) => self.say(e, self.pal.attention),
+                }
+            }
+        }
+    }
+
+    fn check_account_login(&mut self) {
+        let watch = match &self.mode {
+            Mode::Accounts(view) => view
+                .login_watch
+                .as_ref()
+                .map(|w| (w.index, w.name.clone(), w.dir.clone())),
+            _ => None,
+        };
+        let Some((index, name, dir)) = watch else {
+            return;
+        };
+        if !crate::credentials::present(&dir) {
+            return;
+        }
+        if let Mode::Accounts(view) = &mut self.mode {
+            if let Some(login) = view.login.get_mut(index) {
+                *login = true;
+            }
+            view.login_watch = None;
+            view.flow = None;
+        }
+        self.say(format!("signed in · {name} is ready"), self.pal.finished);
     }
 
     /// Everything a reload can change on screen, hashed.
@@ -793,6 +1033,10 @@ impl App {
             self.quit = true;
             return;
         }
+        if matches!(self.mode, Mode::Accounts(_)) {
+            self.account_key(k);
+            return;
+        }
         match &self.mode {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Menu(m) => {
@@ -952,6 +1196,9 @@ impl App {
                 KeyCode::Char(c @ '1'..='9') if k.modifiers.contains(KeyModifiers::ALT) => {
                     self.exec(Cmd::JumpPin(c as usize - '1' as usize))
                 }
+                KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::ALT) => {
+                    self.exec(Cmd::Accounts)
+                }
                 // ctrl-u clears a half-typed filter, as in a shell; otherwise usage.
                 KeyCode::Char('u') if ctrl && !self.filter.is_empty() => {
                     self.filter.clear();
@@ -968,7 +1215,483 @@ impl App {
                 }
                 _ => {}
             },
+            Mode::Accounts(_) => unreachable!(),
         }
+    }
+
+    fn account_key(&mut self, k: KeyEvent) {
+        let flow = matches!(&self.mode, Mode::Accounts(v) if v.flow.is_some());
+        if flow {
+            self.account_flow_key(k);
+            return;
+        }
+        let action = matches!(&self.mode, Mode::Accounts(v) if v.action.is_some());
+        if action {
+            let mut choose: Option<(usize, String)> = None;
+            if let Mode::Accounts(view) = &mut self.mode
+                && let Some(AccountAction::Share { groups, sel }) = &mut view.action
+            {
+                match k.code {
+                    KeyCode::Esc => view.action = None,
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        *sel = (*sel + 1).min(groups.len().saturating_sub(1))
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                    KeyCode::Char(c @ '1'..='9') => {
+                        let n = c as usize - '1' as usize;
+                        if n < groups.len() {
+                            *sel = n;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let Some(group) = groups.get(*sel).cloned() {
+                            choose = Some((view.sel, group));
+                            view.action = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((index, group)) = choose {
+                self.request_account_share(index, group);
+            }
+            return;
+        }
+
+        enum Do {
+            None,
+            Login(usize),
+            Share(usize),
+            Unshare(usize),
+            Remove(usize),
+        }
+        let mut do_ = Do::None;
+        if let Mode::Accounts(view) = &mut self.mode {
+            match k.code {
+                KeyCode::Esc => self.mode = Mode::Normal,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    view.sel = (view.sel + 1).min(self.cfg.accounts.len().saturating_sub(1))
+                }
+                KeyCode::Up | KeyCode::Char('k') => view.sel = view.sel.saturating_sub(1),
+                KeyCode::Char('a') => view.flow = Some(AddFlow::new(&self.cfg)),
+                KeyCode::Char('l') => do_ = Do::Login(view.sel),
+                KeyCode::Char('s') => do_ = Do::Share(view.sel),
+                KeyCode::Char('u') => do_ = Do::Unshare(view.sel),
+                KeyCode::Char('x') => do_ = Do::Remove(view.sel),
+                _ => {}
+            }
+        }
+        match do_ {
+            Do::None => {}
+            Do::Login(i) => self.start_account_login(i),
+            Do::Share(i) => self.open_account_share(i),
+            Do::Unshare(i) => self.request_account_unshare(i),
+            Do::Remove(i) => self.request_account_remove(i),
+        }
+    }
+
+    fn account_flow_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let step = match &self.mode {
+            Mode::Accounts(view) => view.flow.as_ref().map(|f| f.step),
+            _ => None,
+        };
+        let Some(step) = step else { return };
+        match step {
+            AddStep::Name => {
+                if k.code == KeyCode::Esc {
+                    if let Mode::Accounts(view) = &mut self.mode {
+                        view.flow = None;
+                    }
+                    return;
+                }
+                let mut advance = false;
+                if let Mode::Accounts(view) = &mut self.mode
+                    && let Some(flow) = &mut view.flow
+                {
+                    match k.code {
+                        KeyCode::Backspace => {
+                            flow.name.pop();
+                        }
+                        KeyCode::Char('u') if ctrl => flow.name.clear(),
+                        KeyCode::Char(c) if !ctrl => flow.name.push(c),
+                        KeyCode::Enter => advance = true,
+                        _ => {}
+                    }
+                    if !flow.name.is_empty() {
+                        flow.hint = crate::accounts::valid_name(&flow.name)
+                            .err()
+                            .map(|e| e.to_string())
+                            .or_else(|| {
+                                self.cfg
+                                    .account_by_name(&flow.name)
+                                    .is_some()
+                                    .then(|| "there's already an account with that name".into())
+                            });
+                    } else {
+                        flow.hint = None;
+                    }
+                }
+                if advance {
+                    let (name, invalid) = match &self.mode {
+                        Mode::Accounts(view) => {
+                            let flow = view.flow.as_ref().unwrap();
+                            let duplicate = self.cfg.account_by_name(&flow.name).is_some();
+                            let invalid = crate::accounts::valid_name(&flow.name)
+                                .err()
+                                .map(|e| e.to_string())
+                                .or_else(|| {
+                                    duplicate
+                                        .then(|| "there's already an account with that name".into())
+                                });
+                            (flow.name.clone(), invalid)
+                        }
+                        _ => return,
+                    };
+                    if let Mode::Accounts(view) = &mut self.mode
+                        && let Some(flow) = &mut view.flow
+                    {
+                        if let Some(e) = invalid {
+                            flow.hint = Some(e);
+                        } else {
+                            flow.folder = format!("~/.claude-{name}");
+                            flow.step = AddStep::Folder;
+                        }
+                    }
+                }
+            }
+            AddStep::Folder => {
+                let mut advance = false;
+                if let Mode::Accounts(view) = &mut self.mode
+                    && let Some(flow) = &mut view.flow
+                {
+                    flow.hint = None;
+                    match k.code {
+                        KeyCode::Esc => flow.step = AddStep::Name,
+                        KeyCode::Backspace => {
+                            flow.folder.pop();
+                        }
+                        KeyCode::Char('u') if ctrl => flow.folder.clear(),
+                        KeyCode::Char(c) if !ctrl => flow.folder.push(c),
+                        KeyCode::Enter => advance = true,
+                        _ => {}
+                    }
+                }
+                if advance {
+                    let (name, folder) = match &self.mode {
+                        Mode::Accounts(view) => {
+                            let f = view.flow.as_ref().unwrap();
+                            (f.name.clone(), f.folder.clone())
+                        }
+                        _ => return,
+                    };
+                    let checked = crate::account_ops::validate_add(
+                        &self.cfg,
+                        &name,
+                        &crate::config::expand(folder.trim()),
+                    );
+                    if let Mode::Accounts(view) = &mut self.mode
+                        && let Some(flow) = &mut view.flow
+                    {
+                        match checked {
+                            Ok(_) => flow.step = AddStep::Sharing,
+                            Err(e) => flow.hint = Some(e.to_string()),
+                        }
+                    }
+                }
+            }
+            AddStep::Sharing => {
+                let mut create: Option<Option<String>> = None;
+                if let Mode::Accounts(view) = &mut self.mode
+                    && let Some(flow) = &mut view.flow
+                {
+                    let choices = flow.groups.len() + 2;
+                    match k.code {
+                        KeyCode::Esc => flow.step = AddStep::Folder,
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            flow.share_sel = (flow.share_sel + 1).min(choices - 1)
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            flow.share_sel = flow.share_sel.saturating_sub(1)
+                        }
+                        KeyCode::Char(c @ '1'..='9') => {
+                            let n = c as usize - '1' as usize;
+                            if n < choices {
+                                flow.share_sel = n;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if flow.share_sel == choices - 1 {
+                                flow.new_group.clear();
+                                flow.step = AddStep::NewGroup;
+                            } else if flow.share_sel == 0 {
+                                create = Some(None);
+                            } else {
+                                create = Some(flow.groups.get(flow.share_sel - 1).cloned());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(group) = create {
+                    self.start_account_add(group);
+                }
+            }
+            AddStep::NewGroup => {
+                let mut create: Option<String> = None;
+                if let Mode::Accounts(view) = &mut self.mode
+                    && let Some(flow) = &mut view.flow
+                {
+                    flow.hint = None;
+                    match k.code {
+                        KeyCode::Esc => flow.step = AddStep::Sharing,
+                        KeyCode::Backspace => {
+                            flow.new_group.pop();
+                        }
+                        KeyCode::Char('u') if ctrl => flow.new_group.clear(),
+                        KeyCode::Char(c) if !ctrl => flow.new_group.push(c),
+                        KeyCode::Enter => {
+                            if let Err(e) = crate::accounts::valid_name(&flow.new_group) {
+                                flow.hint = Some(e.to_string());
+                            } else {
+                                create = Some(flow.new_group.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(group) = create {
+                    self.start_account_add(Some(group));
+                }
+            }
+            AddStep::Creating => {}
+            AddStep::Login => match k.code {
+                KeyCode::Esc => {
+                    if let Mode::Accounts(view) = &mut self.mode {
+                        view.flow = None;
+                    }
+                    self.say("log in later with l".into(), self.pal.dim);
+                }
+                KeyCode::Enter => {
+                    let index = match &self.mode {
+                        Mode::Accounts(view) => view
+                            .flow
+                            .as_ref()
+                            .and_then(|f| f.added.as_ref().map(|(i, _)| *i)),
+                        _ => None,
+                    };
+                    if let Some(i) = index {
+                        self.start_account_login(i);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn start_account_add(&mut self, group: Option<String>) {
+        let (name, folder) = match &mut self.mode {
+            Mode::Accounts(view) => {
+                let Some(flow) = &mut view.flow else { return };
+                flow.step = AddStep::Creating;
+                flow.hint = None;
+                (flow.name.clone(), flow.folder.clone())
+            }
+            _ => return,
+        };
+        let (mut cfg, tx) = (self.cfg.clone(), self.account_done_tx.clone());
+        self.working_on = Some(format!("adding {name}"));
+        std::thread::spawn(move || {
+            let result = (|| -> Result<crate::account_ops::Added> {
+                let mut added =
+                    crate::account_ops::add(&mut cfg, &name, Some(crate::config::expand(&folder)))?;
+                if let Some(group) = group {
+                    match crate::account_ops::share(&cfg, &[added.index], &group, false, false) {
+                        Ok(notes) => added.notes.extend(notes),
+                        Err(e) => added
+                            .notes
+                            .push(format!("{name}: account is ready, but sharing failed: {e}")),
+                    }
+                }
+                Ok(added)
+            })()
+            .map_err(|e| e.to_string());
+            let _ = tx.send(AccountDone::Added(result));
+        });
+    }
+
+    fn start_account_login(&mut self, index: usize) {
+        let Some(account) = self.cfg.accounts.get(index) else {
+            return;
+        };
+        let name = account.name.clone();
+        let dir = self.cfg.account_dir(index);
+        let cwd = dir.display().to_string();
+        match actions::start(&self.cfg, &cwd, index, &[]) {
+            Ok(pane) => {
+                if let Mode::Accounts(view) = &mut self.mode {
+                    view.login_watch = Some(LoginWatch {
+                        index,
+                        name: name.clone(),
+                        dir: dir.clone(),
+                    });
+                    if let Some(flow) = &mut view.flow {
+                        flow.waiting_login = true;
+                    }
+                }
+                std::thread::spawn(move || {
+                    for _ in 0..12 {
+                        std::thread::sleep(Duration::from_millis(350));
+                        if actions::prompt_empty(&pane) {
+                            let _ = actions::type_prompt(&pane, "/login");
+                            break;
+                        }
+                    }
+                });
+                self.say(format!("waiting for {name} to sign in…"), self.pal.working);
+            }
+            Err(e) => self.say(e.to_string(), self.pal.attention),
+        }
+    }
+
+    fn open_account_share(&mut self, index: usize) {
+        if index >= self.cfg.accounts.len() {
+            return;
+        }
+        if let Mode::Accounts(view) = &mut self.mode {
+            view.action = Some(AccountAction::Share {
+                groups: account_groups(&self.cfg),
+                sel: 0,
+            });
+        }
+    }
+
+    fn request_account_share(&mut self, index: usize, group: String) {
+        let n = self
+            .sessions
+            .iter()
+            .filter(|s| !s.dormant && s.account == Some(index))
+            .count();
+        if n > 0 {
+            let name = self.cfg.accounts[index].name.clone();
+            self.mode = Mode::Confirm(
+                format!(
+                    "{n} session{} run on {name} · share anyway?",
+                    if n == 1 { "" } else { "s" }
+                ),
+                Pending::Account(AccountPending::Share {
+                    index,
+                    group,
+                    force: true,
+                }),
+            );
+        } else {
+            self.run_account_pending(AccountPending::Share {
+                index,
+                group,
+                force: false,
+            });
+        }
+    }
+
+    fn request_account_unshare(&mut self, index: usize) {
+        if index >= self.cfg.accounts.len() {
+            return;
+        }
+        let n = self
+            .sessions
+            .iter()
+            .filter(|s| !s.dormant && s.account == Some(index))
+            .count();
+        if n > 0 {
+            let name = self.cfg.accounts[index].name.clone();
+            self.mode = Mode::Confirm(
+                format!(
+                    "{n} session{} run on {name} · unshare anyway?",
+                    if n == 1 { "" } else { "s" }
+                ),
+                Pending::Account(AccountPending::Unshare { index, force: true }),
+            );
+        } else {
+            self.run_account_pending(AccountPending::Unshare {
+                index,
+                force: false,
+            });
+        }
+    }
+
+    fn request_account_remove(&mut self, index: usize) {
+        if index >= self.cfg.accounts.len() {
+            return;
+        }
+        let n = self
+            .sessions
+            .iter()
+            .filter(|s| !s.dormant && s.account == Some(index))
+            .count();
+        let name = self.cfg.accounts[index].name.clone();
+        let busy = if n == 0 {
+            String::new()
+        } else {
+            format!(" · {n} session{} run on it", if n == 1 { "" } else { "s" })
+        };
+        self.mode = Mode::Offer(
+            format!("remove {name} from toomux?{busy}"),
+            Pending::Account(AccountPending::Remove {
+                index,
+                delete: false,
+                force: n > 0,
+            }),
+            "delete folder".into(),
+            Pending::Account(AccountPending::Remove {
+                index,
+                delete: true,
+                force: n > 0,
+            }),
+        );
+    }
+
+    fn run_account_pending(&mut self, op: AccountPending) {
+        let (sel, label) = match &op {
+            AccountPending::Share { index, group, .. } => (
+                *index,
+                format!("sharing {} in {group}", self.cfg.accounts[*index].name),
+            ),
+            AccountPending::Unshare { index, .. } => (
+                *index,
+                format!("unsharing {}", self.cfg.accounts[*index].name),
+            ),
+            AccountPending::Remove { index, delete, .. } => (
+                *index,
+                format!(
+                    "removing {}{}",
+                    self.cfg.accounts[*index].name,
+                    if *delete { " and its folder" } else { "" }
+                ),
+            ),
+        };
+        self.mode = Mode::Accounts(AccountsView::new(&self.cfg, sel));
+        self.working_on = Some(label);
+        let (mut cfg, tx) = (self.cfg.clone(), self.account_done_tx.clone());
+        std::thread::spawn(move || {
+            let result = match op {
+                AccountPending::Share {
+                    index,
+                    group,
+                    force,
+                } => crate::account_ops::share(&cfg, &[index], &group, false, force),
+                AccountPending::Unshare { index, force } => {
+                    crate::account_ops::unshare(&cfg, &[index], false, false, force)
+                }
+                AccountPending::Remove {
+                    index,
+                    delete,
+                    force,
+                } => crate::account_ops::remove(&mut cfg, index, delete, force),
+            }
+            .map_err(|e| e.to_string());
+            let _ = tx.send(AccountDone::Changed { sel, result });
+        });
     }
 
     fn click(&mut self, x: u16, y: u16) {
@@ -979,6 +1702,15 @@ impl App {
         }
         if matches!(self.mode, Mode::Menu(_) | Mode::Help) {
             self.mode = Mode::Normal;
+            return;
+        }
+        if let Mode::Accounts(view) = &mut self.mode {
+            if view.flow.is_none()
+                && view.action.is_none()
+                && let Some(&(_, index)) = self.list_hits.iter().find(|(r, _)| inside(r))
+            {
+                view.sel = (index as usize).min(self.cfg.accounts.len().saturating_sub(1));
+            }
             return;
         }
         if let Mode::Sweep(_) = self.mode {
@@ -1103,6 +1835,18 @@ impl App {
     }
 
     fn exec(&mut self, cmd: Cmd) {
+        if matches!(self.mode, Mode::Accounts(_)) {
+            let key = match cmd {
+                Cmd::Yes => Some(KeyCode::Enter),
+                Cmd::No => Some(KeyCode::Esc),
+                Cmd::Pick(n) if n < 9 => Some(KeyCode::Char(char::from(b'1' + n as u8))),
+                _ => None,
+            };
+            if let Some(code) = key {
+                self.account_key(KeyEvent::new(code, KeyModifiers::NONE));
+                return;
+            }
+        }
         match cmd {
             Cmd::MenuPick(n) => {
                 let Mode::Menu(m) = std::mem::replace(&mut self.mode, Mode::Normal) else {
@@ -1163,6 +1907,36 @@ impl App {
         }
         if matches!(self.mode, Mode::Help) {
             self.mode = Mode::Normal;
+            return;
+        }
+        if matches!(cmd, Cmd::Accounts) {
+            self.mode = Mode::Accounts(AccountsView::new(&self.cfg, 0));
+            return;
+        }
+        if matches!(
+            cmd,
+            Cmd::AccountAdd
+                | Cmd::AccountLogin
+                | Cmd::AccountShare
+                | Cmd::AccountUnshare
+                | Cmd::AccountRemove
+        ) {
+            let index = match &self.mode {
+                Mode::Accounts(view) => view.sel,
+                _ => return,
+            };
+            match cmd {
+                Cmd::AccountAdd => {
+                    if let Mode::Accounts(view) = &mut self.mode {
+                        view.flow = Some(AddFlow::new(&self.cfg));
+                    }
+                }
+                Cmd::AccountLogin => self.start_account_login(index),
+                Cmd::AccountShare => self.open_account_share(index),
+                Cmd::AccountUnshare => self.request_account_unshare(index),
+                Cmd::AccountRemove => self.request_account_remove(index),
+                _ => {}
+            }
             return;
         }
         if matches!(cmd, Cmd::Sweep) {
@@ -1230,10 +2004,35 @@ impl App {
             else {
                 return;
             };
+            let account_sel = match (&one, &all) {
+                (Pending::Account(AccountPending::Remove { index, .. }), _)
+                | (_, Pending::Account(AccountPending::Remove { index, .. })) => Some(*index),
+                _ => None,
+            };
             match cmd {
                 Cmd::Yes => self.run_pending(one),
                 Cmd::All => self.run_pending(all),
-                _ => {}
+                _ => {
+                    if let Some(sel) = account_sel {
+                        self.mode = Mode::Accounts(AccountsView::new(&self.cfg, sel));
+                    }
+                }
+            }
+            return;
+        }
+        if matches!(self.mode, Mode::Confirm(_, Pending::Account(_))) {
+            let Mode::Confirm(_, pending) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                return;
+            };
+            let sel = match &pending {
+                Pending::Account(AccountPending::Share { index, .. })
+                | Pending::Account(AccountPending::Unshare { index, .. })
+                | Pending::Account(AccountPending::Remove { index, .. }) => *index,
+                _ => 0,
+            };
+            match cmd {
+                Cmd::Yes => self.run_pending(pending),
+                _ => self.mode = Mode::Accounts(AccountsView::new(&self.cfg, sel)),
             }
             return;
         }
@@ -1272,6 +2071,12 @@ impl App {
             | Cmd::Usage(_)
             | Cmd::UsageToggle
             | Cmd::MemoryToggle
+            | Cmd::Accounts
+            | Cmd::AccountAdd
+            | Cmd::AccountLogin
+            | Cmd::AccountShare
+            | Cmd::AccountUnshare
+            | Cmd::AccountRemove
             | Cmd::MenuPick(_) => {}
             Cmd::Help => self.mode = Mode::Help,
             Cmd::RestoreAll => {
@@ -1612,6 +2417,10 @@ impl App {
     }
 
     fn run_pending(&mut self, p: Pending) {
+        if let Pending::Account(op) = p {
+            self.run_account_pending(op);
+            return;
+        }
         if let Pending::Many(batch, pids) = p {
             let targets: Vec<Session> = pids
                 .iter()
@@ -1653,6 +2462,7 @@ impl App {
             | Pending::Close(pid)
             | Pending::Unqueue(pid) => *pid,
             Pending::Many(..) => unreachable!(),
+            Pending::Account(_) => unreachable!(),
         };
         let Some(s) = self.sessions.iter().find(|x| x.pid == pid).cloned() else {
             return;
@@ -1690,7 +2500,7 @@ impl App {
             }
             Pending::Adopt(_) => format!("bringing {label} into tmux"),
             Pending::Close(_) => format!("closing {label}"),
-            Pending::Unqueue(_) | Pending::Many(..) => unreachable!(),
+            Pending::Unqueue(_) | Pending::Many(..) | Pending::Account(_) => unreachable!(),
         });
         std::thread::spawn(move || {
             let r = match p {
@@ -1699,7 +2509,7 @@ impl App {
                 }
                 Pending::Adopt(_) => actions::adopt(&cfg, &s),
                 Pending::Close(_) => actions::close(&cfg, &s),
-                Pending::Unqueue(_) | Pending::Many(..) => unreachable!(),
+                Pending::Unqueue(_) | Pending::Many(..) | Pending::Account(_) => unreachable!(),
             };
             let _ = tx.send(r.map_err(|e| e.to_string()));
         });
@@ -1760,7 +2570,9 @@ impl App {
         }
         // Hairlines close off the header and footer, meeting the divider.
         let mut divider_x: Option<u16> = None;
-        if matches!(self.mode, Mode::New(_)) {
+        if matches!(self.mode, Mode::Accounts(_)) {
+            self.draw_accounts(f, body);
+        } else if matches!(self.mode, Mode::New(_)) {
             self.draw_new_head(f, head);
             if self.sidebar {
                 self.draw_places(f, body);
@@ -2108,6 +2920,7 @@ impl App {
                     ("^p", "pin it to alt-1..9 · again to unpin"),
                     ("^n", "start a new session in a recent folder"),
                     ("^u", "usage: each account's 5-hour and weekly limits"),
+                    ("alt-a", "accounts: sign in, add, share, unshare or remove"),
                     ("^s", "clean up sessions idle for days"),
                     ("^e", "reopen what was running before a restart"),
                     ("tab", "group by attention, account or project"),
@@ -3409,6 +4222,302 @@ impl App {
         }
     }
 
+    fn draw_accounts(&mut self, f: &mut Frame, area: Rect) {
+        let p = &self.pal;
+        f.render_widget(Block::new().style(Style::new().bg(p.well)), area);
+        let title_h = 4.min(area.height);
+        let title = Rect {
+            height: title_h,
+            ..area
+        };
+        f.render_widget(Block::new().style(Style::new().bg(p.raised)), title);
+        if title_h > 1 {
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        "accounts",
+                        Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        "Claude Code identities, their folders, login and shared history",
+                        Style::new().fg(p.muted),
+                    )),
+                ]),
+                Rect {
+                    x: area.x + 2,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(4),
+                    height: title_h.saturating_sub(1),
+                },
+            );
+        }
+        let body = Rect {
+            x: area.x + 2,
+            y: area.y + title_h,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(title_h),
+        };
+        let (sel, login) = match &self.mode {
+            Mode::Accounts(view) => (view.sel, view.login.clone()),
+            _ => return,
+        };
+        if self.cfg.accounts.is_empty() {
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::raw(""),
+                    Line::from(Span::styled(
+                        "no accounts yet",
+                        Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        "press a to add your first Claude Code account",
+                        Style::new().fg(p.dim),
+                    )),
+                ]),
+                body,
+            );
+        } else {
+            let rows_fit = usize::from(body.height.saturating_add(1) / 4).max(1);
+            let first = sel.saturating_add(1).saturating_sub(rows_fit);
+            let mut y = body.y;
+            for (i, account) in self.cfg.accounts.iter().enumerate().skip(first) {
+                if y >= body.y + body.height {
+                    break;
+                }
+                let dir = self.cfg.account_dir(i);
+                let group = crate::accounts::group_of(&dir);
+                let sharing = match group.as_ref() {
+                    None => "stands alone".to_string(),
+                    Some(group) => {
+                        let with: Vec<&str> = (0..self.cfg.accounts.len())
+                            .filter(|&j| {
+                                j != i
+                                    && crate::accounts::group_of(&self.cfg.account_dir(j)).as_ref()
+                                        == Some(group)
+                            })
+                            .map(|j| self.cfg.accounts[j].name.as_str())
+                            .collect();
+                        let (_, own) = crate::accounts::describe(&dir, group);
+                        let own = if own.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · own: {}", own.join(", "))
+                        };
+                        if with.is_empty() {
+                            format!("shares in {}{own}", tilde(&group.display().to_string()))
+                        } else {
+                            format!(
+                                "shares with {} in {}{own}",
+                                with.join(", "),
+                                tilde(&group.display().to_string())
+                            )
+                        }
+                    }
+                };
+                let running = self
+                    .sessions
+                    .iter()
+                    .filter(|s| !s.dormant && s.account == Some(i))
+                    .count();
+                let login = if login.get(i).copied().unwrap_or(false) {
+                    "signed in"
+                } else {
+                    "not logged in"
+                };
+                let selected = i == sel;
+                let h = 3.min(body.y + body.height - y);
+                let row = Rect {
+                    x: body.x,
+                    y,
+                    width: body.width,
+                    height: h,
+                };
+                if selected {
+                    f.render_widget(Block::new().style(Style::new().bg(p.selection)), row);
+                }
+                let mark = if selected { "› " } else { "  " };
+                let running = if running == 0 {
+                    "no running sessions".to_string()
+                } else {
+                    format!(
+                        "{running} running session{}",
+                        if running == 1 { "" } else { "s" }
+                    )
+                };
+                let lines = vec![
+                    Line::from(vec![
+                        Span::styled(mark, Style::new().fg(p.accent)),
+                        Span::styled(
+                            account.name.clone(),
+                            Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(format!("   {login}"), Style::new().fg(p.dim)),
+                        Span::styled(format!("   {running}"), Style::new().fg(p.muted)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(tilde(&dir.display().to_string()), Style::new().fg(p.dim)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(sharing, Style::new().fg(p.muted)),
+                    ]),
+                ];
+                f.render_widget(Paragraph::new(lines), row);
+                self.list_hits.push((row, i as i32));
+                y = y.saturating_add(h + 1);
+            }
+        }
+        self.draw_account_overlay(f, area);
+    }
+
+    fn draw_account_overlay(&mut self, f: &mut Frame, area: Rect) {
+        let p = &self.pal;
+        let Mode::Accounts(view) = &self.mode else {
+            return;
+        };
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        if let Some(flow) = &view.flow {
+            lines.push(Line::from(Span::styled(
+                "add account",
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::raw(""));
+            match flow.step {
+                AddStep::Name => {
+                    lines.push(Line::from(vec![
+                        Span::styled("name  ", Style::new().fg(p.muted)),
+                        Span::styled(format!("{}▏", flow.name), Style::new().fg(p.text)),
+                    ]));
+                    lines.push(Line::from(Span::styled(
+                        "letters, digits, - and _",
+                        Style::new().fg(p.muted),
+                    )));
+                }
+                AddStep::Folder => {
+                    lines.push(Line::from(vec![
+                        Span::styled("folder  ", Style::new().fg(p.muted)),
+                        Span::styled(format!("{}▏", flow.folder), Style::new().fg(p.text)),
+                    ]));
+                    let dir = crate::config::expand(&flow.folder);
+                    let what = if dir.is_dir() {
+                        format!("adopt {} as it is", tilde(&dir.display().to_string()))
+                    } else {
+                        "a new Claude Code config folder".into()
+                    };
+                    lines.push(Line::from(Span::styled(what, Style::new().fg(p.muted))));
+                }
+                AddStep::Sharing => {
+                    lines.push(Line::from(Span::styled(
+                        "history",
+                        Style::new().fg(p.muted),
+                    )));
+                    let mut choices = vec!["stand alone".to_string()];
+                    choices.extend(flow.groups.iter().map(|g| format!("join {g}")));
+                    choices.push("new group…".into());
+                    for (i, choice) in choices.iter().enumerate() {
+                        let selected = i == flow.share_sel;
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("{} {}  ", if selected { "›" } else { " " }, i + 1),
+                                Style::new().fg(if selected { p.accent } else { p.muted }),
+                            ),
+                            Span::styled(
+                                choice.clone(),
+                                Style::new().fg(if selected { p.text } else { p.dim }),
+                            ),
+                        ]));
+                    }
+                }
+                AddStep::NewGroup => {
+                    lines.push(Line::from(vec![
+                        Span::styled("group  ", Style::new().fg(p.muted)),
+                        Span::styled(format!("{}▏", flow.new_group), Style::new().fg(p.text)),
+                    ]));
+                }
+                AddStep::Creating => {
+                    lines.push(Line::from(Span::styled(
+                        "creating the account and configuring toomux…",
+                        Style::new().fg(p.working),
+                    )));
+                }
+                AddStep::Login => {
+                    lines.push(Line::from(Span::styled(
+                        format!("{} is ready", flow.name),
+                        Style::new().fg(p.finished),
+                    )));
+                    for note in &flow.notes {
+                        lines.extend(
+                            wrap_spans(&[(note.clone(), Style::new().fg(p.dim))], 72, 72)
+                                .into_iter()
+                                .map(Line::from),
+                        );
+                    }
+                    lines.push(Line::raw(""));
+                    lines.push(Line::from(Span::styled(
+                        if flow.waiting_login {
+                            "waiting for login…"
+                        } else {
+                            "log in now, or do it later from the Accounts page"
+                        },
+                        Style::new().fg(if flow.waiting_login {
+                            p.working
+                        } else {
+                            p.text
+                        }),
+                    )));
+                }
+            }
+            if let Some(hint) = &flow.hint {
+                lines.push(Line::raw(""));
+                lines.extend(
+                    wrap_spans(&[(hint.clone(), Style::new().fg(p.attention))], 72, 72)
+                        .into_iter()
+                        .map(Line::from),
+                );
+            }
+        } else if let Some(AccountAction::Share { groups, sel }) = &view.action {
+            lines.push(Line::from(Span::styled(
+                "share history with",
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::raw(""));
+            for (i, group) in groups.iter().enumerate() {
+                let selected = i == *sel;
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} {}  ", if selected { "›" } else { " " }, i + 1),
+                        Style::new().fg(if selected { p.accent } else { p.muted }),
+                    ),
+                    Span::styled(
+                        group.clone(),
+                        Style::new().fg(if selected { p.text } else { p.dim }),
+                    ),
+                ]));
+            }
+        } else {
+            return;
+        }
+        let w =
+            (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 8).clamp(34, area.width);
+        let h = (lines.len() as u16 + 4).min(area.height);
+        let r = Rect {
+            x: area.x + area.width.saturating_sub(w) / 2,
+            y: area.y + area.height.saturating_sub(h) / 2,
+            width: w,
+            height: h,
+        };
+        f.render_widget(ratatui::widgets::Clear, r);
+        let block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(p.muted).bg(p.overlay))
+            .style(Style::new().bg(p.overlay))
+            .padding(ratatui::widgets::Padding::new(3, 3, 1, 1));
+        let inner = block.inner(r);
+        f.render_widget(block, r);
+        f.render_widget(Paragraph::new(Text::from(lines)), inner);
+    }
+
     fn preview_text(&mut self, s: &Session, area: Rect) -> Text<'static> {
         // A working pane changes constantly; a resting one rarely does.
         let fresh = match &s.pane {
@@ -3532,6 +4641,14 @@ impl App {
                     ("esc".into(), "no".into(), Cmd::No),
                 ],
             ),
+            Mode::Offer(prompt, Pending::Account(AccountPending::Remove { .. }), label, _) => (
+                Some(prompt.clone()),
+                vec![
+                    ("enter".into(), "keep folder".into(), Cmd::Yes),
+                    ("a".into(), label.clone(), Cmd::All),
+                    ("esc".into(), "back".into(), Cmd::No),
+                ],
+            ),
             Mode::Offer(prompt, _, label, _) => (
                 Some(prompt.clone()),
                 vec![
@@ -3603,6 +4720,51 @@ impl App {
                     (Some(format!("start in {leaf} on")), h)
                 }
             },
+            Mode::Accounts(view) => {
+                if let Some(flow) = &view.flow {
+                    let lead = match flow.step {
+                        AddStep::Name => Some(format!("name  {}▏", flow.name)),
+                        AddStep::Folder => Some(format!("folder  {}▏", flow.folder)),
+                        AddStep::Sharing => Some("choose history".into()),
+                        AddStep::NewGroup => Some(format!("group  {}▏", flow.new_group)),
+                        AddStep::Creating => Some("creating account".into()),
+                        AddStep::Login if flow.waiting_login => Some("waiting for login…".into()),
+                        AddStep::Login => Some(format!("{} is ready", flow.name)),
+                    };
+                    let hints = match flow.step {
+                        AddStep::Creating => vec![],
+                        AddStep::Login => vec![
+                            ("enter".into(), "log in now".into(), Cmd::Yes),
+                            ("esc".into(), "later".into(), Cmd::No),
+                        ],
+                        _ => vec![
+                            ("enter".into(), "next".into(), Cmd::Yes),
+                            ("esc".into(), "back".into(), Cmd::No),
+                        ],
+                    };
+                    (lead, hints)
+                } else if view.action.is_some() {
+                    (
+                        Some("share history with".into()),
+                        vec![
+                            ("enter".into(), "choose".into(), Cmd::Yes),
+                            ("esc".into(), "back".into(), Cmd::No),
+                        ],
+                    )
+                } else {
+                    (
+                        Some("↑↓ select".into()),
+                        vec![
+                            ("a".into(), "add".into(), Cmd::AccountAdd),
+                            ("l".into(), "login".into(), Cmd::AccountLogin),
+                            ("s".into(), "share".into(), Cmd::AccountShare),
+                            ("u".into(), "unshare".into(), Cmd::AccountUnshare),
+                            ("x".into(), "remove".into(), Cmd::AccountRemove),
+                            ("esc".into(), "close".into(), Cmd::No),
+                        ],
+                    )
+                }
+            }
             Mode::Normal => {
                 let sel = self.selected();
                 let dormant = sel.is_some_and(|s| s.dormant);
@@ -3633,6 +4795,7 @@ impl App {
                         1,
                     ));
                 }
+                h.push(("alt-a".into(), "accounts", Cmd::Accounts, 1));
                 if outside {
                     h.push(("^o".into(), "into tmux", Cmd::Adopt, 1));
                 }
@@ -4270,6 +5433,144 @@ mod tests {
             foot.contains("enter reopen") && !foot.contains("^a"),
             "{foot}"
         );
+    }
+
+    #[test]
+    fn alt_a_opens_accounts_with_status_and_closes_with_escape() {
+        let mut app = App::with(cfg(), sample());
+        app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+        assert!(matches!(app.mode, Mode::Accounts(_)));
+        let out = render(&mut app, 120, 32);
+        assert!(out.contains("accounts"), "{out}");
+        assert!(out.contains("work") && out.contains("home"), "{out}");
+        assert!(out.contains("not logged in"), "{out}");
+        assert!(out.contains("running session"), "{out}");
+        let foot = out.lines().last().unwrap();
+        for hint in [
+            "a add",
+            "l login",
+            "s share",
+            "u unshare",
+            "x remove",
+            "esc close",
+        ] {
+            assert!(foot.contains(hint), "missing {hint}: {foot}");
+        }
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn add_account_wizard_validates_name_folder_and_sharing_before_mutation() {
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::Accounts);
+        app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "work".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        assert!(
+            view.flow
+                .as_ref()
+                .and_then(|f| f.hint.as_deref())
+                .is_some_and(|h| h.contains("already an account")),
+            "duplicate names should be rejected while typing"
+        );
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        let flow = view.flow.as_ref().unwrap();
+        assert_eq!(flow.step, AddStep::Name);
+        assert!(
+            flow.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("already an account"))
+        );
+
+        app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for c in "wiztest".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        if let Mode::Accounts(view) = &mut app.mode {
+            let flow = view.flow.as_mut().unwrap();
+            assert_eq!(flow.step, AddStep::Folder);
+            flow.folder = format!("/tmp/toomux-ui-wiztest-{}", std::process::id());
+        } else {
+            panic!("accounts should stay open");
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        assert_eq!(view.flow.as_ref().unwrap().step, AddStep::Sharing);
+        let out = render(&mut app, 120, 32);
+        assert!(out.contains("stand alone"), "{out}");
+        assert!(out.contains("join shared"), "{out}");
+        assert!(out.contains("new group"), "{out}");
+
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(
+            app.mode,
+            Mode::Accounts(AccountsView {
+                flow: Some(AddFlow {
+                    step: AddStep::Folder,
+                    ..
+                }),
+                ..
+            })
+        ));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(
+            app.mode,
+            Mode::Accounts(AccountsView { flow: None, .. })
+        ));
+    }
+
+    #[test]
+    fn accounts_rows_are_touch_selectable() {
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::Accounts);
+        let _ = render(&mut app, 120, 32);
+        let row = app
+            .list_hits
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .map(|(r, _)| *r)
+            .expect("second account row");
+        app.click(row.x + 1, row.y + 1);
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        assert_eq!(view.sel, 1);
+    }
+
+    #[test]
+    fn help_advertises_accounts_shortcut() {
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::Help);
+        let out = render(&mut app, 120, 40);
+        assert!(
+            out.contains("alt-a") && out.contains("accounts: sign in, add, share"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn account_remove_offer_names_keep_and_delete_folder_choices() {
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::Accounts);
+        app.exec(Cmd::AccountRemove);
+        let out = render(&mut app, 140, 24);
+        assert!(out.contains("remove work from toomux?"), "{out}");
+        let foot = out.lines().last().unwrap();
+        assert!(foot.contains("enter keep folder"), "{foot}");
+        assert!(foot.contains("a delete folder"), "{foot}");
+        assert!(foot.contains("esc back"), "{foot}");
     }
 
     #[test]

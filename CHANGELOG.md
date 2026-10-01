@@ -6,6 +6,19 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+### Added
+
+- Add an `alt-a` Accounts page to the TUI for account status, login, sharing,
+  unsharing and removal.
+- Add an in-TUI account wizard for creating or adopting a Claude Code account,
+  choosing its shared-history group and optionally signing in immediately.
+
+### Changed
+
+- Route CLI and TUI account mutations through one account operation layer so
+  both surfaces use the same path safety, busy-session guards and
+  data-preservation semantics.
+
 ## 0.2.0 - 2026-10-01
 
 ### Added

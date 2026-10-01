@@ -1,6 +1,7 @@
 //! toomux: a calm control center for every Claude Code session on the
 //! machine. The CLI (`toomux`) and the native app (`toomux-app`) share this.
 
+pub mod account_ops;
 pub mod accounts;
 pub mod actions;
 pub mod archive;

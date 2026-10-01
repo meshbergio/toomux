@@ -1,7 +1,13 @@
-//! Taking back what `toomux init --apply` added: only what it added, found by
-//! its markers, so anything you changed since stays as you left it.
+//! Installing and taking back toomux's Claude Code integration.
+//!
+//! The binary and the TUI both add accounts, so the settings/hooks/MCP pieces
+//! live here rather than in main.rs. Removal still keys off the same markers,
+//! so anything the user changed remains theirs.
 
+use anyhow::{Context, Result};
 use serde_json::Value;
+
+use crate::config::{self, Config};
 
 pub const BEGIN: &str = "# >>> toomux >>>";
 pub const END: &str = "# <<< toomux <<<";
@@ -77,6 +83,144 @@ pub fn strip_segment(s: &str) -> String {
 /// status line's colours (a voyage's scene above all) need all of them. tmux
 /// maps them down for a terminal that can't show them.
 pub const TRUECOLOR_ENV: &str = "CLAUDE_CODE_TMUX_TRUECOLOR";
+
+/// Route Bash through toomux, so large outputs are kept whole but shown short.
+pub fn install_hook(dir: &std::path::Path, bin: &str) -> Result<String> {
+    let path = std::fs::canonicalize(dir.join("settings.json"))
+        .unwrap_or_else(|_| dir.join("settings.json"));
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let mut v: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let wanted = [
+        (
+            "PreToolUse",
+            "hook pre-tool",
+            serde_json::json!({"matcher": "*", "hooks": [{"type": "command", "command": format!("{bin} hook pre-tool"), "timeout": 10}]}),
+        ),
+        (
+            "Stop",
+            "hook stop",
+            serde_json::json!({"hooks": [{"type": "command", "command": format!("{bin} hook stop"), "timeout": 600}]}),
+        ),
+        (
+            "UserPromptSubmit",
+            "hook prompt",
+            serde_json::json!({"hooks": [{"type": "command", "command": format!("{bin} hook prompt"), "timeout": 10}]}),
+        ),
+    ];
+    let mut changed = false;
+    for (event, mark, entry) in wanted {
+        let mut list = v
+            .pointer(&format!("/hooks/{event}"))
+            .and_then(|l| l.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let ours = |e: &serde_json::Value| e.to_string().contains(mark);
+        if list.iter().any(|e| ours(e) && *e == entry) {
+            continue;
+        }
+        list.retain(|e| !ours(e));
+        list.push(entry);
+        let obj = v.as_object_mut().context("settings.json isn't an object")?;
+        let hooks = obj.entry("hooks").or_insert(serde_json::json!({}));
+        hooks
+            .as_object_mut()
+            .context("hooks isn't an object")?
+            .insert(event.into(), serde_json::Value::Array(list));
+        changed = true;
+    }
+    if !changed {
+        return Ok("handover gate, handover trigger and output capping already on".into());
+    }
+    let backup = path.with_extension("json.pre-toomux-hooks");
+    if !backup.exists() {
+        std::fs::write(&backup, &raw)?;
+    }
+    let tmp = path.with_extension(format!("json.{}", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n")?;
+    std::fs::rename(tmp, &path)?;
+    Ok(format!(
+        "handover gate, handover trigger and output capping on in {} (backup {})",
+        config::tilde(&path.display().to_string()),
+        config::tilde(&backup.display().to_string())
+    ))
+}
+
+/// Memory and kept outputs as tools in every session of this account.
+pub fn register_mcp(cfg: &Config, dir: &std::path::Path, bin: &str) -> String {
+    let claude = config::expand(&cfg.claude_bin);
+    let listed = crate::credentials::with_config_dir(
+        std::process::Command::new(&claude).args(["mcp", "get", "toomux"]),
+        dir,
+    )
+    .output();
+    if listed.as_ref().is_ok_and(|o| o.status.success()) {
+        return "memory tools already registered".into();
+    }
+    let added = crate::credentials::with_config_dir(
+        std::process::Command::new(&claude)
+            .args(["mcp", "add", "--scope", "user", "toomux", "--", bin, "mcp"]),
+        dir,
+    )
+    .output();
+    match added {
+        Ok(o) if o.status.success() => "memory tools registered (user scope)".into(),
+        Ok(o) => format!(
+            "couldn't register memory tools: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => format!("couldn't register memory tools: {e}"),
+    }
+}
+
+/// Make toomux the account's Claude Code status line, which is how it learns
+/// the account's usage. An existing status line of the user's own is left alone.
+pub fn install_statusline(dir: &std::path::Path, bin: &str) -> Result<String> {
+    let path = dir.join("settings.json");
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let mut v: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let want = format!("{bin} statusline");
+    let every = v
+        .pointer("/statusLine/refreshInterval")
+        .and_then(|r| r.as_u64());
+    let colour = v.pointer(&format!("/env/{TRUECOLOR_ENV}")).is_some();
+    match v.pointer("/statusLine/command").and_then(|c| c.as_str()) {
+        Some(c) if c == want && every == Some(1) && colour => {
+            return Ok("status line already reports usage".into());
+        }
+        Some(c) if !c.contains("toomux") => {
+            return Ok(format!(
+                "has its own status line ({c}); usage for it will come from the usage lookup"
+            ));
+        }
+        _ => {}
+    }
+    let obj = v.as_object_mut().context("settings.json isn't an object")?;
+    obj.insert(
+        "statusLine".into(),
+        serde_json::json!({"type": "command", "command": want, "padding": 0, "refreshInterval": 1}),
+    );
+    if !colour {
+        let env = obj.entry("env").or_insert_with(|| serde_json::json!({}));
+        if let Some(env) = env.as_object_mut() {
+            env.insert(TRUECOLOR_ENV.into(), "1".into());
+        }
+    }
+    let backup = path.with_extension("json.pre-toomux");
+    if !backup.exists() {
+        std::fs::write(&backup, &raw)?;
+    }
+    let tmp = path.with_extension(format!("json.{}", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v)? + "\n")?;
+    std::fs::rename(tmp, &path)?;
+    Ok(format!(
+        "status line set to toomux in {} (backup {})",
+        config::tilde(&path.display().to_string()),
+        config::tilde(&backup.display().to_string())
+    ))
+}
 
 /// Claude Code settings without toomux's status line and hooks; events left
 /// with no hooks, and a `hooks` left empty, go too. Whether anything changed.

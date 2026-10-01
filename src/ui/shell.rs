@@ -478,6 +478,13 @@ impl App {
                 self.exec(Cmd::MemoryToggle);
                 return;
             }
+            KeyCode::Char('a') if alt => {
+                let sh = self.shell_mut();
+                sh.show_list = true;
+                sh.focus_live = false;
+                self.exec(Cmd::Accounts);
+                return;
+            }
             KeyCode::Char(c @ '1'..='9') if alt => {
                 self.exec(Cmd::JumpPin(c as usize - '1' as usize));
                 return;
@@ -672,8 +679,11 @@ impl App {
             .style(Style::new().bg(p_base).fg(self.pal.text));
         let full = border.inner(framed);
         f.render_widget(border, framed);
-        let focus_live =
-            self.shell_ref().focus_live && self.usage_view.is_none() && self.memory.is_none();
+        let accounts = matches!(self.mode, Mode::Accounts(_));
+        let focus_live = self.shell_ref().focus_live
+            && matches!(self.mode, Mode::Normal)
+            && self.usage_view.is_none()
+            && self.memory.is_none();
         let (foot_lines, foot_hits) = if let Some(m) = &self.memory {
             (vec![self.hint_line(&m.hints(), full.width)], Vec::new())
         } else if focus_live && matches!(self.mode, Mode::Normal) {
@@ -723,7 +733,7 @@ impl App {
         if matches!(self.mode, Mode::New(_)) {
             self.draw_new_head(f, head);
         }
-        let show_list = self.shell_ref().show_list && self.memory.is_none();
+        let show_list = !accounts && self.shell_ref().show_list && self.memory.is_none();
         let list_w = if show_list {
             (body.width * 32 / 100).clamp(34.min(body.width), 58)
         } else {
@@ -781,31 +791,35 @@ impl App {
         if show_list {
             divider(f, gap, fc, p_base);
         }
-        if show_list {
-            let list_area = list;
-            if matches!(self.mode, Mode::New(_)) {
-                self.draw_places(f, list_area);
-            } else {
-                self.draw_list(f, list_area);
-            }
-            // The desktop shell can subtly recede the list while the live
-            // session owns the keyboard. On the Android remote that looked
-            // like the whole app had become disabled, so keep the list at
-            // full contrast and make the focus state explicit in the footer.
-            if focus_live && std::env::var_os("TOOMUX_REMOTE_ANDROID").is_none() {
-                recede(f.buffer_mut(), list_area, self.pal.base, 0.42, &self.pal);
-            }
-        }
-        if self.memory.is_some() {
-            self.draw_memory(f, right);
-        } else if matches!(self.mode, Mode::New(_)) {
-            self.draw_place_preview(f, right);
-        } else if let Some(i) = self.usage_view {
-            self.draw_usage(f, right, i);
-        } else if self.showing_live() {
-            self.draw_live(f, right, focus_live);
+        if accounts {
+            self.draw_accounts(f, body);
         } else {
-            self.draw_preview(f, right);
+            if show_list {
+                let list_area = list;
+                if matches!(self.mode, Mode::New(_)) {
+                    self.draw_places(f, list_area);
+                } else {
+                    self.draw_list(f, list_area);
+                }
+                // The desktop shell can subtly recede the list while the live
+                // session owns the keyboard. On the Android remote that looked
+                // like the whole app had become disabled, so keep the list at
+                // full contrast and make the focus state explicit in the footer.
+                if focus_live && std::env::var_os("TOOMUX_REMOTE_ANDROID").is_none() {
+                    recede(f.buffer_mut(), list_area, self.pal.base, 0.42, &self.pal);
+                }
+            }
+            if self.memory.is_some() {
+                self.draw_memory(f, right);
+            } else if matches!(self.mode, Mode::New(_)) {
+                self.draw_place_preview(f, right);
+            } else if let Some(i) = self.usage_view {
+                self.draw_usage(f, right, i);
+            } else if self.showing_live() {
+                self.draw_live(f, right, focus_live);
+            } else {
+                self.draw_preview(f, right);
+            }
         }
         let hint_y = foot.y + foot.height.saturating_sub(1);
         for (x, w, cmd) in foot_hits {
