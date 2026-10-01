@@ -788,9 +788,11 @@ impl App {
             } else {
                 self.draw_list(f, list_area);
             }
-            // The list dims a touch while the session has the keyboard.
-            // Whichever side doesn't have the keys steps back.
-            if focus_live {
+            // The desktop shell can subtly recede the list while the live
+            // session owns the keyboard. On the Android remote that looked
+            // like the whole app had become disabled, so keep the list at
+            // full contrast and make the focus state explicit in the footer.
+            if focus_live && std::env::var_os("TOOMUX_REMOTE_ANDROID").is_none() {
                 recede(f.buffer_mut(), list_area, self.pal.base, 0.42, &self.pal);
             }
         }
@@ -1006,18 +1008,36 @@ impl App {
                 Vec::new(),
             );
         }
-        let mut hints: Vec<(&str, &str, Option<Cmd>)> = vec![
-            ("alt-s", "sessions", None),
-            ("alt-u", "usage", Some(Cmd::UsageToggle)),
-            ("alt-m", "memory", Some(Cmd::MemoryToggle)),
-            ("alt-b", "list", None),
-        ];
+        let android_remote = std::env::var_os("TOOMUX_REMOTE_ANDROID").is_some();
+        let mut hints: Vec<(&str, &str, Option<Cmd>)> = if android_remote {
+            vec![
+                ("esc", "sessions", None),
+                ("alt-s", "sessions", None),
+                ("alt-u", "usage", Some(Cmd::UsageToggle)),
+                ("alt-m", "memory", Some(Cmd::MemoryToggle)),
+                ("alt-b", "list", None),
+            ]
+        } else {
+            vec![
+                ("alt-s", "sessions", None),
+                ("alt-u", "usage", Some(Cmd::UsageToggle)),
+                ("alt-m", "memory", Some(Cmd::MemoryToggle)),
+                ("alt-b", "list", None),
+            ]
+        };
         if self.shell_ref().popup {
             hints.push(("alt-j", "go there", Some(Cmd::GoThere)));
         }
         let mut spans = vec![Span::raw(" ")];
+        if android_remote {
+            spans.push(Span::styled(
+                "session keys",
+                Style::new().fg(p.accent).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("   "));
+        }
         let mut hits = Vec::new();
-        let mut x = 1u16;
+        let mut x = if android_remote { 16u16 } else { 1u16 };
         for (k, l, cmd) in hints {
             let hw = (k.width() + 1 + l.width()) as u16;
             if (x + hw) as usize > w {

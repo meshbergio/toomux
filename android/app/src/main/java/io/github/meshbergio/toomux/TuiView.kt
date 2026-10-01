@@ -143,6 +143,9 @@ class TuiView @JvmOverloads constructor(
     fun containsText(needle: String): Boolean =
         screen?.lines?.any { line -> lineText(line).contains(needle) } == true
 
+    fun isLiveFocused(): Boolean =
+        containsText("session keys") || containsText("alt-s sessions")
+
     /**
      * The desktop footer remains visually unchanged, but on touch hardware its
      * printed Alt shortcuts are tappable. This keeps Toomux's own command
@@ -333,7 +336,15 @@ class TuiView @JvmOverloads constructor(
                 val text = cluster.toString()
                 if (text != " ") {
                     val advance = paint.measureText(text)
-                    val x = slotLeft + ((slotWidth - advance) * 0.5f)
+                    // ASCII belongs to the actual monospace face and should
+                    // start exactly on the terminal cell edge. Centering every
+                    // character made normal words look artificially tracked
+                    // out. Only fallback/non-ASCII glyphs are centred.
+                    val x = if (codePoint in 0x20..0x7e && used == 1) {
+                        slotLeft
+                    } else {
+                        slotLeft + ((slotWidth - advance) * 0.5f)
+                    }
                     canvas.drawText(text, x, baseline, paint)
                 }
             }
@@ -464,7 +475,13 @@ class TuiView @JvmOverloads constructor(
         val named = when (keyCode) {
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_NUMPAD_ENTER -> "Enter"
-            KeyEvent.KEYCODE_ESCAPE -> "Escape"
+            KeyEvent.KEYCODE_ESCAPE -> {
+                if (isLiveFocused() && !event.isShiftPressed) {
+                    listener?.onKey("M-s")
+                    return true
+                }
+                "Escape"
+            }
             KeyEvent.KEYCODE_TAB -> if (event.isShiftPressed) "BTab" else "Tab"
             KeyEvent.KEYCODE_DEL -> "BSpace"
             KeyEvent.KEYCODE_DPAD_UP -> "Up"
@@ -546,6 +563,7 @@ class TuiView @JvmOverloads constructor(
             "o browser" to "__memory_browser__",
             "esc close" to "Escape",
             "esc back" to "Escape",
+            "esc sessions" to "M-s",
             "? keys" to "?",
             "? hide legend" to "?",
             "keys →" to "__keyboard__",

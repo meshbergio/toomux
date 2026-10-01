@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -57,6 +58,7 @@ class MainActivity : Activity(), TuiView.Listener {
     @Volatile private var lastFrame = ""
     @Volatile private var frameInFlight = false
     @Volatile private var memoryTuiOpen = false
+    private var hardwareAltDown = false
 
     private val poll = Runnable { pollFrame() }
 
@@ -122,16 +124,62 @@ class MainActivity : Activity(), TuiView.Listener {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) immersive()
+        if (hasFocus) {
+            immersive()
+        } else {
+            hardwareAltDown = false
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (credential != null && !memoryOpen && tui.visibility == View.VISIBLE) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_ALT_LEFT,
+                KeyEvent.KEYCODE_ALT_RIGHT -> {
+                    hardwareAltDown = event.action != KeyEvent.ACTION_UP
+                    // Lenovo's Generic.kcm maps Alt+letters to symbols (for
+                    // example Alt+S -> ß). Consume the raw Alt key here so
+                    // Android's IME never turns terminal Meta shortcuts into
+                    // its symbol layer.
+                    return true
+                }
+            }
+            if (hardwareAltDown || event.isAltPressed) {
+                val base = hardwareAltBase(event)
+                if (base != null) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        sendKey("M-$base")
+                    }
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         when {
             memoryOpen -> closeMemoryExplorer()
+            credential != null && tui.isLiveFocused() -> sendKey("M-s")
             credential != null -> sendKey("Escape")
             else -> super.onBackPressed()
         }
+    }
+
+    private fun hardwareAltBase(event: KeyEvent): String? = when (event.keyCode) {
+        in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z ->
+            ('a'.code + event.keyCode - KeyEvent.KEYCODE_A).toChar().toString()
+        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ->
+            ('0'.code + event.keyCode - KeyEvent.KEYCODE_0).toChar().toString()
+        KeyEvent.KEYCODE_SLASH -> if (event.isShiftPressed) "?" else "/"
+        KeyEvent.KEYCODE_SPACE -> "Space"
+        KeyEvent.KEYCODE_TAB -> "Tab"
+        KeyEvent.KEYCODE_DPAD_UP -> "Up"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "Down"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "Left"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "Right"
+        else -> null
     }
 
     override fun onGeometry(cols: Int, rows: Int) {

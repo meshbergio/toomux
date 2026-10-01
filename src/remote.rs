@@ -599,7 +599,10 @@ fn ensure_tui(device: &str, cols: u16, rows: u16) -> Result<String> {
         .is_ok_and(|s| s.success());
     if !alive {
         let exe = std::env::current_exe().context("finding the toomux executable")?;
-        let command = shell_words::join([exe.display().to_string(), "shell".to_string()]);
+        let command = format!(
+            "TOOMUX_REMOTE_ANDROID=1 {}",
+            shell_words::join([exe.display().to_string(), "shell".to_string()])
+        );
         tui_tmux(
             &server,
             &[
