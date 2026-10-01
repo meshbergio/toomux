@@ -6,6 +6,35 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-01
+
+### Added
+
+- Add the native Android Toomux client over ByteTraverse, keeping the real
+  host-side Toomux TUI and session model rather than introducing a separate
+  mobile dashboard.
+- Add the ByteTraverse-bound remote API with device pairing, per-device bearer
+  credentials and Android Keystore-backed token storage.
+- Add touch-native terminal controls and hardware-keyboard parity for the
+  Android client.
+
+### Changed
+
+- Move the Android build to Gradle 9.8 and Android Gradle Plugin 9.4.1 with
+  AGP 9 built-in Kotlin support.
+- Update the public dependency and release-action set while preserving the
+  Rust 1.88 minimum supported version.
+
+### Fixed
+
+- Preserve usage high-water marks within the same reset window instead of
+  allowing temporary lower readings to move usage backwards.
+- Keep Toomux jobs and native Claude background work visible as active after a
+  foreground turn settles, preventing live sessions from falling back to plain
+  idle.
+- Correct Android TUI cell alignment, font selection, touch interactions and
+  hardware-meta handling.
+
 ### Security
 
 - Harden account-root validation and recursive account deletion against broad,
