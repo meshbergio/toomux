@@ -2,6 +2,7 @@
 //! htop and psutil use them. The answers match what /proc gives on Linux, for
 //! processes of the same user.
 
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::{size_of, zeroed};
 use std::path::PathBuf;
@@ -271,6 +272,43 @@ fn pids() -> Vec<i32> {
     };
     buf.truncate(got.max(0) as usize);
     buf
+}
+
+/// All currently-live descendants of a process, nearest children first.
+///
+/// Darwin does not expose Linux's per-process children file, so take one
+/// kernel pid snapshot, index it by parent pid, then walk only the requested
+/// subtree. Command lines are still read lazily by callers only for those
+/// descendants they actually inspect.
+pub fn descendants(pid: i32) -> Vec<i32> {
+    let mut by_parent: HashMap<i32, Vec<i32>> = HashMap::new();
+    for child in pids() {
+        let Some(info): Option<libc::proc_bsdinfo> =
+            (unsafe { pidinfo(child, libc::PROC_PIDTBSDINFO) })
+        else {
+            continue;
+        };
+        by_parent
+            .entry(info.pbi_ppid as i32)
+            .or_default()
+            .push(child);
+    }
+
+    let mut out = Vec::new();
+    let mut queue = vec![pid];
+    let mut seen = HashSet::from([pid]);
+    let mut at = 0;
+    while at < queue.len() {
+        let parent = queue[at];
+        at += 1;
+        for &child in by_parent.get(&parent).into_iter().flatten() {
+            if child > 0 && seen.insert(child) {
+                out.push(child);
+                queue.push(child);
+            }
+        }
+    }
+    out
 }
 
 /// Every process's current folder.

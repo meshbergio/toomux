@@ -393,7 +393,8 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             // the list cannot hide those monitors as plain idle sessions.
             let native_monitor = matches!(state, State::Finished | State::Idle)
                 && !background_jobs.contains(&r.session_id)
-                && pane.as_ref().is_some_and(pane_has_native_monitor);
+                && (pane.as_ref().is_some_and(pane_has_native_monitor)
+                    || native_background_shell(r.pid));
             let state = background_state(
                 state,
                 background_jobs.contains(&r.session_id) || native_monitor,
@@ -783,6 +784,34 @@ fn pane_has_native_monitor(pane: &Pane) -> bool {
         .is_some_and(|screen| native_monitor_footer(&screen))
 }
 
+/// Claude's newer native background Bash path can keep work alive in a
+/// daemon/bg-spare process tree even when the session registry says idle and
+/// the visible footer no longer contains a monitor count. A claimed Bash tool
+/// is distinguishable from the daemon's long-lived spare/MCP helpers by the
+/// shell-snapshot wrapper Claude injects into the command line.
+///
+/// Inspect descendants only after the foreground state has already settled to
+/// finished/idle, so ordinary foreground Bash tools never affect this path.
+fn native_background_shell(pid: i32) -> bool {
+    crate::platform::descendants(pid)
+        .into_iter()
+        .map(crate::platform::cmdline)
+        .any(|args| native_background_argv(&args))
+}
+
+fn native_background_argv(args: &[String]) -> bool {
+    let shell = args.first().is_some_and(|arg| {
+        std::path::Path::new(arg)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| matches!(name, "bash" | "sh" | "zsh"))
+    });
+    shell
+        && args
+            .iter()
+            .any(|arg| arg.contains("/shell-snapshots/snapshot-"))
+}
+
 fn native_monitor_footer(screen: &str) -> bool {
     let footer = screen
         .lines()
@@ -863,6 +892,30 @@ mod tests {
         assert!(!super::native_monitor_footer(
             "❯\n⏵⏵ bypass permissions on · 0 monitors\n"
         ));
+    }
+
+    #[test]
+    fn native_background_shell_requires_claudes_snapshot_wrapper() {
+        let wrapped = vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            "source /home/x/.claude-cingulum/shell-snapshots/snapshot-bash-123.sh 2>/dev/null || true && eval 'sleep 60'".to_string(),
+        ];
+        assert!(super::native_background_argv(&wrapped));
+
+        let mcp = vec![
+            "npm".to_string(),
+            "exec".to_string(),
+            "@playwright/mcp@latest".to_string(),
+        ];
+        assert!(!super::native_background_argv(&mcp));
+
+        let ordinary_shell = vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            "sleep 60".to_string(),
+        ];
+        assert!(!super::native_background_argv(&ordinary_shell));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Linux (and Windows through WSL 2, which is Linux): /proc.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// A process's state letter and the rest of its stat line after the name.
@@ -48,6 +49,36 @@ pub fn cmdline(pid: i32) -> Vec<String> {
 /// What a process's standard input is (a terminal's device path, say).
 pub fn stdin(pid: i32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/fd/0")).ok()
+}
+
+/// All currently-live descendants of a process, nearest children first.
+///
+/// Linux exposes each task's direct children without scanning every process.
+/// Keep a seen set because the tree can change while it is being walked and a
+/// rapidly reused pid must never turn a transient kernel view into a loop.
+pub fn descendants(pid: i32) -> Vec<i32> {
+    let mut out = Vec::new();
+    let mut queue = vec![pid];
+    let mut seen = HashSet::from([pid]);
+    let mut at = 0;
+    while at < queue.len() {
+        let parent = queue[at];
+        at += 1;
+        let path = format!("/proc/{parent}/task/{parent}/children");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for child in text
+            .split_whitespace()
+            .filter_map(|s| s.parse::<i32>().ok())
+        {
+            if child > 0 && seen.insert(child) {
+                out.push(child);
+                queue.push(child);
+            }
+        }
+    }
+    out
 }
 
 /// Every process's current folder.
