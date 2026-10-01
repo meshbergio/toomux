@@ -391,7 +391,13 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             // reports finished/idle even though the session still owns live
             // work. Fold Toomux's own job registry into the session state so
             // the list cannot hide those monitors as plain idle sessions.
-            let state = background_state(state, background_jobs.contains(&r.session_id));
+            let native_monitor = matches!(state, State::Finished | State::Idle)
+                && !background_jobs.contains(&r.session_id)
+                && pane.as_ref().is_some_and(pane_has_native_monitor);
+            let state = background_state(
+                state,
+                background_jobs.contains(&r.session_id) || native_monitor,
+            );
             let named = r.name_source.as_deref() == Some("user")
                 && r.name.as_deref().is_some_and(|n| !n.is_empty());
             let name = match &r.name {
@@ -767,6 +773,55 @@ fn background_state(state: State, has_running_job: bool) -> State {
     }
 }
 
+/// Claude's own native Monitor tool does not appear in Toomux's job registry:
+/// Claude leaves the session registry at `idle`, while its terminal footer
+/// carries the live monitor count. Inspect only the current footer line (the
+/// `⏵⏵` mode line), never historical prose in scrollback.
+fn pane_has_native_monitor(pane: &Pane) -> bool {
+    tmux::capture(&pane.id, 8)
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .is_some_and(|screen| native_monitor_footer(&screen))
+}
+
+fn native_monitor_footer(screen: &str) -> bool {
+    let footer = screen
+        .lines()
+        .rev()
+        .map(strip_ansi)
+        .find(|line| line.contains("⏵⏵"));
+    let Some(footer) = footer else {
+        return false;
+    };
+    let words: Vec<&str> = footer.split_whitespace().collect();
+    words.windows(2).any(|w| {
+        w[0].parse::<u32>().is_ok_and(|n| n > 0)
+            && matches!(
+                w[1].trim_matches(|c: char| !c.is_alphabetic()),
+                "monitor" | "monitors"
+            )
+    })
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\u{1b}' {
+            if it.peek() == Some(&'[') {
+                it.next();
+                for d in it.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::State;
@@ -792,6 +847,22 @@ mod tests {
             State::NeedsYou
         );
         assert_eq!(super::background_state(State::Idle, false), State::Idle);
+    }
+
+    #[test]
+    fn native_monitor_count_is_read_only_from_the_live_footer() {
+        assert!(super::native_monitor_footer(
+            "✻ done · 1 monitor still running\n❯\n⏵⏵ bypass permissions on · ← 2 agents · 1 monitor\n"
+        ));
+        assert!(super::native_monitor_footer(
+            "❯\n\u{1b}[2m⏵⏵ bypass permissions on · 2 monitors\u{1b}[0m\n"
+        ));
+        assert!(!super::native_monitor_footer(
+            "✻ done · 1 monitor still running\n❯\n⏵⏵ bypass permissions on · ← 2 agents\n"
+        ));
+        assert!(!super::native_monitor_footer(
+            "❯\n⏵⏵ bypass permissions on · 0 monitors\n"
+        ));
     }
 
     #[test]
