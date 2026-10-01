@@ -4376,46 +4376,114 @@ impl App {
         let Mode::Accounts(view) = &self.mode else {
             return;
         };
+        // The add-account wizard is one surface, not a stack of differently
+        // sized dialogs. Keep its footprint stable between steps so focus does
+        // not jump around, and reserve enough width for paths and explanatory
+        // copy to wrap rather than clip.
+        let flow_modal = view.flow.is_some();
+        let w = area.width.saturating_sub(6).clamp(1, 78);
+        let content_w = usize::from(w.saturating_sub(8).max(12));
         let mut lines: Vec<Line<'static>> = Vec::new();
         if let Some(flow) = &view.flow {
             lines.push(Line::from(Span::styled(
                 "add account",
                 Style::new().fg(p.text).add_modifier(Modifier::BOLD),
             )));
+            lines.push(Line::from(Span::styled(
+                match flow.step {
+                    AddStep::Name => "1 of 3  ·  account",
+                    AddStep::Folder => "2 of 3  ·  folder",
+                    AddStep::Sharing | AddStep::NewGroup => "3 of 3  ·  history",
+                    AddStep::Creating => "setting things up",
+                    AddStep::Login => "complete",
+                },
+                Style::new().fg(p.muted),
+            )));
             lines.push(Line::raw(""));
             match flow.step {
                 AddStep::Name => {
-                    lines.push(Line::from(vec![
-                        Span::styled("name  ", Style::new().fg(p.muted)),
-                        Span::styled(format!("{}▏", flow.name), Style::new().fg(p.text)),
-                    ]));
                     lines.push(Line::from(Span::styled(
-                        "letters, digits, - and _",
+                        "Account name",
                         Style::new().fg(p.muted),
+                    )));
+                    lines.extend(
+                        wrap_spans(
+                            &[
+                                ("› ".into(), Style::new().fg(p.accent)),
+                                (format!("{}▏", flow.name), Style::new().fg(p.text)),
+                            ],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
+                    lines.push(Line::raw(""));
+                    lines.push(Line::from(Span::styled(
+                        "Use letters, numbers, - or _.",
+                        Style::new().fg(p.dim),
                     )));
                 }
                 AddStep::Folder => {
-                    lines.push(Line::from(vec![
-                        Span::styled("folder  ", Style::new().fg(p.muted)),
-                        Span::styled(format!("{}▏", flow.folder), Style::new().fg(p.text)),
-                    ]));
+                    lines.push(Line::from(Span::styled(
+                        "Configuration folder",
+                        Style::new().fg(p.muted),
+                    )));
+                    lines.extend(
+                        wrap_spans(
+                            &[
+                                ("› ".into(), Style::new().fg(p.accent)),
+                                (format!("{}▏", flow.folder), Style::new().fg(p.text)),
+                            ],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
+                    lines.push(Line::raw(""));
                     let dir = crate::config::expand(&flow.folder);
                     let what = if dir.is_dir() {
-                        format!("adopt {} as it is", tilde(&dir.display().to_string()))
+                        "Existing Claude Code folder found. Its contents will be preserved and adopted."
+                            .to_string()
                     } else {
-                        "a new Claude Code config folder".into()
+                        "A new Claude Code configuration folder will be created here.".into()
                     };
-                    lines.push(Line::from(Span::styled(what, Style::new().fg(p.muted))));
+                    lines.extend(
+                        wrap_spans(&[(what, Style::new().fg(p.dim))], content_w, content_w)
+                            .into_iter()
+                            .map(Line::from),
+                    );
                 }
                 AddStep::Sharing => {
                     lines.push(Line::from(Span::styled(
-                        "history",
+                        "History & memory",
                         Style::new().fg(p.muted),
                     )));
-                    let mut choices = vec!["stand alone".to_string()];
-                    choices.extend(flow.groups.iter().map(|g| format!("join {g}")));
-                    choices.push("new group…".into());
-                    for (i, choice) in choices.iter().enumerate() {
+                    lines.extend(
+                        wrap_spans(
+                            &[(
+                                "Choose whether this account keeps its history separate or shares it."
+                                    .into(),
+                                Style::new().fg(p.dim),
+                            )],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
+                    lines.push(Line::raw(""));
+                    let mut choices = vec!["Keep separate".to_string()];
+                    choices.extend(flow.groups.iter().map(|g| format!("Join {g}")));
+                    choices.push("Create a new shared group".into());
+                    let max_visible = 7usize;
+                    let start = flow.share_sel.saturating_add(1).saturating_sub(max_visible);
+                    let end = (start + max_visible).min(choices.len());
+                    if start > 0 {
+                        lines.push(Line::from(Span::styled("  …", Style::new().fg(p.muted))));
+                    }
+                    for (i, choice) in choices.iter().enumerate().take(end).skip(start) {
                         let selected = i == flow.share_sel;
                         lines.push(Line::from(vec![
                             Span::styled(
@@ -4428,18 +4496,52 @@ impl App {
                             ),
                         ]));
                     }
+                    if end < choices.len() {
+                        lines.push(Line::from(Span::styled("  …", Style::new().fg(p.muted))));
+                    }
                 }
                 AddStep::NewGroup => {
-                    lines.push(Line::from(vec![
-                        Span::styled("group  ", Style::new().fg(p.muted)),
-                        Span::styled(format!("{}▏", flow.new_group), Style::new().fg(p.text)),
-                    ]));
+                    lines.push(Line::from(Span::styled(
+                        "New shared group",
+                        Style::new().fg(p.muted),
+                    )));
+                    lines.extend(
+                        wrap_spans(
+                            &[
+                                ("› ".into(), Style::new().fg(p.accent)),
+                                (format!("{}▏", flow.new_group), Style::new().fg(p.text)),
+                            ],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
+                    lines.push(Line::raw(""));
+                    lines.push(Line::from(Span::styled(
+                        "Accounts in the same group share history and memory.",
+                        Style::new().fg(p.dim),
+                    )));
                 }
                 AddStep::Creating => {
                     lines.push(Line::from(Span::styled(
-                        "creating the account and configuring toomux…",
+                        "Creating account…",
                         Style::new().fg(p.working),
                     )));
+                    lines.push(Line::raw(""));
+                    lines.extend(
+                        wrap_spans(
+                            &[(
+                                "Setting up the folder, status line, hooks and memory tools."
+                                    .into(),
+                                Style::new().fg(p.dim),
+                            )],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
                 }
                 AddStep::Login => {
                     lines.push(Line::from(Span::styled(
@@ -4447,33 +4549,60 @@ impl App {
                         Style::new().fg(p.finished),
                     )));
                     for note in &flow.notes {
+                        let note = note
+                            .strip_prefix(&format!("{}: ", flow.name))
+                            .unwrap_or(note)
+                            .to_string();
                         lines.extend(
-                            wrap_spans(&[(note.clone(), Style::new().fg(p.dim))], 72, 72)
-                                .into_iter()
-                                .map(Line::from),
+                            wrap_spans(
+                                &[
+                                    ("✓ ".into(), Style::new().fg(p.finished)),
+                                    (note, Style::new().fg(p.dim)),
+                                ],
+                                content_w,
+                                content_w,
+                            )
+                            .into_iter()
+                            .map(Line::from),
                         );
                     }
                     lines.push(Line::raw(""));
-                    lines.push(Line::from(Span::styled(
-                        if flow.waiting_login {
-                            "waiting for login…"
-                        } else {
-                            "log in now, or do it later from the Accounts page"
-                        },
-                        Style::new().fg(if flow.waiting_login {
-                            p.working
-                        } else {
-                            p.text
-                        }),
-                    )));
+                    let prompt = if flow.waiting_login {
+                        "Waiting for sign-in to finish…"
+                    } else {
+                        "Sign in now, or come back later from Accounts."
+                    };
+                    lines.extend(
+                        wrap_spans(
+                            &[(
+                                prompt.into(),
+                                Style::new().fg(if flow.waiting_login {
+                                    p.working
+                                } else {
+                                    p.text
+                                }),
+                            )],
+                            content_w,
+                            content_w,
+                        )
+                        .into_iter()
+                        .map(Line::from),
+                    );
                 }
             }
             if let Some(hint) = &flow.hint {
                 lines.push(Line::raw(""));
                 lines.extend(
-                    wrap_spans(&[(hint.clone(), Style::new().fg(p.attention))], 72, 72)
-                        .into_iter()
-                        .map(Line::from),
+                    wrap_spans(
+                        &[
+                            ("! ".into(), Style::new().fg(p.attention)),
+                            (hint.clone(), Style::new().fg(p.attention)),
+                        ],
+                        content_w,
+                        content_w,
+                    )
+                    .into_iter()
+                    .map(Line::from),
                 );
             }
         } else if let Some(AccountAction::Share { groups, sel }) = &view.action {
@@ -4498,9 +4627,13 @@ impl App {
         } else {
             return;
         }
-        let w =
-            (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 8).clamp(34, area.width);
-        let h = (lines.len() as u16 + 4).min(area.height);
+        let h = if flow_modal {
+            area.height.saturating_sub(4).clamp(1, 20)
+        } else {
+            (lines.len() as u16 + 6)
+                .max(12)
+                .min(area.height.saturating_sub(4).max(1))
+        };
         let r = Rect {
             x: area.x + area.width.saturating_sub(w) / 2,
             y: area.y + area.height.saturating_sub(h) / 2,
@@ -4515,7 +4648,10 @@ impl App {
             .padding(ratatui::widgets::Padding::new(3, 3, 1, 1));
         let inner = block.inner(r);
         f.render_widget(block, r);
-        f.render_widget(Paragraph::new(Text::from(lines)), inner);
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(ratatui::widgets::Wrap { trim: false }),
+            inner,
+        );
     }
 
     fn preview_text(&mut self, s: &Session, area: Rect) -> Text<'static> {
@@ -4722,15 +4858,11 @@ impl App {
             },
             Mode::Accounts(view) => {
                 if let Some(flow) = &view.flow {
-                    let lead = match flow.step {
-                        AddStep::Name => Some(format!("name  {}▏", flow.name)),
-                        AddStep::Folder => Some(format!("folder  {}▏", flow.folder)),
-                        AddStep::Sharing => Some("choose history".into()),
-                        AddStep::NewGroup => Some(format!("group  {}▏", flow.new_group)),
-                        AddStep::Creating => Some("creating account".into()),
-                        AddStep::Login if flow.waiting_login => Some("waiting for login…".into()),
-                        AddStep::Login => Some(format!("{} is ready", flow.name)),
-                    };
+                    // Keep the footer height stable while the wizard is open.
+                    // The editable value and current step already live inside
+                    // the card; repeating them here made long folders wrap the
+                    // footer and visibly move the modal between steps.
+                    let lead = Some("add account".into());
                     let hints = match flow.step {
                         AddStep::Creating => vec![],
                         AddStep::Login => vec![
@@ -5508,9 +5640,9 @@ mod tests {
         };
         assert_eq!(view.flow.as_ref().unwrap().step, AddStep::Sharing);
         let out = render(&mut app, 120, 32);
-        assert!(out.contains("stand alone"), "{out}");
-        assert!(out.contains("join shared"), "{out}");
-        assert!(out.contains("new group"), "{out}");
+        assert!(out.contains("Keep separate"), "{out}");
+        assert!(out.contains("Join shared"), "{out}");
+        assert!(out.contains("Create a new shared group"), "{out}");
 
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(
@@ -5529,6 +5661,66 @@ mod tests {
             app.mode,
             Mode::Accounts(AccountsView { flow: None, .. })
         ));
+    }
+
+    #[test]
+    fn add_account_wizard_card_stays_stable_and_wraps_long_paths() {
+        let modal = |out: &str| {
+            let lines: Vec<&str> = out.lines().collect();
+            for (row, line) in lines.iter().enumerate() {
+                if !line.contains('╭') || !line.contains('╮') {
+                    continue;
+                }
+                let is_add = lines
+                    .iter()
+                    .skip(row + 1)
+                    .take(3)
+                    .any(|line| line.contains("add account"));
+                if is_add {
+                    let left = line.chars().position(|c| c == '╭').unwrap();
+                    let right = line.chars().position(|c| c == '╮').unwrap();
+                    return (row, left, right);
+                }
+            }
+            panic!("add-account modal not found:\n{out}");
+        };
+
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::Accounts);
+        app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        let name = render(&mut app, 96, 32);
+        let name_rect = modal(&name);
+
+        if let Mode::Accounts(view) = &mut app.mode {
+            let flow = view.flow.as_mut().expect("add flow");
+            flow.step = AddStep::Folder;
+            flow.name = "studio".into();
+            flow.folder =
+                "~/.claude-this-is-a-deliberately-long-folder-name-that-needs-wrapping".into();
+        } else {
+            panic!("accounts should stay open");
+        }
+        let folder = render(&mut app, 96, 32);
+        let folder_rect = modal(&folder);
+        assert_eq!(
+            folder_rect, name_rect,
+            "wizard card should not jump between steps"
+        );
+        assert!(
+            folder.contains("needs-wrapping"),
+            "the tail of a long folder path must remain visible:\n{folder}"
+        );
+
+        if let Mode::Accounts(view) = &mut app.mode {
+            view.flow.as_mut().unwrap().step = AddStep::Sharing;
+        }
+        let history = render(&mut app, 96, 32);
+        let history_rect = modal(&history);
+        assert_eq!(
+            history_rect, name_rect,
+            "wizard card should keep the same footprint"
+        );
     }
 
     #[test]
