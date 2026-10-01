@@ -6,5 +6,5 @@
     <string name="endpoint_hint">http://10.30.0.1:7462</string>
     <string name="code_hint">8-digit code</string>
     <string name="pair">pair</string>
-    <string name="pair_touch_hint">Once connected: tap the TUI exactly as you would click it · long-press a session for its real Toomux menu · double-tap for the keyboard · pinch to resize · long-press “toomux” for the real help overlay. In memory, press “o” or long-press “toomux” for the immersive graph.</string>
+    <string name="pair_touch_hint">Once connected: tap and double-tap exactly as you would click Toomux · long-press a session for its real menu · tap “keys →” for the Android keyboard · pinch to resize · long-press “toomux” for the real help overlay. In memory, press “o” or long-press “toomux” for the immersive graph.</string>
 </resources>

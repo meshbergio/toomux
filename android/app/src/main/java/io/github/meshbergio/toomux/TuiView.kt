@@ -82,7 +82,13 @@ class TuiView @JvmOverloads constructor(
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                showKeyboard()
+                // Preserve Toomux's desktop mouse grammar. The host detects
+                // two clicks within 450 ms and opens the selected session.
+                // The printed "keys → …" footer remains the touch affordance
+                // for summoning Android's soft keyboard.
+                val (col, row) = cellAt(e.x, e.y)
+                listener?.onTap(col, row, false)
+                listener?.onTap(col, row, false)
                 return true
             }
 
@@ -401,6 +407,7 @@ class TuiView @JvmOverloads constructor(
             "esc back" to "Escape",
             "? keys" to "?",
             "? hide legend" to "?",
+            "keys →" to "__keyboard__",
         )
     }
 }

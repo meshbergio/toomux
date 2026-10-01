@@ -152,6 +152,10 @@ class MainActivity : Activity(), TuiView.Listener {
                     sendInput { it.tuiText("/") }
                     return
                 }
+                "__keyboard__" -> {
+                    tui.showKeyboard()
+                    return
+                }
                 null -> Unit
                 else -> {
                     sendKey(shortcut)

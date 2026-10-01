@@ -17,7 +17,9 @@ Touch maps onto that grammar rather than replacing it:
   `alt-b list`, `enter focus`, `o browser` and `esc close` invoke those exact
   Toomux commands;
 - long-press a session = the real Toomux right-click menu;
-- double-tap = open the Android keyboard;
+- double-tap = Toomux's real desktop double-click (for example, open a
+  session from the list);
+- tap the rendered `keys → …` footer = open the Android soft keyboard;
 - pinch = change terminal cell size and therefore the host TUI geometry;
 - long-press the Toomux header = the real `?` help overlay in the normal shell;
 - in the TUI memory graph, tapping its printed `o browser` command (or using the
