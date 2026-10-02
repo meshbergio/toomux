@@ -743,11 +743,11 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
                 return json_response(400, json!({"error":"session-step key must be Up or Down"}));
             }
             // Phone session taps are semantic list navigation, not mouse
-            // emulation. Alt-S is the shell's focus-independent contract for
-            // putting keyboard focus on the session list. Then move the real
-            // selection and open/focus it with Enter.
+            // emulation. F12 is a private, idempotent remote-shell primitive
+            // that always restores list focus; unlike Alt-S it never toggles
+            // back into the live pane when a stale browser frame arrives.
             let run = || -> Result<()> {
-                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "M-s"])?;
+                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "F12"])?;
                 std::thread::sleep(Duration::from_millis(80));
                 for _ in 0..steps {
                     tui_tmux(&server, &["send-keys", "-t", &pane, "--", direction])?;

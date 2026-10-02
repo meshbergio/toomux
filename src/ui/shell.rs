@@ -462,6 +462,16 @@ impl App {
         let focus_live = self.shell_ref().focus_live;
         // Keys toomux keeps, wherever the keyboard is.
         match k.code {
+            // Remote web session activation needs an idempotent way to put
+            // the shell back on its list. Alt-S is intentionally a human
+            // toggle, so using it as an API primitive races focus state.
+            KeyCode::F(12) if std::env::var_os("TOOMUX_REMOTE_ANDROID").is_some() => {
+                let sh = self.shell_mut();
+                sh.show_list = true;
+                sh.focus_live = false;
+                self.mode = Mode::Normal;
+                return;
+            }
             // Android's immersive TUI uses alt-? as a focus-independent way
             // to open Toomux's own help overlay. Plain '?' still belongs to
             // the live terminal when that pane has the keyboard.
