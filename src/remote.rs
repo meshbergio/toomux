@@ -114,6 +114,8 @@ struct TuiInput {
     button: Option<String>,
     #[serde(default)]
     delta: Option<i8>,
+    #[serde(default)]
+    steps: Option<u16>,
 }
 
 pub fn pair() -> Result<()> {
@@ -734,6 +736,28 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
         Err(e) => return json_response(409, json!({"error":e.to_string()})),
     };
     let result = match input.kind.as_str() {
+        "session-step" => {
+            let steps = input.steps.unwrap_or(0).min(128);
+            let direction = input.key.as_deref().unwrap_or("Down");
+            if !matches!(direction, "Up" | "Down") {
+                return json_response(400, json!({"error":"session-step key must be Up or Down"}));
+            }
+            // Phone session taps are semantic list navigation, not mouse
+            // emulation. Alt-S is the shell's focus-independent contract for
+            // putting keyboard focus on the session list. Then move the real
+            // selection and open/focus it with Enter.
+            let run = || -> Result<()> {
+                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "M-s"])?;
+                std::thread::sleep(Duration::from_millis(80));
+                for _ in 0..steps {
+                    tui_tmux(&server, &["send-keys", "-t", &pane, "--", direction])?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "Enter"])?;
+                Ok(())
+            };
+            run()
+        }
         "key" => {
             let Some(key) = input.key.as_deref() else {
                 return json_response(400, json!({"error":"key is required"}));
