@@ -2,6 +2,7 @@ use crate::config::{Config, expand};
 use crate::registry::{self, Session, State};
 use crate::tmux;
 use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread::sleep;
@@ -519,6 +520,70 @@ pub fn start_auth_login(cfg: &Config, folder: &str, account: usize) -> Result<St
             .unwrap_or("claude")
     );
     in_own_server(None, &name, folder, &Launch { env, cmd })
+}
+
+const CLAUDE_AUTH_URL_PREFIX: &str = "https://claude.com/cai/oauth/authorize?";
+
+/// Open the OAuth link Claude printed in its private auth pane.
+///
+/// Claude Code currently says it is opening the browser even on Linux hosts
+/// where no visible browser appears. Keep the auth process in its tmux pane,
+/// read only enough scrollback to find its OSC-8/plain OAuth link, and hand
+/// that URL straight to the platform opener. The URL is never logged or
+/// returned to the caller.
+pub fn open_auth_login_browser(pane: &str) -> Result<bool> {
+    let screen = tmux::run(&["capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-80"])
+        .context("reading Claude login pane")?;
+    let Some(url) = auth_login_url_in(&screen) else {
+        return Ok(false);
+    };
+    open_browser_target(OsStr::new(url))?;
+    Ok(true)
+}
+
+/// Open a local file or URL in a visible GUI browser.
+///
+/// Linux desktop openers can report success while dispatching nowhere, so prefer an installed
+/// browser executable and keep \`xdg-open\` only as the last compatibility fallback.
+pub fn open_browser_target(target: &OsStr) -> Result<()> {
+    let (opener, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("open", &[])
+    } else if std::path::Path::new("/opt/google/chrome/google-chrome").is_file() {
+        ("/opt/google/chrome/google-chrome", &["--new-window"])
+    } else if std::path::Path::new("/usr/bin/google-chrome").is_file() {
+        ("/usr/bin/google-chrome", &["--new-window"])
+    } else if std::path::Path::new("/usr/bin/chromium").is_file() {
+        ("/usr/bin/chromium", &["--new-window"])
+    } else if std::path::Path::new("/usr/bin/chromium-browser").is_file() {
+        ("/usr/bin/chromium-browser", &["--new-window"])
+    } else if std::path::Path::new("/usr/bin/firefox").is_file() {
+        ("/usr/bin/firefox", &["--new-window"])
+    } else {
+        ("xdg-open", &[])
+    };
+    let status = Command::new(opener)
+        .args(args)
+        .arg(target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("opening browser with {opener}"))?;
+    if !status.success() {
+        bail!("the desktop browser opener exited with {status}");
+    }
+    Ok(())
+}
+
+fn auth_login_url_in(screen: &str) -> Option<&str> {
+    let start = screen.find(CLAUDE_AUTH_URL_PREFIX)?;
+    let rest = &screen[start..];
+    let end = rest
+        .char_indices()
+        .find_map(|(i, c)| (c.is_whitespace() || c == '\u{1b}').then_some(i))
+        .unwrap_or(rest.len());
+    let url = &rest[..end];
+    (url.len() <= 8192).then_some(url)
 }
 
 /// Text that was actually typed into Claude's current input box. Dim
@@ -1103,6 +1168,17 @@ mod tests {
             Some("first line\nsecond line\nthird line"),
             "hard newlines in the input box are preserved too"
         );
+    }
+
+    #[test]
+    fn claude_auth_url_is_read_from_osc8_without_leaking_terminal_controls() {
+        let url = "https://claude.com/cai/oauth/authorize?code=true&state=abc123";
+        let screen = format!(
+            "Opening browser to sign in…\nIf the browser didn't open, visit: \
+             \u{1b}]8;;{url}\u{1b}\\{url}\u{1b}]8;;\u{1b}\\\nPaste code here if prompted >"
+        );
+        assert_eq!(super::auth_login_url_in(&screen), Some(url));
+        assert_eq!(super::auth_login_url_in("no login link here"), None);
     }
 
     #[test]

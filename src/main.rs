@@ -282,7 +282,9 @@ enum RemoteCmd {
     },
     /// Make a one-time eight-digit code for a phone or tablet
     Pair,
-    /// Show paired Android devices
+    /// Show a secure one-use QR for the browser phone remote
+    Phone,
+    /// Show paired remote devices
     Devices,
     /// Revoke one device id, or `all`
     Revoke { device: String },
@@ -511,6 +513,7 @@ fn main() -> Result<()> {
         Some(Cmd::Remote { what }) => match what {
             RemoteCmd::Serve { bind } => remote::serve(cfg, &bind),
             RemoteCmd::Pair => remote::pair(),
+            RemoteCmd::Phone => remote::phone(),
             RemoteCmd::Devices => remote::devices(),
             RemoteCmd::Revoke { device } => remote::revoke(&device),
         },

@@ -1,4 +1,4 @@
-//! The opt-in remote control plane used by the native Android app.
+//! The opt-in remote control plane used by native Android and the phone web remote.
 //!
 //! ByteTraverse is the network boundary: the normal listener is
 //! `10.30.0.1:7462`, reachable from peers on the ByteTraverse mesh and not
@@ -24,10 +24,12 @@ use std::time::Duration;
 
 pub const DEFAULT_BIND: &str = "10.30.0.1:7462";
 pub const DEFAULT_ENDPOINT: &str = "http://10.30.0.1:7462";
+pub const PHONE_CONNECT_BASE: &str = "https://toomux.com/remote/";
 const API: &str = "/api/v1";
 const MAX_HEADER: usize = 16 * 1024;
 const MAX_BODY: usize = 64 * 1024;
 const PAIR_TTL_MS: i64 = 10 * 60_000;
+const WEB_PAIR_TTL_MS: i64 = 15 * 60_000;
 const MAX_DEVICES: usize = 16;
 const TUI_MIN_COLS: u16 = 48;
 const TUI_MAX_COLS: u16 = 240;
@@ -56,6 +58,12 @@ struct PairGrant {
     failed_attempts: u8,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct WebPairGrant {
+    invite_sha256: String,
+    expires_ms: i64,
+}
+
 #[derive(Debug)]
 struct Request {
     method: String,
@@ -72,6 +80,12 @@ struct Response {
 #[derive(Deserialize)]
 struct PairRequest {
     code: String,
+    device_name: String,
+}
+
+#[derive(Deserialize)]
+struct WebPairRequest {
+    invite: String,
     device_name: String,
 }
 
@@ -115,10 +129,212 @@ pub fn pair() -> Result<()> {
     Ok(())
 }
 
+/// Mint and render the complete browser invitation without printing either raw secret.
+///
+/// ByteTraverse's home-box owns transport enrollment and writes its secret-bearing invitation to
+/// an owner-only file. toomux reads that file locally, combines it with its own independent
+/// one-time application invite in the URL fragment, deletes the temporary file, and renders only
+/// a QR matrix. No workstation listener is opened by this command.
+pub fn phone() -> Result<()> {
+    let path = open_phone_qr()?;
+    println!("toomux remote · connect a phone");
+    println!("opened an exact square pairing QR in your browser · expires in 15 minutes · one use");
+    println!("local pairing page: {}", path.display());
+    Ok(())
+}
+
+/// Mint the purpose-bound browser invitation and return only its terminal QR rendering.
+/// The raw transport/application authorities never leave this module.
+pub fn phone_qr() -> Result<String> {
+    let url = mint_phone_invite()?;
+    qr_terminal(&url).context("phone invitation is too large to encode as QR")
+}
+
+pub fn open_phone_qr() -> Result<PathBuf> {
+    let url = mint_phone_invite()?;
+    let html = qr_pairing_page(&url).context("phone invitation is too large to encode as QR")?;
+    let path = phone_qr_page_path();
+    write_private(&path, html.as_bytes())?;
+    crate::actions::open_browser_target(path.as_os_str())?;
+    Ok(path)
+}
+
+fn mint_phone_invite() -> Result<String> {
+    let home = crate::config::home();
+    let btv = std::env::var_os("BTV_HOMEBOX_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".bytetraverse/bin/btv-homebox"));
+    if !btv.is_file() {
+        bail!(
+            "ByteTraverse home-box is not installed at {}; install/configure ByteTraverse first",
+            btv.display()
+        );
+    }
+    let secret = home.join(".bytetraverse/secret.hex");
+    let state = home.join(".bytetraverse/state.json");
+    if !secret.is_file() || !state.is_file() {
+        bail!(
+            "ByteTraverse pairing state is missing; expected {} and {}",
+            secret.display(),
+            state.display()
+        );
+    }
+
+    let mut nonce = [0u8; 8];
+    random(&mut nonce)?;
+    let invite_path = remote_dir().join(format!(".btv-phone-{}", hex(&nonce)));
+    if let Some(parent) = invite_path.parent() {
+        std::fs::create_dir_all(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    let output = Command::new(&btv)
+        .args([
+            "--secret-file",
+            secret.to_string_lossy().as_ref(),
+            "--state",
+            state.to_string_lossy().as_ref(),
+            "--connect-base",
+            PHONE_CONNECT_BASE,
+            "--mint-ticket-file",
+            invite_path.to_string_lossy().as_ref(),
+            "--pair-capability",
+            "toomux",
+        ])
+        .output()
+        .with_context(|| format!("running {}", btv.display()))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&invite_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "ByteTraverse could not mint the phone invitation: {}",
+            stderr.trim()
+        );
+    }
+    let btv_invite = std::fs::read_to_string(&invite_path)
+        .context("reading the owner-only ByteTraverse phone invitation")?;
+    let _ = std::fs::remove_file(&invite_path);
+    let app_invite = create_web_pair_invite()?;
+    compose_phone_invite(btv_invite.trim(), &app_invite)
+}
+
+fn compose_phone_invite(btv_invite: &str, app_invite: &str) -> Result<String> {
+    let prefix = format!("{PHONE_CONNECT_BASE}#");
+    let transport = btv_invite
+        .strip_prefix(&prefix)
+        .context("ByteTraverse returned an invitation for an unexpected connect origin")?;
+    let (secret, ticket) = transport
+        .split_once('.')
+        .context("ByteTraverse invitation has an unexpected fragment")?;
+    if secret.len() != 64
+        || ticket.len() != 32
+        || !lower_hex(secret)
+        || !lower_hex(ticket)
+        || app_invite.len() != 64
+        || !lower_hex(app_invite)
+    {
+        bail!("ByteTraverse or toomux invitation has an unexpected secret shape");
+    }
+    Ok(format!(
+        "{PHONE_CONNECT_BASE}#v1.{secret}.{ticket}.{app_invite}"
+    ))
+}
+
+fn lower_hex(text: &str) -> bool {
+    text.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn qr_terminal(text: &str) -> Option<String> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Medium).ok()?;
+    let n = qr.size();
+    const QUIET: i32 = 4;
+    let dark =
+        |x: i32, y: i32| -> bool { x >= 0 && y >= 0 && x < n && y < n && qr.get_module(x, y) };
+    let mut out = String::new();
+    let mut y = -QUIET;
+    while y < n + QUIET {
+        for x in -QUIET..n + QUIET {
+            out.push(match (dark(x, y), dark(x, y + 1)) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            });
+        }
+        out.push('\n');
+        y += 2;
+    }
+    Some(out)
+}
+
+fn qr_pairing_page(text: &str) -> Option<String> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Medium).ok()?;
+    let n = qr.size();
+    const QUIET: i32 = 4;
+    let side = n + QUIET * 2;
+    let mut path = String::new();
+    for y in 0..n {
+        for x in 0..n {
+            if qr.get_module(x, y) {
+                use std::fmt::Write as _;
+                let _ = write!(&mut path, "M{} {}h1v1h-1z", x + QUIET, y + QUIET);
+            }
+        }
+    }
+    Some(format!(
+        r##"<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>toomux remote pairing</title>
+<style>
+html,body{{margin:0;min-height:100%;background:#0f141c;color:#dbe2ec}}
+body{{min-height:100svh;display:grid;place-items:center;overflow:auto;font:15px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}}
+main{{width:min(92vw,760px);padding:clamp(14px,3vh,28px) 28px;box-sizing:border-box;text-align:center}}
+h1{{margin:0 0 8px;font-size:20px}}p{{margin:0 0 20px;color:#97a3b6}}
+svg{{display:block;width:min(78vmin,680px,max(96px,calc(100svh - 190px)));height:auto;aspect-ratio:1/1;margin:0 auto;background:#fff;
+image-rendering:pixelated;shape-rendering:crispEdges}}
+.note{{margin:clamp(10px,2vh,18px) auto 0;max-width:48ch;font-size:12px;color:#6d7a8e}}
+</style>
+<main>
+<h1>connect a phone</h1>
+<p>Open toomux.com/remote/ on the phone and scan this one-use code.</p>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} {side}" preserveAspectRatio="xMidYMid meet"
+role="img" aria-label="toomux remote pairing QR">
+<rect width="{side}" height="{side}" fill="#fff"/>
+<path d="{path}" fill="#000"/>
+</svg>
+<div class="note">Expires in 15 minutes. The pairing authority is stored only in this owner-only local file and the QR itself.</div>
+</main>
+</html>"##
+    ))
+}
+
+/// Create the application-authority half of a browser invitation.
+///
+/// The caller must keep the returned 256-bit value out of argv/stdout/history and carry it only
+/// inside the QR/deep-link fragment. The host stores only its SHA-256. This is deliberately
+/// separate from ByteTraverse enrollment: transport reachability is not toomux authority.
+pub fn create_web_pair_invite() -> Result<String> {
+    let mut bytes = [0u8; 32];
+    random(&mut bytes)?;
+    let invite = hex(&bytes);
+    let grant = WebPairGrant {
+        invite_sha256: digest(&invite),
+        expires_ms: registry::now_ms() + WEB_PAIR_TTL_MS,
+    };
+    write_private(&web_pair_path(), &serde_json::to_vec_pretty(&grant)?)?;
+    Ok(invite)
+}
+
 pub fn devices() -> Result<()> {
     let book = load_book()?;
     if book.devices.is_empty() {
-        println!("no Android device is paired");
+        println!("no remote device is paired");
         return Ok(());
     }
     for d in book.devices {
@@ -206,6 +422,9 @@ fn route(cfg: &Config, req: Request) -> Response {
     }
     if req.method == "POST" && path_only == format!("{API}/pair") {
         return pair_exchange(&req.body);
+    }
+    if req.method == "POST" && path_only == format!("{API}/web/pair") {
+        return web_pair_exchange(&req.body);
     }
     if !authorized(&req.headers) {
         return json_response(401, json!({"error":"pair this device first"}));
@@ -789,7 +1008,7 @@ fn pair_exchange(body: &[u8]) -> Response {
         return json_response(400, json!({"error":"pairing code must be eight digits"}));
     }
     let name = input.device_name.trim();
-    if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+    if !valid_device_name(name) {
         return json_response(400, json!({"error":"device name is invalid"}));
     }
     let mut grant: PairGrant = match std::fs::read(pair_path())
@@ -822,22 +1041,103 @@ fn pair_exchange(body: &[u8]) -> Response {
         }
         return json_response(403, json!({"error":"pairing code is not valid"}));
     }
+    let (id, token) = match issue_device(name, "and") {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let _ = std::fs::remove_file(pair_path());
+    json_response(
+        200,
+        json!({"device_id":id,"token":token,"endpoint":DEFAULT_ENDPOINT,"api":2}),
+    )
+}
+
+fn web_pair_exchange(body: &[u8]) -> Response {
+    let input: WebPairRequest = match parse_json(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if input.invite.len() != 64
+        || !input
+            .invite
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return json_response(400, json!({"error":"web pairing invite is invalid"}));
+    }
+    let name = input.device_name.trim();
+    if !valid_device_name(name) {
+        return json_response(400, json!({"error":"device name is invalid"}));
+    }
+    let grant: WebPairGrant = match std::fs::read(web_pair_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<WebPairGrant>(&b).ok())
+    {
+        Some(g) if g.expires_ms >= registry::now_ms() => g,
+        _ => {
+            let _ = std::fs::remove_file(web_pair_path());
+            let _ = std::fs::remove_file(phone_qr_page_path());
+            return json_response(
+                410,
+                json!({"error":"web pairing invite expired; make a new phone QR"}),
+            );
+        }
+    };
+    if !constant_eq(&grant.invite_sha256, &digest(&input.invite)) {
+        return json_response(403, json!({"error":"web pairing invite is not valid"}));
+    }
+
+    // Match the Android ceremony: lack of durable device capacity is recoverable operator state,
+    // not a reason to burn an otherwise-valid one-time invitation. The remote server handles one
+    // request at a time, and issue_device repeats this check before the durable write.
+    match load_book() {
+        Ok(book) if book.devices.len() >= MAX_DEVICES => {
+            return json_response(
+                409,
+                json!({"error":"too many paired devices; revoke one first"}),
+            );
+        }
+        Ok(_) => {}
+        Err(e) => return json_response(500, json!({"error":e.to_string()})),
+    }
+
+    // Spend before issuing authority. A storage failure after this point is inconvenient but
+    // fail-closed: the same QR can never be replayed to mint a second device token.
+    if let Err(e) = std::fs::remove_file(web_pair_path()) {
+        return json_response(
+            500,
+            json!({"error":format!("spending web pairing invite: {e}")}),
+        );
+    }
+    let _ = std::fs::remove_file(phone_qr_page_path());
+    let (id, token) = match issue_device(name, "web") {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    json_response(
+        200,
+        json!({"device_id":id,"token":token,"transport":"bytetraverse","api":2}),
+    )
+}
+
+fn valid_device_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control)
+}
+
+fn issue_device(name: &str, id_prefix: &str) -> std::result::Result<(String, String), Response> {
     let mut token_bytes = [0u8; 32];
     if let Err(e) = random(&mut token_bytes) {
-        return json_response(500, json!({"error":e.to_string()}));
+        return Err(json_response(500, json!({"error":e.to_string()})));
     }
     let token = hex(&token_bytes);
     let token_sha256 = digest(&token);
-    let id = format!("and_{}", &token_sha256[..12]);
-    let mut book = match load_book() {
-        Ok(book) => book,
-        Err(e) => return json_response(500, json!({"error":e.to_string()})),
-    };
+    let id = format!("{id_prefix}_{}", &token_sha256[..12]);
+    let mut book = load_book().map_err(|e| json_response(500, json!({"error":e.to_string()})))?;
     if book.devices.len() >= MAX_DEVICES {
-        return json_response(
+        return Err(json_response(
             409,
             json!({"error":"too many paired devices; revoke one first"}),
-        );
+        ));
     }
     book.devices.retain(|d| d.id != id);
     book.devices.push(DeviceGrant {
@@ -846,14 +1146,8 @@ fn pair_exchange(body: &[u8]) -> Response {
         token_sha256,
         created_ms: registry::now_ms(),
     });
-    if let Err(e) = save_book(&book) {
-        return json_response(500, json!({"error":e.to_string()}));
-    }
-    let _ = std::fs::remove_file(pair_path());
-    json_response(
-        200,
-        json!({"device_id":id,"token":token,"endpoint":DEFAULT_ENDPOINT,"api":2}),
-    )
+    save_book(&book).map_err(|e| json_response(500, json!({"error":e.to_string()})))?;
+    Ok((id, token))
 }
 
 fn authorized(headers: &HashMap<String, String>) -> bool {
@@ -1023,6 +1317,14 @@ fn pair_path() -> PathBuf {
     remote_dir().join("pair.json")
 }
 
+fn web_pair_path() -> PathBuf {
+    remote_dir().join("web-pair.json")
+}
+
+fn phone_qr_page_path() -> PathBuf {
+    remote_dir().join("phone-pair.html")
+}
+
 fn auth_path() -> PathBuf {
     remote_dir().join("devices.json")
 }
@@ -1151,6 +1453,83 @@ mod tests {
             assert_eq!(code.len(), 8);
             assert!(code.bytes().all(|b| b.is_ascii_digit()));
         }
+    }
+
+    #[test]
+    fn web_pair_invites_are_full_entropy_hex_not_human_codes() {
+        for _ in 0..16 {
+            let mut bytes = [0u8; 32];
+            random(&mut bytes).unwrap();
+            let invite = hex(&bytes);
+            assert_eq!(invite.len(), 64);
+            assert!(
+                invite
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            );
+        }
+    }
+
+    #[test]
+    fn phone_invite_keeps_both_secrets_in_the_fragment() {
+        let secret = "a".repeat(64);
+        let ticket = "b".repeat(32);
+        let app = "c".repeat(64);
+        let btv = format!("{PHONE_CONNECT_BASE}#{secret}.{ticket}");
+        let out = compose_phone_invite(&btv, &app).unwrap();
+        assert_eq!(
+            out,
+            format!("{PHONE_CONNECT_BASE}#v1.{secret}.{ticket}.{app}")
+        );
+        assert!(!out.contains('?'));
+        assert!(qr_terminal(&out).is_some());
+    }
+
+    #[test]
+    fn phone_pairing_page_is_square_vector_geometry_not_terminal_font_geometry() {
+        let url = format!(
+            "{PHONE_CONNECT_BASE}#v1.{}.{}.{}",
+            "a".repeat(64),
+            "b".repeat(32),
+            "c".repeat(64)
+        );
+        let page = qr_pairing_page(&url).expect("synthetic invite fits a QR");
+        let viewbox = page
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("square SVG viewBox");
+        let mut dims = viewbox.split_whitespace();
+        let width = dims.next().unwrap();
+        let height = dims.next().unwrap();
+        assert_eq!(width, height, "QR viewBox must be square");
+        assert!(page.contains("aspect-ratio:1/1"));
+        assert!(page.contains("calc(100svh - 190px)"));
+        assert!(page.contains("shape-rendering:crispEdges"));
+        assert!(page.contains("preserveAspectRatio=\"xMidYMid meet\""));
+        assert!(
+            !page.contains(&url),
+            "raw invite must not be rendered as visible text"
+        );
+    }
+
+    #[test]
+    fn phone_invite_refuses_another_bootstrap_origin() {
+        let foreign = format!(
+            "https://example.invalid/remote#{}.{}",
+            "a".repeat(64),
+            "b".repeat(32)
+        );
+        assert!(compose_phone_invite(&foreign, &"c".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn remote_device_names_are_bounded_and_single_line() {
+        assert!(valid_device_name("Sam's iPhone"));
+        assert!(valid_device_name(&"x".repeat(64)));
+        assert!(!valid_device_name(""));
+        assert!(!valid_device_name(&"x".repeat(65)));
+        assert!(!valid_device_name("phone\nother"));
     }
 
     #[test]

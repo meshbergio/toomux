@@ -1,6 +1,6 @@
 [package]
 name = "toomux"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A calm control center for every Claude Code session on a machine: tmux switching, handovers, shared memory, accounts"
@@ -23,6 +23,7 @@ libc = "0.2.189"
 regex = "1"
 notify = "8.2.0"
 ratatui = "0.30"
+qrcodegen = "1.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }

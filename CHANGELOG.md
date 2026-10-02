@@ -6,6 +6,49 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+## 0.3.0 - 2026-10-02
+
+### Added
+
+- Add the production phone web remote at `toomux.com/remote/`, rendering the
+  real isolated host-side toomux shell through a Leptos/WASM client over a
+  purpose-bound ByteTraverse WebRTC capability.
+- Add one-use browser pairing with an independent 256-bit toomux application
+  invite, per-browser durable device grants, reconnect, self-revoke and host
+  revoke semantics.
+- Add in-TUI `remote` access plus `alt-r`, opening a scan-safe phone pairing
+  code directly from toomux.
+
+### Changed
+
+- Render phone pairing codes as owner-only square SVG geometry in a local
+  browser page instead of relying on terminal character-cell aspect ratios.
+- Generalize the remote API from Android-only use to native Android and browser
+  clients while keeping the host TUI as the single authoritative product
+  surface.
+- Use a source-controlled user-systemd unit for the durable toomux remote
+  listener.
+
+### Security
+
+- Keep ByteTraverse enrollment and toomux application authority independent;
+  the `toomux` ByteTraverse capability exposes only the explicit remote API
+  allowlist and cannot inherit console or Bonnie authority.
+- Scrub QR authority from browser history before the WASM application loads,
+  and wrap the browser bearer with AES-GCM under a non-extractable WebCrypto
+  key before IndexedDB storage.
+- Bind the site transport bundle to a committed, qualified ByteTraverse source
+  SHA with a restrictive CSP and exact import-map hash.
+
+### Reliability
+
+- Reject QR replay without minting another device, restore paired browsers
+  across reloads without a new QR, and surface both self-revocation and
+  workstation-side revocation immediately.
+- Add scan/geometry regression coverage plus end-to-end validation of pairing,
+  TUI input, memory access, reconnect and revocation.
+
+
 ## 0.2.3 - 2026-10-02
 
 ### Fixed

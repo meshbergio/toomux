@@ -1,0 +1,13 @@
+[Unit]
+Description=toomux remote endpoint over ByteTraverse
+After=network-online.target toomux-bytetraverse-peer.service
+Wants=network-online.target toomux-bytetraverse-peer.service
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/toomux remote serve --bind 10.30.0.1:7462
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

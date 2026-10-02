@@ -236,6 +236,7 @@ enum Row {
 #[derive(Clone)]
 enum Cmd {
     Help,
+    Remote,
     RestoreAll,
     New,
     All,
@@ -457,6 +458,10 @@ impl AccountsView {
 
 enum AccountDone {
     Added(Result<crate::account_ops::Added, String>),
+    LoginBrowser {
+        name: String,
+        result: Result<(), String>,
+    },
     Changed {
         sel: usize,
         result: Result<Vec<String>, String>,
@@ -477,6 +482,7 @@ enum Mode {
     /// Right-click (or long-press) actions for one session.
     Menu(Menu),
     Accounts(AccountsView),
+    Remote(String),
 }
 
 struct Menu {
@@ -831,6 +837,16 @@ impl App {
                     Err(e) => self.say(e, self.pal.attention),
                 }
             }
+            AccountDone::LoginBrowser { name, result } => match result {
+                Ok(()) => self.say(
+                    format!("browser opened · finish signing in to {name}"),
+                    self.pal.working,
+                ),
+                Err(e) => self.say(
+                    format!("couldn't open {name} login browser · {e}"),
+                    self.pal.attention,
+                ),
+            },
         }
     }
 
@@ -1055,6 +1071,11 @@ impl App {
         }
         match &self.mode {
             Mode::Help => self.mode = Mode::Normal,
+            Mode::Remote(_) => match k.code {
+                KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+                KeyCode::Char('r') => self.exec(Cmd::Remote),
+                _ => {}
+            },
             Mode::Menu(m) => {
                 let n = m.items.len();
                 let sel = m.sel;
@@ -1214,6 +1235,9 @@ impl App {
                 }
                 KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::ALT) => {
                     self.exec(Cmd::Accounts)
+                }
+                KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::ALT) => {
+                    self.exec(Cmd::Remote)
                 }
                 // ctrl-u clears a half-typed filter, as in a shell; otherwise usage.
                 KeyCode::Char('u') if ctrl && !self.filter.is_empty() => {
@@ -1541,6 +1565,24 @@ impl App {
             return;
         };
         let name = account.name.clone();
+        let existing = match &self.mode {
+            Mode::Accounts(view) => view
+                .login_watch
+                .as_ref()
+                .filter(|w| w.index == index)
+                .map(|w| w.pane.clone()),
+            _ => None,
+        };
+        if let Some(pane) = existing
+            && crate::tmux::pane_dead(&pane) == Some(false)
+        {
+            self.open_account_login_browser(pane, name.clone());
+            self.say(
+                format!("reopening browser · waiting for {name} to sign in…"),
+                self.pal.working,
+            );
+            return;
+        }
         let dir = self.cfg.account_dir(index);
         let cwd = dir.display().to_string();
         match actions::start_auth_login(&self.cfg, &cwd, index) {
@@ -1560,9 +1602,33 @@ impl App {
                     format!("opening browser · waiting for {name} to sign in…"),
                     self.pal.working,
                 );
+                let pane = match &self.mode {
+                    Mode::Accounts(view) => view.login_watch.as_ref().map(|w| w.pane.clone()),
+                    _ => None,
+                };
+                if let Some(pane) = pane {
+                    self.open_account_login_browser(pane, name);
+                }
             }
             Err(e) => self.say(e.to_string(), self.pal.attention),
         }
+    }
+
+    fn open_account_login_browser(&mut self, pane: String, name: String) {
+        let tx = self.account_done_tx.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                for _ in 0..40 {
+                    match actions::open_auth_login_browser(&pane) {
+                        Ok(true) => return Ok(()),
+                        Ok(false) => std::thread::sleep(Duration::from_millis(100)),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
+                Err("Claude did not produce a sign-in link".into())
+            })();
+            let _ = tx.send(AccountDone::LoginBrowser { name, result });
+        });
     }
 
     fn open_account_share(&mut self, index: usize) {
@@ -1711,7 +1777,7 @@ impl App {
             self.exec(cmd);
             return;
         }
-        if matches!(self.mode, Mode::Menu(_) | Mode::Help) {
+        if matches!(self.mode, Mode::Menu(_) | Mode::Help | Mode::Remote(_)) {
             self.mode = Mode::Normal;
             return;
         }
@@ -1916,6 +1982,17 @@ impl App {
             self.mode = Mode::Help;
             return;
         }
+        if matches!(cmd, Cmd::Remote) {
+            match crate::remote::open_phone_qr() {
+                Ok(_) => self.mode = Mode::Remote(
+                    "Exact square QR opened in your browser. Scan it from toomux.com/remote/.\n\nThe code expires in 15 minutes and can be used once."
+                        .into(),
+                ),
+                Err(e) => self.say(format!("remote: {e}"), self.pal.attention),
+            }
+            self.dirty = true;
+            return;
+        }
         if matches!(self.mode, Mode::Help) {
             self.mode = Mode::Normal;
             return;
@@ -2083,6 +2160,7 @@ impl App {
             | Cmd::UsageToggle
             | Cmd::MemoryToggle
             | Cmd::Accounts
+            | Cmd::Remote
             | Cmd::AccountAdd
             | Cmd::AccountLogin
             | Cmd::AccountShare
@@ -2583,6 +2661,8 @@ impl App {
         let mut divider_x: Option<u16> = None;
         if matches!(self.mode, Mode::Accounts(_)) {
             self.draw_accounts(f, body);
+        } else if matches!(self.mode, Mode::Remote(_)) {
+            self.draw_remote(f, body);
         } else if matches!(self.mode, Mode::New(_)) {
             self.draw_new_head(f, head);
             if self.sidebar {
@@ -2647,12 +2727,13 @@ impl App {
         );
 
         // Overlays: everything behind them recedes, and only they take clicks.
-        if matches!(self.mode, Mode::Help | Mode::Menu(_)) {
+        if matches!(self.mode, Mode::Help | Mode::Menu(_) | Mode::Remote(_)) {
             recede(f.buffer_mut(), full, well, 0.62, &self.pal);
             self.cmd_hits.clear();
             self.list_hits.clear();
             match self.mode {
                 Mode::Help => self.draw_help(f, body),
+                Mode::Remote(_) => self.draw_remote(f, body),
                 _ => self.draw_menu(f, full),
             }
         }
@@ -2932,6 +3013,7 @@ impl App {
                     ("^n", "start a new session in a recent folder"),
                     ("^u", "usage: each account's 5-hour and weekly limits"),
                     ("alt-a", "accounts: sign in, add, share, unshare or remove"),
+                    ("alt-r", "remote: connect a phone with a one-use QR"),
                     ("^s", "clean up sessions idle for days"),
                     ("^e", "reopen what was running before a restart"),
                     ("tab", "group by attention, account or project"),
@@ -3009,6 +3091,62 @@ impl App {
         let inner = block.inner(r);
         f.render_widget(block, r);
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
+    }
+
+    fn draw_remote(&mut self, f: &mut Frame, area: Rect) {
+        let Mode::Remote(message) = &self.mode else {
+            return;
+        };
+        let p = &self.pal;
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "connect a phone",
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "pair a phone · exact pixel QR",
+                Style::new().fg(p.dim),
+            )),
+            Line::raw(""),
+        ];
+        lines.extend(message.lines().map(|line| Line::raw(line.to_string())));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("r ", Style::new().fg(p.text)),
+            Span::styled("new QR", Style::new().fg(p.dim)),
+            Span::raw("   "),
+            Span::styled("esc ", Style::new().fg(p.text)),
+            Span::styled("close", Style::new().fg(p.dim)),
+        ]));
+        let content_w = lines.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
+        let w = (content_w + 8).min(area.width);
+        let h = (lines.len() as u16 + 4).min(area.height);
+        let r = Rect {
+            x: area.x + area.width.saturating_sub(w) / 2,
+            y: area.y + area.height.saturating_sub(h) / 2,
+            width: w,
+            height: h,
+        };
+        f.render_widget(ratatui::widgets::Clear, r);
+        let block = Block::bordered()
+            .title(" remote / phone ")
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(p.muted).bg(p.overlay))
+            .style(Style::new().bg(p.overlay))
+            .padding(ratatui::widgets::Padding::new(3, 3, 1, 1));
+        let inner = block.inner(r);
+        f.render_widget(block, r);
+        f.render_widget(Paragraph::new(Text::from(lines)), inner);
+        let controls_y = inner.y + inner.height.saturating_sub(1);
+        self.cmd_hits.push((
+            Rect {
+                x: inner.x,
+                y: controls_y,
+                width: 8.min(inner.width),
+                height: 1,
+            },
+            Cmd::Remote,
+        ));
     }
 
     /// The right-click menu, beside the pointer and kept on screen.
@@ -3119,11 +3257,13 @@ impl App {
     fn head_chips(&self, bar: usize) -> (Vec<Span<'static>>, Vec<(u16, u16, Cmd)>) {
         let p = &self.pal;
         let now = now_ms();
-        let mut spans = vec![
-            Span::styled(" toomux", Style::new().fg(p.accent)),
-            Span::raw("      "),
-        ];
+        let mut spans = vec![Span::styled(" toomux", Style::new().fg(p.accent))];
         let mut hits = Vec::new();
+        spans.push(Span::raw("   "));
+        let remote_x: usize = spans.iter().map(|s| s.width()).sum();
+        spans.push(Span::styled("remote", Style::new().fg(p.dim)));
+        hits.push((remote_x as u16, "remote".width() as u16, Cmd::Remote));
+        spans.push(Span::raw("      "));
         let mut first = true;
         for (i, a) in self.cfg.accounts.iter().enumerate() {
             let Some(u) = self
@@ -4767,6 +4907,13 @@ impl App {
         }
         let (lead, hints): (Option<String>, Vec<(String, String, Cmd)>) = match &self.mode {
             Mode::Help => (None, vec![("esc".into(), "close".into(), Cmd::No)]),
+            Mode::Remote(_) => (
+                Some("remote / phone".into()),
+                vec![
+                    ("r".into(), "new QR".into(), Cmd::Remote),
+                    ("esc".into(), "close".into(), Cmd::No),
+                ],
+            ),
             Mode::Menu(_) => (
                 None,
                 vec![
@@ -4939,6 +5086,7 @@ impl App {
                     ));
                 }
                 h.push(("alt-a".into(), "accounts", Cmd::Accounts, 1));
+                h.push(("alt-r".into(), "remote", Cmd::Remote, 1));
                 if outside {
                     h.push(("^o".into(), "into tmux", Cmd::Adopt, 1));
                 }

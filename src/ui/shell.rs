@@ -503,6 +503,13 @@ impl App {
                 self.exec(Cmd::Accounts);
                 return;
             }
+            KeyCode::Char('r') if alt => {
+                let sh = self.shell_mut();
+                sh.show_list = true;
+                sh.focus_live = false;
+                self.exec(Cmd::Remote);
+                return;
+            }
             KeyCode::Char(c @ '1'..='9') if alt => {
                 self.exec(Cmd::JumpPin(c as usize - '1' as usize));
                 return;
@@ -858,12 +865,14 @@ impl App {
             )),
             foot,
         );
-        if matches!(self.mode, Mode::Help | Mode::Menu(_)) {
+        if matches!(self.mode, Mode::Help | Mode::Menu(_) | Mode::Remote(_)) {
             recede(f.buffer_mut(), framed, self.pal.well, 0.62, &self.pal);
             self.cmd_hits.clear();
             self.list_hits.clear();
             if matches!(self.mode, Mode::Help) {
                 self.draw_help(f, body);
+            } else if matches!(self.mode, Mode::Remote(_)) {
+                self.draw_remote(f, body);
             } else {
                 self.draw_menu(f, full);
             }
