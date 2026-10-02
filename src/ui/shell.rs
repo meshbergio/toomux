@@ -758,15 +758,25 @@ impl App {
         if matches!(self.mode, Mode::New(_)) {
             self.draw_new_head(f, head);
         }
+        let phone_remote = std::env::var_os("TOOMUX_REMOTE_ANDROID").is_some() && full.width <= 52;
         let show_list = !accounts && self.shell_ref().show_list && self.memory.is_none();
+        let phone_single_pane = phone_remote && show_list;
         let list_w = if show_list {
-            (body.width * 32 / 100).clamp(34.min(body.width), 58)
+            if phone_single_pane {
+                body.width
+            } else {
+                (body.width * 32 / 100).clamp(34.min(body.width), 58)
+            }
         } else {
             0
         };
         let [list, gap, right] = Layout::horizontal([
             Constraint::Length(list_w),
-            Constraint::Length(if show_list { 1 } else { 0 }),
+            Constraint::Length(if show_list && !phone_single_pane {
+                1
+            } else {
+                0
+            }),
             Constraint::Fill(1),
         ])
         .areas(body);
@@ -778,7 +788,7 @@ impl App {
                 (framed.x, left),
                 (framed.x + framed.width.saturating_sub(1), right),
             ];
-            if show_list {
+            if show_list && !phone_single_pane {
                 j.push((gap.x, mid));
             }
             j
@@ -799,12 +809,12 @@ impl App {
             (edge("├", "┤", "┬"), edge("├", "┤", "┴"))
         } else {
             (
-                if show_list {
+                if show_list && !phone_single_pane {
                     vec![(gap.x, "┬")]
                 } else {
                     vec![]
                 },
-                if show_list {
+                if show_list && !phone_single_pane {
                     vec![(gap.x, "┴")]
                 } else {
                     vec![]
@@ -813,7 +823,7 @@ impl App {
         };
         hrule(f, widen(rule_top), fc, p_base, &top_j);
         hrule(f, widen(rule_bottom), fc, p_base, &bottom_j);
-        if show_list {
+        if show_list && !phone_single_pane {
             divider(f, gap, fc, p_base);
         }
         if accounts {
@@ -834,7 +844,12 @@ impl App {
                     recede(f.buffer_mut(), list_area, self.pal.base, 0.42, &self.pal);
                 }
             }
-            if self.memory.is_some() {
+            if phone_single_pane {
+                // Narrow phone remotes deliberately show one task at a time.
+                // The list owns the full canvas until the user opens/focuses
+                // a session, at which point alt-b hides the list and the live
+                // session gets the full width.
+            } else if self.memory.is_some() {
                 self.draw_memory(f, right);
             } else if matches!(self.mode, Mode::New(_)) {
                 self.draw_place_preview(f, right);
