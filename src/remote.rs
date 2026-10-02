@@ -115,7 +115,7 @@ struct TuiInput {
     #[serde(default)]
     delta: Option<i8>,
     #[serde(default)]
-    target_row: Option<u16>,
+    session_id: Option<String>,
 }
 
 pub fn pair() -> Result<()> {
@@ -463,7 +463,20 @@ fn route(cfg: &Config, req: Request) -> Response {
         ("GET", "screen") => screen(cfg, target, &req.path),
         ("POST", "prompt") => prompt(cfg, target, &req.body),
         ("POST", "keys") => keys(cfg, target, &req.body),
+        ("POST", "activate") => activate_session(cfg, target),
         _ => json_response(404, json!({"error":"not found"})),
+    }
+}
+
+fn activate_session(cfg: &Config, target: &str) -> Response {
+    let all = registry::load(cfg);
+    let s = match registry::find(&all, target) {
+        Ok(s) => s,
+        Err(e) => return json_response(404, json!({"error":e.to_string()})),
+    };
+    match actions::jump(s) {
+        Ok(()) => json_response(200, json!({"ok":true,"id":s.id,"pid":s.pid})),
+        Err(e) => json_response(409, json!({"error":e.to_string()})),
     }
 }
 
@@ -690,6 +703,7 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
         .unwrap_or(0)
         .min(rows.saturating_sub(1));
     let cursor_visible = cursor_parts.get(2).copied().unwrap_or(0) != 0;
+    let hits = semantic_session_hits(&ansi, cols);
     // Cursor-only movement is part of the rendered surface too. Fold it into
     // the version so left/right navigation is observable even when no cell
     // contents changed.
@@ -707,6 +721,7 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
                 "sha256":frame_sha256,
                 "cols":cols,
                 "rows":rows,
+                "session_hits":hits,
                 "cursor":{"x":cursor_x,"y":cursor_y,"visible":cursor_visible},
             })
         } else {
@@ -716,10 +731,73 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
                 "cols":cols,
                 "rows":rows,
                 "ansi":ansi,
+                "session_hits":hits,
                 "cursor":{"x":cursor_x,"y":cursor_y,"visible":cursor_visible},
             })
         },
     )
+}
+
+fn semantic_session_hits(ansi: &str, cols: u16) -> Vec<Value> {
+    let cfg = Config::load().unwrap_or_default();
+    let sessions = registry::load(&cfg);
+    let text = strip_ansi_for_hits(ansi);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut hits = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start_matches(|c: char| c == '▎' || c.is_whitespace());
+        for s in &sessions {
+            let marker = format!("● {}", s.title);
+            let idle_marker = format!("○ {}", s.title);
+            if trimmed.contains(&marker) || trimmed.contains(&idle_marker) {
+                hits.push(json!({
+                    "id":s.id,
+                    "pid":s.pid,
+                    "row":row + 1,
+                    "height":2,
+                    "x":1,
+                    "width":cols,
+                }));
+                break;
+            }
+        }
+    }
+    hits
+}
+
+fn strip_ansi_for_hits(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                let mut esc = false;
+                for c in chars.by_ref() {
+                    if c == '\u{7}' || (esc && c == '\\') {
+                        break;
+                    }
+                    esc = c == '\u{1b}';
+                }
+            }
+            _ => {
+                chars.next();
+            }
+        }
+    }
+    out
 }
 
 fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
@@ -736,31 +814,19 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
         Err(e) => return json_response(409, json!({"error":e.to_string()})),
     };
     let result = match input.kind.as_str() {
-        "session-step" => {
-            let target_row = input.target_row.unwrap_or(0);
-            if target_row == 0 {
-                return json_response(400, json!({"error":"session-step target_row is required"}));
-            }
-            // Resolve movement against the host's own current frame. The
-            // browser only tells us which visible session row was tapped.
-            let run = || -> Result<()> {
-                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "F12"])?;
-                std::thread::sleep(Duration::from_millis(90));
-                let frame = tui_tmux_capture(&server, &pane)?;
-                let current_row = selected_session_row(&frame).unwrap_or(target_row);
-                let (direction, steps) = if target_row < current_row {
-                    ("Up", current_row - target_row)
-                } else {
-                    ("Down", target_row - current_row)
-                };
-                for _ in 0..steps {
-                    tui_tmux(&server, &["send-keys", "-t", &pane, "--", direction])?;
-                    std::thread::sleep(Duration::from_millis(24));
-                }
-                tui_tmux(&server, &["send-keys", "-t", &pane, "--", "Enter"])?;
-                Ok(())
+        "session-activate" => {
+            let Some(id) = input.session_id.as_deref() else {
+                return json_response(
+                    400,
+                    json!({"error":"session-activate session_id is required"}),
+                );
             };
-            run()
+            let cfg = Config::load().unwrap_or_default();
+            let all = registry::load(&cfg);
+            match registry::find(&all, id) {
+                Ok(s) => actions::jump(s),
+                Err(e) => Err(e),
+            }
         }
         "key" => {
             let Some(key) = input.key.as_deref() else {
@@ -1016,27 +1082,6 @@ fn send_tui_mouse(
     let mut args: Vec<&str> = vec!["send-keys", "-t", pane, "-H"];
     args.extend(hex.iter().map(String::as_str));
     tui_tmux(server, &args).map(|_| ())
-}
-
-fn tui_tmux_capture(server: &str, pane: &str) -> Result<String> {
-    let out = Command::new("tmux")
-        .args(["-L", server, "capture-pane", "-p", "-t", pane, "-S", "0"])
-        .output()
-        .context("capture remote TUI pane")?;
-    if !out.status.success() {
-        return Err(anyhow::anyhow!(
-            "capture remote TUI pane failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-fn selected_session_row(frame: &str) -> Option<u16> {
-    frame
-        .lines()
-        .enumerate()
-        .find_map(|(i, line)| line.contains('▎').then_some((i + 1) as u16))
 }
 
 fn query_param<'a>(path: &'a str, name: &str) -> Option<&'a str> {
