@@ -707,8 +707,9 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
     // Cursor-only movement is part of the rendered surface too. Fold it into
     // the version so left/right navigation is observable even when no cell
     // contents changed.
+    let hits_json = serde_json::to_string(&hits).unwrap_or_default();
     let frame_sha256 = digest(&format!(
-        "{ansi}\0{cursor_x}\0{cursor_y}\0{}",
+        "{ansi}\0{cursor_x}\0{cursor_y}\0{}\0{hits_json}",
         u8::from(cursor_visible)
     ));
     let same =
