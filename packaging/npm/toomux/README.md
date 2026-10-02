@@ -1,4 +1,4 @@
-# toomux
+<p align="center"><img src="https://raw.githubusercontent.com/meshbergio/toomux/master/assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="300"></p>
 
 Claude Code, minus the babysitting. Every session and account on one screen in
 tmux, lossless handover instead of compaction. One Rust binary.

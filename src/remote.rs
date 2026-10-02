@@ -31,7 +31,7 @@ const MAX_BODY: usize = 64 * 1024;
 const PAIR_TTL_MS: i64 = 10 * 60_000;
 const WEB_PAIR_TTL_MS: i64 = 15 * 60_000;
 const MAX_DEVICES: usize = 16;
-const TUI_MIN_COLS: u16 = 48;
+const TUI_MIN_COLS: u16 = 32;
 const TUI_MAX_COLS: u16 = 240;
 const TUI_MIN_ROWS: u16 = 18;
 const TUI_MAX_ROWS: u16 = 96;
@@ -292,13 +292,13 @@ fn qr_pairing_page(text: &str) -> Option<String> {
 <meta name="referrer" content="no-referrer">
 <title>toomux remote pairing</title>
 <style>
-html,body{{margin:0;min-height:100%;background:#0f141c;color:#dbe2ec}}
+html,body{{margin:0;min-height:100%;background:#121619;color:#f6f5f1}}
 body{{min-height:100svh;display:grid;place-items:center;overflow:auto;font:15px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}}
 main{{width:min(92vw,760px);padding:clamp(14px,3vh,28px) 28px;box-sizing:border-box;text-align:center}}
-h1{{margin:0 0 8px;font-size:20px}}p{{margin:0 0 20px;color:#97a3b6}}
+h1{{margin:0 0 8px;font-size:20px;color:#57e6be}}p{{margin:0 0 20px;color:#aeb3af}}
 svg{{display:block;width:min(78vmin,680px,max(96px,calc(100svh - 190px)));height:auto;aspect-ratio:1/1;margin:0 auto;background:#fff;
 image-rendering:pixelated;shape-rendering:crispEdges}}
-.note{{margin:clamp(10px,2vh,18px) auto 0;max-width:48ch;font-size:12px;color:#6d7a8e}}
+.note{{margin:clamp(10px,2vh,18px) auto 0;max-width:48ch;font-size:12px;color:#687178}}
 </style>
 <main>
 <h1>connect a phone</h1>

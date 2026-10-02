@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="base">#0F141C</color>
-    <color name="raised">#141B26</color>
-    <color name="well">#0B0F15</color>
-    <color name="overlay">#18202E</color>
-    <color name="text">#DBE2EC</color>
-    <color name="dim">#97A3B6</color>
-    <color name="muted">#6D7A8E</color>
-    <color name="faint">#263041</color>
-    <color name="accent">#7DD3FC</color>
+    <color name="base">#121619</color>
+    <color name="raised">#171C1F</color>
+    <color name="well">#0D1113</color>
+    <color name="overlay">#1C2225</color>
+    <color name="text">#F6F5F1</color>
+    <color name="dim">#AEB3AF</color>
+    <color name="muted">#707A80</color>
+    <color name="faint">#30363A</color>
+    <color name="accent">#57E6BE</color>
     <color name="working">#F5A623</color>
     <color name="attention">#F7788C</color>
-    <color name="finished">#3ECF8E</color>
-    <color name="selection">#22304A</color>
+    <color name="finished">#57E6BE</color>
+    <color name="selection">#1A2724</color>
 </resources>

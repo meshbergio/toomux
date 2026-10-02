@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/wordmark.png" alt="toomux" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo/svg/toomux-logo-reversed.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/logo/svg/toomux-logo-primary.svg">
+    <img src="assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="360">
+  </picture>
 </p>
 
 <p align="center">
@@ -92,16 +96,37 @@ its turn, it writes a brief, saves what it learned to memory, and a fresh
 session picks up in the same pane. Nothing is summarised, and the old
 conversation stays searchable.
 
-<p align="center">
-  <img src="assets/context.png" alt="Context per call over a long stretch of work. Claude Code on its own climbs towards a full window, compacts mid-task and climbs again: 488k per call on average. With toomux each session hands over at the end of a turn: 165k per call on average. Every call re-reads everything under the line." width="820">
-</p>
+The first numbers I published compared the week before with the first day using
+toomux. Enough to see the shape of it, not enough to call it settled. I kept
+measuring.
 
-<p align="center">
-  <img src="assets/savings.png" alt="The week before against with toomux, at API list prices: cost per 1,000 calls $153 down to $58, calls over 400k 59.4% down to 0.2%, output tokens per dollar 5,917 up to 12,709. 62% less a call, and nothing summarised away." width="820">
-</p>
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/evidence/matched-cohort-mobile-dark.svg">
+  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/evidence/matched-cohort-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/evidence/matched-cohort-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/evidence/matched-cohort-light.svg">
+  <img src="assets/evidence/matched-cohort-light.svg" alt="Matched comparison of exactly 33,026 Claude calls before and with toomux." width="100%">
+</picture>
 
-My own numbers from `toomux tokens`, the week before toomux against the first
-day with it. I run handover at 200k.
+> [!NOTE]
+> **Matched, not scaled.** Exactly 33,026 calls on each side, including main
+> sessions and every subagent. Cost is repriced to one common Opus 5.5 list rate
+> so a model-mix change does not get credit for the saving. These are measurements
+> from my workload, not a benchmark of every Claude Code user.
+
+The same number of calls used **52.5% less context**. At a common model price,
+cost per call fell **54.3%**. The 400k tail almost vanished: **9,194 calls became
+51**. Fresh input was basically flat; the saving came from old context that no
+longer had to be carried forward and rewritten.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/evidence/context-mechanism-mobile-dark.svg">
+  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/evidence/context-mechanism-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/evidence/context-mechanism-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/evidence/context-mechanism-light.svg">
+  <img src="assets/evidence/context-mechanism-light.svg" alt="Cache reads and rewrite-heavy cache traffic fall sharply while fresh input remains nearly flat." width="100%">
+</picture>
+
 
 Every handover stays linked to the one before it. Here's one piece of work
 carried across 22 sessions, in the memory graph:
