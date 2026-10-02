@@ -1,0 +1,39 @@
+[Unit]
+Description=Toomux dedicated ChatGPT model browser
+Requires=gpt-mcp-xvfb.service
+After=gpt-mcp-xvfb.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+Environment=BONNIE_AGENT_BROWSER_SESSION=toomux-chatgpt-model
+Environment=BONNIE_AGENT_BROWSER_PROFILE=%h/.local/share/toomux-chatgpt-model-browser
+Environment=BONNIE_AGENT_BROWSER_CDP_PORT=9223
+Environment=BONNIE_AGENT_BROWSER_DISPLAY=:99
+Environment=BONNIE_AGENT_BROWSER_START_URL=https://chatgpt.com/?temporary-chat=true
+Environment=BONNIE_AGENT_BROWSER_RESTORE_LAST_SESSION=0
+Environment=BONNIE_AGENT_BROWSER_CHROME_LOG_LEVEL=3
+Environment=LIBVA_DRM_DEVICE=/dev/dri/renderD128
+SuccessExitStatus=0 1 15 130 143
+ExecStart=%h/.local/lib/agent-browser-managed/launch-bonnie-browser.sh
+ExecStopPost=%h/.local/lib/agent-browser-managed/launch-bonnie-browser.sh --cleanup
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=20
+MemoryHigh=1500M
+MemoryMax=3G
+TasksMax=1024
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+TemporaryFileSystem=/dev/dri
+BindPaths=/dev/dri/renderD128
+BindPaths=/dev/dri/card1
+
+[Install]
+WantedBy=default.target

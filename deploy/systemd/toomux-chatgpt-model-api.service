@@ -1,0 +1,32 @@
+[Unit]
+Description=Toomux ChatGPT model-only browser API
+After=toomux-chatgpt-model-browser.service
+Requires=toomux-chatgpt-model-browser.service
+
+[Service]
+Type=simple
+Environment=TOOMUX_CHATGPT_MODEL_HOST=127.0.0.1
+Environment=TOOMUX_CHATGPT_MODEL_PORT=34561
+Environment=TOOMUX_CHATGPT_CDP_URL=http://127.0.0.1:9223
+Environment=TOOMUX_CHATGPT_ORIGIN=https://chatgpt.com/
+Environment=TOOMUX_CHATGPT_MODEL_NAME=bonnie
+Environment=TOOMUX_CHATGPT_MODEL_KEY_FILE=@HOME@/.local/state/toomux/bonnie-bridge.key
+Environment=TOOMUX_CHATGPT_MODEL_TIMEOUT_MS=150000
+Environment=TOOMUX_CHATGPT_TOKEN_CHARS_PER_TOKEN=3.2
+ExecStart=/usr/bin/env node @HOME@/.local/share/toomux/toomux-chatgpt-model-api.mjs
+Restart=always
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target

@@ -2,9 +2,9 @@ mod account_cli;
 
 use toomux::setup::{BEGIN, END};
 use toomux::{
-    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths, queue,
-    registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep, usage, voyage,
-    watch,
+    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths,
+    provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep,
+    usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,11 @@ enum Cmd {
     },
     /// One-line summary for the tmux status bar
     Status,
+    /// Deep status of the local ChatGPT model provider
+    Provider {
+        #[arg(long)]
+        json: bool,
+    },
     /// Jump to a session (pid, session-id prefix, or name), or a pin
     Jump {
         #[arg(required_unless_present = "pin")]
@@ -337,6 +342,7 @@ fn main() -> Result<()> {
             print!("{}", status_line(&cfg));
             Ok(())
         }
+        Some(Cmd::Provider { json }) => provider::status(json),
         Some(Cmd::Jump { target, pin }) => {
             let all = registry::load(&cfg);
             match (pin, target) {
