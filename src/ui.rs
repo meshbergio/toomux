@@ -404,6 +404,7 @@ struct LoginWatch {
     index: usize,
     name: String,
     dir: std::path::PathBuf,
+    pane: String,
 }
 
 fn account_groups(cfg: &Config) -> Vec<String> {
@@ -838,23 +839,38 @@ impl App {
             Mode::Accounts(view) => view
                 .login_watch
                 .as_ref()
-                .map(|w| (w.index, w.name.clone(), w.dir.clone())),
+                .map(|w| (w.index, w.name.clone(), w.dir.clone(), w.pane.clone())),
             _ => None,
         };
-        let Some((index, name, dir)) = watch else {
+        let Some((index, name, dir, pane)) = watch else {
             return;
         };
-        if !crate::credentials::present(&dir) {
+        if crate::credentials::present(&dir) {
+            if let Mode::Accounts(view) = &mut self.mode {
+                if let Some(login) = view.login.get_mut(index) {
+                    *login = true;
+                }
+                view.login_watch = None;
+                view.flow = None;
+            }
+            self.say(format!("signed in · {name} is ready"), self.pal.finished);
+            return;
+        }
+        if crate::tmux::pane_dead(&pane) == Some(false) {
             return;
         }
         if let Mode::Accounts(view) = &mut self.mode {
-            if let Some(login) = view.login.get_mut(index) {
-                *login = true;
-            }
             view.login_watch = None;
-            view.flow = None;
+            if let Some(flow) = &mut view.flow {
+                flow.waiting_login = false;
+                flow.hint =
+                    Some("Login closed before sign-in finished. Press Enter to try again.".into());
+            }
         }
-        self.say(format!("signed in · {name} is ready"), self.pal.finished);
+        self.say(
+            format!("login closed · {name} is still not signed in"),
+            self.pal.attention,
+        );
     }
 
     /// Everything a reload can change on screen, hashed.
@@ -1527,28 +1543,23 @@ impl App {
         let name = account.name.clone();
         let dir = self.cfg.account_dir(index);
         let cwd = dir.display().to_string();
-        match actions::start(&self.cfg, &cwd, index, &[]) {
+        match actions::start_auth_login(&self.cfg, &cwd, index) {
             Ok(pane) => {
                 if let Mode::Accounts(view) = &mut self.mode {
                     view.login_watch = Some(LoginWatch {
                         index,
                         name: name.clone(),
                         dir: dir.clone(),
+                        pane,
                     });
                     if let Some(flow) = &mut view.flow {
                         flow.waiting_login = true;
                     }
                 }
-                std::thread::spawn(move || {
-                    for _ in 0..12 {
-                        std::thread::sleep(Duration::from_millis(350));
-                        if actions::prompt_empty(&pane) {
-                            let _ = actions::type_prompt(&pane, "/login");
-                            break;
-                        }
-                    }
-                });
-                self.say(format!("waiting for {name} to sign in…"), self.pal.working);
+                self.say(
+                    format!("opening browser · waiting for {name} to sign in…"),
+                    self.pal.working,
+                );
             }
             Err(e) => self.say(e.to_string(), self.pal.attention),
         }
@@ -5763,6 +5774,7 @@ mod tests {
             index: 0,
             name: "work".into(),
             dir: dir.clone(),
+            pane: "%1@does-not-matter".into(),
         });
         app.mode = Mode::Accounts(view);
 
@@ -5778,6 +5790,54 @@ mod tests {
             app.flash
                 .as_ref()
                 .is_some_and(|(m, _, _)| m.contains("signed in"))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn account_login_watch_reports_auth_process_exit() {
+        let dir = std::env::temp_dir().join(format!(
+            "toomux-ui-login-watch-ended-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut c = cfg();
+        c.accounts[0].config_dir = dir.display().to_string();
+        let mut app = App::with(c, sample());
+        let mut view = AccountsView::new(&app.cfg, 0);
+        let mut flow = AddFlow::new(&app.cfg);
+        flow.step = AddStep::Login;
+        flow.name = "work".into();
+        flow.waiting_login = true;
+        view.flow = Some(flow);
+        view.login_watch = Some(LoginWatch {
+            index: 0,
+            name: "work".into(),
+            dir: dir.clone(),
+            pane: format!("%999@/tmp/toomux-no-login-socket-{}", std::process::id()),
+        });
+        app.mode = Mode::Accounts(view);
+
+        app.check_account_login();
+
+        let Mode::Accounts(view) = &app.mode else {
+            panic!("accounts should stay open");
+        };
+        assert!(!view.login[0]);
+        assert!(view.login_watch.is_none());
+        let flow = view.flow.as_ref().expect("wizard stays available to retry");
+        assert!(!flow.waiting_login);
+        assert!(
+            flow.hint
+                .as_deref()
+                .is_some_and(|h| h.contains("Press Enter to try again"))
+        );
+        assert!(
+            app.flash
+                .as_ref()
+                .is_some_and(|(m, _, _)| m.contains("still not signed in"))
         );
         let _ = std::fs::remove_dir_all(dir);
     }

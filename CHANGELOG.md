@@ -6,6 +6,15 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+## 0.2.3 - 2026-10-02
+
+### Fixed
+
+- Use Claude Code's first-class `claude auth login` flow for account sign-in
+  instead of launching the full interactive client and injecting `/login`.
+  New account folders can stop at Claude's first-run theme screen, which meant
+  the old prompt injector never ran and no browser opened.
+
 ## 0.2.2 - 2026-10-01
 
 ### Fixed

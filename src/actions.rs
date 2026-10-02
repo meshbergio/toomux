@@ -482,6 +482,45 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     in_own_server(None, &name, folder, &Launch { env, cmd })
 }
 
+/// Start Claude Code's first-class account sign-in flow in its own pane.
+///
+/// New account folders may stop at interactive onboarding before a normal
+/// prompt exists, so driving the slash-login command through the full client
+/// is unreliable. The auth subcommand bypasses onboarding and opens OAuth
+/// directly. Remote launches do not always carry a BROWSER variable, so
+/// provide the platform's normal opener explicitly while still respecting any
+/// caller-supplied BROWSER override.
+pub fn start_auth_login(cfg: &Config, folder: &str, account: usize) -> Result<String> {
+    if !std::path::Path::new(folder).is_dir() {
+        bail!("{folder} isn't a folder");
+    }
+    let mut argv = vec!["env".to_string()];
+    for v in registry::RUNTIME_VARS {
+        argv.extend(["-u".to_string(), v.to_string()]);
+    }
+    let mut env = Vec::new();
+    config_dir(cfg, account, &mut env, &mut argv);
+    if std::env::var_os("BROWSER").is_none() {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        env.push(format!("BROWSER={opener}"));
+    }
+    argv.push(expand(&cfg.claude_bin).display().to_string());
+    argv.extend(["auth".into(), "login".into(), "--claudeai".into()]);
+    let cmd = shell_words::join(&argv);
+    let name = format!(
+        "{}-login",
+        folder
+            .rsplit('/')
+            .find(|p| !p.is_empty())
+            .unwrap_or("claude")
+    );
+    in_own_server(None, &name, folder, &Launch { env, cmd })
+}
+
 /// Text that was actually typed into Claude's current input box. Dim
 /// suggestions/placeholders are excluded. None means the prompt can't be
 /// inspected safely (copy mode, no visible prompt, or tmux failure).
