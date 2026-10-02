@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">toomux</string>
-    <string name="pair_brand">toomux  /  android</string>
+    <string name="pair_brand">android remote</string>
     <string name="pair_hint">Run “toomux remote pair” on the machine, then enter the one-time code. Normal use is carried over ByteTraverse.</string>
     <string name="endpoint_hint">http://10.30.0.1:7462</string>
     <string name="code_hint">8-digit code</string>
     <string name="pair">pair</string>
-    <string name="pair_touch_hint">Once connected: tap and double-tap exactly as you would click Toomux · long-press a session for its real menu · tap “keys →” for the Android keyboard · pinch to resize · long-press “toomux” for the real help overlay. In memory, press “o” or long-press “toomux” for the immersive graph.</string>
+    <string name="pair_touch_hint">Once connected: tap and double-tap exactly as you would click toomux · long-press a session for its real menu · tap “keys →” for the Android keyboard · pinch to resize · long-press “toomux” for the real help overlay. In memory, press “o” or long-press “toomux” for the immersive graph.</string>
 </resources>

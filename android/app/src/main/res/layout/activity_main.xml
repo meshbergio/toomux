@@ -49,13 +49,24 @@
         android:orientation="vertical"
         android:padding="22dp">
 
+        <ImageView
+            android:layout_width="190dp"
+            android:layout_height="32dp"
+            android:adjustViewBounds="true"
+            android:contentDescription="@string/app_name"
+            android:scaleType="fitStart"
+            android:src="@drawable/toomux_logo_reversed" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
             android:fontFamily="monospace"
+            android:letterSpacing="0.08"
             android:text="@string/pair_brand"
-            android:textColor="@color/accent"
-            android:textSize="17sp"
+            android:textAllCaps="true"
+            android:textColor="@color/muted"
+            android:textSize="10sp"
             android:textStyle="bold" />
 
         <TextView

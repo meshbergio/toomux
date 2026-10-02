@@ -57,7 +57,7 @@ cp -R "$here/toomux" "$out/toomux"
 cp "$out"/toomux-x86_64-unknown-linux-musl/LICENSE-* "$out/toomux/"
 cat > "$out/toomux/package.json" <<JSON
 { "name": "toomux", $common,
-  "description": "Claude Code, minus the babysitting. Every session and account on one screen in tmux, lossless handover instead of compaction.",
+  "description": "Claude Code, minus the babysitting: every session and account in one place, with lossless handover, shared memory and tmux-native control.",
   "keywords": ["claude-code", "claude", "anthropic", "tmux", "tui", "ai-agents", "terminal"],
   "bin": { "toomux": "bin/toomux.js" },
   "files": ["bin/toomux.js", "LICENSE-MIT", "LICENSE-APACHE"],

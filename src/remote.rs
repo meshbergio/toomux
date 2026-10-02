@@ -31,7 +31,7 @@ const MAX_BODY: usize = 64 * 1024;
 const PAIR_TTL_MS: i64 = 10 * 60_000;
 const WEB_PAIR_TTL_MS: i64 = 15 * 60_000;
 const MAX_DEVICES: usize = 16;
-const TUI_MIN_COLS: u16 = 48;
+const TUI_MIN_COLS: u16 = 32;
 const TUI_MAX_COLS: u16 = 240;
 const TUI_MIN_ROWS: u16 = 18;
 const TUI_MAX_ROWS: u16 = 96;
@@ -114,6 +114,8 @@ struct TuiInput {
     button: Option<String>,
     #[serde(default)]
     delta: Option<i8>,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 pub fn pair() -> Result<()> {
@@ -292,13 +294,13 @@ fn qr_pairing_page(text: &str) -> Option<String> {
 <meta name="referrer" content="no-referrer">
 <title>toomux remote pairing</title>
 <style>
-html,body{{margin:0;min-height:100%;background:#0f141c;color:#dbe2ec}}
+html,body{{margin:0;min-height:100%;background:#121619;color:#f6f5f1}}
 body{{min-height:100svh;display:grid;place-items:center;overflow:auto;font:15px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}}
 main{{width:min(92vw,760px);padding:clamp(14px,3vh,28px) 28px;box-sizing:border-box;text-align:center}}
-h1{{margin:0 0 8px;font-size:20px}}p{{margin:0 0 20px;color:#97a3b6}}
+h1{{margin:0 0 8px;font-size:20px;color:#57e6be}}p{{margin:0 0 20px;color:#aeb3af}}
 svg{{display:block;width:min(78vmin,680px,max(96px,calc(100svh - 190px)));height:auto;aspect-ratio:1/1;margin:0 auto;background:#fff;
 image-rendering:pixelated;shape-rendering:crispEdges}}
-.note{{margin:clamp(10px,2vh,18px) auto 0;max-width:48ch;font-size:12px;color:#6d7a8e}}
+.note{{margin:clamp(10px,2vh,18px) auto 0;max-width:48ch;font-size:12px;color:#687178}}
 </style>
 <main>
 <h1>connect a phone</h1>
@@ -461,7 +463,20 @@ fn route(cfg: &Config, req: Request) -> Response {
         ("GET", "screen") => screen(cfg, target, &req.path),
         ("POST", "prompt") => prompt(cfg, target, &req.body),
         ("POST", "keys") => keys(cfg, target, &req.body),
+        ("POST", "activate") => activate_session(cfg, target),
         _ => json_response(404, json!({"error":"not found"})),
+    }
+}
+
+fn activate_session(cfg: &Config, target: &str) -> Response {
+    let all = registry::load(cfg);
+    let s = match registry::find(&all, target) {
+        Ok(s) => s,
+        Err(e) => return json_response(404, json!({"error":e.to_string()})),
+    };
+    match actions::jump(s) {
+        Ok(()) => json_response(200, json!({"ok":true,"id":s.id,"pid":s.pid})),
+        Err(e) => json_response(409, json!({"error":e.to_string()})),
     }
 }
 
@@ -688,11 +703,13 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
         .unwrap_or(0)
         .min(rows.saturating_sub(1));
     let cursor_visible = cursor_parts.get(2).copied().unwrap_or(0) != 0;
+    let hits = semantic_session_hits(&ansi, cols);
     // Cursor-only movement is part of the rendered surface too. Fold it into
     // the version so left/right navigation is observable even when no cell
     // contents changed.
+    let hits_json = serde_json::to_string(&hits).unwrap_or_default();
     let frame_sha256 = digest(&format!(
-        "{ansi}\0{cursor_x}\0{cursor_y}\0{}",
+        "{ansi}\0{cursor_x}\0{cursor_y}\0{}\0{hits_json}",
         u8::from(cursor_visible)
     ));
     let same =
@@ -705,6 +722,7 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
                 "sha256":frame_sha256,
                 "cols":cols,
                 "rows":rows,
+                "session_hits":hits,
                 "cursor":{"x":cursor_x,"y":cursor_y,"visible":cursor_visible},
             })
         } else {
@@ -714,10 +732,77 @@ fn tui_frame(headers: &HashMap<String, String>, request_path: &str) -> Response 
                 "cols":cols,
                 "rows":rows,
                 "ansi":ansi,
+                "session_hits":hits,
                 "cursor":{"x":cursor_x,"y":cursor_y,"visible":cursor_visible},
             })
         },
     )
+}
+
+fn semantic_session_hits(ansi: &str, cols: u16) -> Vec<Value> {
+    let cfg = Config::load().unwrap_or_default();
+    let sessions = registry::load(&cfg);
+    let text = strip_ansi_for_hits(ansi);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut hits = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start_matches(|c: char| c == '▎' || c.is_whitespace());
+        for s in &sessions {
+            let active_marker = format!("● {}", s.title);
+            let attention_marker = format!("◆ {}", s.title);
+            let idle_marker = format!("○ {}", s.title);
+            if trimmed.contains(&active_marker)
+                || trimmed.contains(&attention_marker)
+                || trimmed.contains(&idle_marker)
+            {
+                hits.push(json!({
+                    "id":s.id,
+                    "pid":s.pid,
+                    "row":row + 1,
+                    "height":2,
+                    "x":1,
+                    "width":cols,
+                }));
+                break;
+            }
+        }
+    }
+    hits
+}
+
+fn strip_ansi_for_hits(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                let mut esc = false;
+                for c in chars.by_ref() {
+                    if c == '\u{7}' || (esc && c == '\\') {
+                        break;
+                    }
+                    esc = c == '\u{1b}';
+                }
+            }
+            _ => {
+                chars.next();
+            }
+        }
+    }
+    out
 }
 
 fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
@@ -734,6 +819,56 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
         Err(e) => return json_response(409, json!({"error":e.to_string()})),
     };
     let result = match input.kind.as_str() {
+        "session-activate" => {
+            let Some(id) = input.session_id.as_deref() else {
+                return json_response(
+                    400,
+                    json!({"error":"session-activate session_id is required"}),
+                );
+            };
+            let cfg = Config::load().unwrap_or_default();
+            let all = registry::load(&cfg);
+            if let Err(e) = registry::find(&all, id) {
+                return json_response(404, json!({"error":e.to_string()}));
+            }
+            let geometry = match tui_tmux(
+                &server,
+                &["display-message", "-p", "-t", &pane, "#{pane_width}"],
+            ) {
+                Ok(v) => v,
+                Err(e) => return json_response(502, json!({"error":e.to_string()})),
+            };
+            let cols = geometry
+                .trim()
+                .parse::<u16>()
+                .unwrap_or(120)
+                .clamp(TUI_MIN_COLS, TUI_MAX_COLS);
+            let ansi = match tui_tmux(&server, &["capture-pane", "-p", "-e", "-N", "-t", &pane]) {
+                Ok(v) => v,
+                Err(e) => return json_response(502, json!({"error":e.to_string()})),
+            };
+            let hits = semantic_session_hits(&ansi, cols);
+            let Some(target) = hits
+                .iter()
+                .position(|hit| hit.get("id").and_then(Value::as_str) == Some(id))
+            else {
+                return json_response(
+                    409,
+                    json!({"error":"session is not selectable in the current TUI view"}),
+                );
+            };
+            let mut keys = vec!["Home"; 1];
+            keys.extend(std::iter::repeat_n("Down", target));
+            if let Err(e) = tui_tmux(&server, &["send-keys", "-t", &pane, "--", keys[0]]) {
+                return json_response(502, json!({"error":e.to_string()}));
+            }
+            for key in keys.into_iter().skip(1) {
+                if let Err(e) = tui_tmux(&server, &["send-keys", "-t", &pane, "--", key]) {
+                    return json_response(502, json!({"error":e.to_string()}));
+                }
+            }
+            Ok(())
+        }
         "key" => {
             let Some(key) = input.key.as_deref() else {
                 return json_response(400, json!({"error":"key is required"}));

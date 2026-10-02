@@ -1,0 +1,40 @@
+{
+  "colors": {
+    "graphite": "#121619",
+    "ivory": "#F6F5F1",
+    "mint": "#57E6BE",
+    "slate": "#687178"
+  },
+  "geometry": {
+    "markViewBox": [
+      0,
+      0,
+      361.22037,
+      173.42355
+    ],
+    "wordmarkViewBox": [
+      0,
+      0,
+      896.0,
+      157.0
+    ],
+    "primaryLockup": {
+      "width": 1302.4210459306132,
+      "height": 174.0,
+      "gap": 44.0,
+      "markHeight": 174.0,
+      "wordmarkHeight": 157.0
+    },
+    "appIcon": {
+      "size": 1024,
+      "cornerRadius": 220,
+      "markBounds": [
+        202.0,
+        363.1675836553736,
+        620.0,
+        297.6648326892528
+      ]
+    }
+  },
+  "source": "approved reference reconstruction"
+}

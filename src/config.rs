@@ -41,20 +41,23 @@ pub struct Colors {
 impl Default for Colors {
     fn default() -> Self {
         Self {
-            text: "#dbe2ec".into(),
-            dim: "#97a3b6".into(),
-            muted: "#6d7a8e".into(),
-            faint: "#263041".into(),
-            accent: "#7dd3fc".into(),
+            // Refined v3 identity: Graphite / Ivory / Mint / Slate. The extra
+            // surface neutrals are tonal derivatives; amber/rose remain
+            // semantic working/attention colours rather than brand accents.
+            text: "#f6f5f1".into(),
+            dim: "#aeb3af".into(),
+            muted: "#707a80".into(),
+            faint: "#30363a".into(),
+            accent: "#57e6be".into(),
             working: "#f5a623".into(),
             attention: "#f7788c".into(),
-            finished: "#3ecf8e".into(),
-            selection: "#22304a".into(),
-            hover: "#151d2a".into(),
-            base: "#0f141c".into(),
-            raised: "#141b26".into(),
-            well: "#0b0f15".into(),
-            overlay: "#18202e".into(),
+            finished: "#57e6be".into(),
+            selection: "#1a2724".into(),
+            hover: "#19201f".into(),
+            base: "#121619".into(),
+            raised: "#171c1f".into(),
+            well: "#0d1113".into(),
+            overlay: "#1c2225".into(),
         }
     }
 }
@@ -64,19 +67,25 @@ impl Colors {
     /// of them never chose it, so it follows the current default instead.
     fn upgrade(&mut self) {
         let new = Colors::default();
-        for (field, old, fresh) in [
-            (&mut self.text, "#cbd5e1", new.text),
-            (&mut self.dim, "#64748b", new.dim),
-            (&mut self.faint, "#334155", new.faint),
-            (&mut self.working, "#f59e0b", new.working),
-            (&mut self.attention, "#fb7185", new.attention),
-            (&mut self.finished, "#34d399", new.finished),
-            (&mut self.selection, "#1e293b", new.selection),
-        ] {
-            if field.eq_ignore_ascii_case(old) {
-                *field = fresh;
+        fn follows_default(field: &mut String, retired: &[&str], fresh: &str) {
+            if retired.iter().any(|old| field.eq_ignore_ascii_case(old)) {
+                *field = fresh.to_string();
             }
         }
+        follows_default(&mut self.text, &["#cbd5e1", "#dbe2ec"], &new.text);
+        follows_default(&mut self.dim, &["#64748b", "#97a3b6"], &new.dim);
+        follows_default(&mut self.muted, &["#6d7a8e"], &new.muted);
+        follows_default(&mut self.faint, &["#334155", "#263041"], &new.faint);
+        follows_default(&mut self.accent, &["#7dd3fc"], &new.accent);
+        follows_default(&mut self.working, &["#f59e0b", "#f5a623"], &new.working);
+        follows_default(&mut self.attention, &["#fb7185", "#f7788c"], &new.attention);
+        follows_default(&mut self.finished, &["#34d399", "#3ecf8e"], &new.finished);
+        follows_default(&mut self.selection, &["#1e293b", "#22304a"], &new.selection);
+        follows_default(&mut self.hover, &["#151d2a"], &new.hover);
+        follows_default(&mut self.base, &["#0f141c"], &new.base);
+        follows_default(&mut self.raised, &["#141b26"], &new.raised);
+        follows_default(&mut self.well, &["#0b0f15"], &new.well);
+        follows_default(&mut self.overlay, &["#18202e"], &new.overlay);
     }
 }
 
@@ -463,20 +472,20 @@ archive_transcripts = true
 # base, raised, well and overlay are the grounds toomux paints: the list,
 # header and footer bands, the live preview, and pop-overs.
 [colors]
-text      = "#dbe2ec"
-dim       = "#97a3b6"
-muted     = "#6d7a8e"
-faint     = "#263041"
-accent    = "#7dd3fc"
+text      = "#f6f5f1"
+dim       = "#aeb3af"
+muted     = "#707a80"
+faint     = "#30363a"
+accent    = "#57e6be"
 working   = "#f5a623"
 attention = "#f7788c"
-finished  = "#3ecf8e"
-selection = "#22304a"
-hover     = "#151d2a"
-base      = "#0f141c"
-raised    = "#141b26"
-well      = "#0b0f15"
-overlay   = "#18202e"
+finished  = "#57e6be"
+selection = "#1a2724"
+hover     = "#19201f"
+base      = "#121619"
+raised    = "#171c1f"
+well      = "#0d1113"
+overlay   = "#1c2225"
 "##
         )
     }

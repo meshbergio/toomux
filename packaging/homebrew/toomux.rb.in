@@ -1,7 +1,7 @@
 # Rendered into meshbergio/homebrew-tap by packaging/homebrew/render.sh when a
 # release is made. Prebuilt binaries per platform, laio-style.
 class Toomux < Formula
-  desc "Control center for Claude Code sessions in tmux"
+  desc "Claude Code sessions, accounts, handovers and memory in tmux"
   homepage "https://github.com/meshbergio/toomux"
   version "@VERSION@"
   license any_of: ["MIT", "Apache-2.0"]
