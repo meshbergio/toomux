@@ -838,8 +838,8 @@ function draw(now) {
       if (x + R < 0 || x - R > W || y + R < 0 || y - R > H) continue;
       const isF = F && (F.f === p.i || (F.f >= 0 && nodes[F.f].p === p.i));
       ctx.beginPath(); ctx.arc(x, y, R, 0, TAU);
-      ctx.fillStyle = isF ? "rgba(34,48,74,.22)" : "rgba(20,27,38,.34)"; ctx.fill();
-      ctx.strokeStyle = isF ? "rgba(125,211,252,.28)" : dimAll ? "rgba(38,48,65,.5)" : "rgba(38,48,65,.95)";
+      ctx.fillStyle = isF ? "rgba(87,230,190,.08)" : "rgba(18,22,25,.34)"; ctx.fill();
+      ctx.strokeStyle = isF ? "rgba(87,230,190,.28)" : dimAll ? "rgba(48,54,58,.5)" : "rgba(48,54,58,.95)";
       ctx.stroke();
     }
   }
@@ -883,7 +883,7 @@ function draw(now) {
     ctx.beginPath();
     for (const i of s.orbit) { if (!vis[i]) continue; cnt++; if (!started) { ctx.moveTo(SX[s.i], SY[s.i]); started = true; } ctx.lineTo(SX[i], SY[i]); }
     if (cnt < 1) continue;
-    ctx.strokeStyle = isF ? "rgba(125,211,252,.34)" : dimAll ? "rgba(125,211,252,.05)" : "rgba(125,211,252,.13)";
+    ctx.strokeStyle = isF ? "rgba(87,230,190,.34)" : dimAll ? "rgba(87,230,190,.05)" : "rgba(87,230,190,.13)";
     ctx.lineWidth = 1; ctx.stroke();
   }
 
@@ -977,8 +977,8 @@ function drawNodes(take, now, fade) {
     const x = SX[i], y = SY[i], r = SR[i];
     ctx.beginPath(); ctx.arc(x, y, r, 0, TAU);
     ctx.fillStyle = "#1c2225"; ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = i === sel || i === hover ? "#8391a8" : "#44536c"; ctx.stroke();
-    if (r > 9) { ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, TAU); ctx.strokeStyle = "rgba(68,83,108,.55)"; ctx.stroke(); }
+    ctx.lineWidth = 1; ctx.strokeStyle = i === sel || i === hover ? "#aeb3af" : "#3b4449"; ctx.stroke();
+    if (r > 9) { ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, TAU); ctx.strokeStyle = "rgba(104,113,120,.55)"; ctx.stroke(); }
     ctx.beginPath(); ctx.arc(x, y, Math.max(1, Math.min(2.2, r * 0.18)), 0, TAU); ctx.fillStyle = C.dim; ctx.fill();
   }
   // sessions: sky discs with a rim
@@ -986,13 +986,13 @@ function drawNodes(take, now, fade) {
   const sess = [];
   for (const i of visNodes) if (nodes[i].kind === "session" && ON[i] && take(i)) sess.push(i);
   if (sess.length) {
-    ctx.fillStyle = "rgba(125,211,252,.26)"; ctx.strokeStyle = C.accent;
+    ctx.fillStyle = "rgba(87,230,190,.22)"; ctx.strokeStyle = C.accent;
     for (const i of sess) {
       const r = SR[i];
       if (alphaOf) ctx.globalAlpha = baseA * alphaOf(nodes[i]);
       ctx.beginPath(); ctx.arc(SX[i], SY[i], r, 0, TAU);
-      if (r < 2.6) { ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(125,211,252,.26)"; }
-      else { ctx.fill(); ctx.stroke(); if (r > 5) { ctx.beginPath(); ctx.arc(SX[i], SY[i], Math.min(2, r * 0.22), 0, TAU); ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(125,211,252,.26)"; } }
+      if (r < 2.6) { ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(87,230,190,.22)"; }
+      else { ctx.fill(); ctx.stroke(); if (r > 5) { ctx.beginPath(); ctx.arc(SX[i], SY[i], Math.min(2, r * 0.22), 0, TAU); ctx.fillStyle = C.accent; ctx.fill(); ctx.fillStyle = "rgba(87,230,190,.22)"; } }
     }
     ctx.globalAlpha = baseA;
   }
@@ -1041,7 +1041,7 @@ function drawNodes(take, now, fade) {
     }
   }
   // turns (sky dots) and outputs (small squares)
-  ctx.fillStyle = "rgba(125,211,252,.85)"; ctx.beginPath();
+  ctx.fillStyle = "rgba(87,230,190,.85)"; ctx.beginPath();
   let any = false;
   for (const i of visNodes) { if (nodes[i].kind !== "turn" || !ON[i] || !take(i)) continue; const r = SR[i]; ctx.moveTo(SX[i] + r, SY[i]); ctx.arc(SX[i], SY[i], r, 0, TAU); any = true; }
   if (any) ctx.fill();
@@ -1599,7 +1599,7 @@ function drawHist() {
     let y = h;
     const seg = (frac, c) => { const hh2 = H0 * frac; if (hh2 <= 0) return; g.fillStyle = c; g.fillRect(bx, y - hh2, bwid, hh2); y -= hh2; };
     seg(1 - fs - fh, past ? "rgba(219,226,236,.62)" : "rgba(109,122,142,.28)");
-    seg(fs, past ? "rgba(125,211,252,.75)" : "rgba(109,122,142,.34)");
+    seg(fs, past ? "rgba(87,230,190,.75)" : "rgba(104,113,120,.34)");
     seg(fh, past ? "rgba(245,166,35,.9)" : "rgba(109,122,142,.4)");
   }
   g.fillStyle = C.hair; g.fillRect(0, h - 0.5, w, 0.5);
