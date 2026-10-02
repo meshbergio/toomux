@@ -828,10 +828,46 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
             };
             let cfg = Config::load().unwrap_or_default();
             let all = registry::load(&cfg);
-            match registry::find(&all, id) {
-                Ok(s) => actions::jump(s),
-                Err(e) => Err(e),
+            if let Err(e) = registry::find(&all, id) {
+                return json_response(404, json!({"error":e.to_string()}));
             }
+            let geometry = match tui_tmux(
+                &server,
+                &["display-message", "-p", "-t", &pane, "#{pane_width}"],
+            ) {
+                Ok(v) => v,
+                Err(e) => return json_response(502, json!({"error":e.to_string()})),
+            };
+            let cols = geometry
+                .trim()
+                .parse::<u16>()
+                .unwrap_or(120)
+                .clamp(TUI_MIN_COLS, TUI_MAX_COLS);
+            let ansi = match tui_tmux(&server, &["capture-pane", "-p", "-e", "-N", "-t", &pane]) {
+                Ok(v) => v,
+                Err(e) => return json_response(502, json!({"error":e.to_string()})),
+            };
+            let hits = semantic_session_hits(&ansi, cols);
+            let Some(target) = hits
+                .iter()
+                .position(|hit| hit.get("id").and_then(Value::as_str) == Some(id))
+            else {
+                return json_response(
+                    409,
+                    json!({"error":"session is not selectable in the current TUI view"}),
+                );
+            };
+            let mut keys = vec!["Home"; 1];
+            keys.extend(std::iter::repeat_n("Down", target));
+            if let Err(e) = tui_tmux(&server, &["send-keys", "-t", &pane, "--", keys[0]]) {
+                return json_response(502, json!({"error":e.to_string()}));
+            }
+            for key in keys.into_iter().skip(1) {
+                if let Err(e) = tui_tmux(&server, &["send-keys", "-t", &pane, "--", key]) {
+                    return json_response(502, json!({"error":e.to_string()}));
+                }
+            }
+            Ok(())
         }
         "key" => {
             let Some(key) = input.key.as_deref() else {
