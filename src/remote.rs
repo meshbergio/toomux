@@ -115,7 +115,7 @@ struct TuiInput {
     #[serde(default)]
     delta: Option<i8>,
     #[serde(default)]
-    steps: Option<u16>,
+    target_row: Option<u16>,
 }
 
 pub fn pair() -> Result<()> {
@@ -737,21 +737,25 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
     };
     let result = match input.kind.as_str() {
         "session-step" => {
-            let steps = input.steps.unwrap_or(0).min(128);
-            let direction = input.key.as_deref().unwrap_or("Down");
-            if !matches!(direction, "Up" | "Down") {
-                return json_response(400, json!({"error":"session-step key must be Up or Down"}));
+            let target_row = input.target_row.unwrap_or(0);
+            if target_row == 0 {
+                return json_response(400, json!({"error":"session-step target_row is required"}));
             }
-            // Phone session taps are semantic list navigation, not mouse
-            // emulation. F12 is a private, idempotent remote-shell primitive
-            // that always restores list focus; unlike Alt-S it never toggles
-            // back into the live pane when a stale browser frame arrives.
+            // Resolve movement against the host's own current frame. The
+            // browser only tells us which visible session row was tapped.
             let run = || -> Result<()> {
                 tui_tmux(&server, &["send-keys", "-t", &pane, "--", "F12"])?;
-                std::thread::sleep(Duration::from_millis(80));
+                std::thread::sleep(Duration::from_millis(90));
+                let frame = tui_tmux_capture(&server, &pane)?;
+                let current_row = selected_session_row(&frame).unwrap_or(target_row);
+                let (direction, steps) = if target_row < current_row {
+                    ("Up", current_row - target_row)
+                } else {
+                    ("Down", target_row - current_row)
+                };
                 for _ in 0..steps {
                     tui_tmux(&server, &["send-keys", "-t", &pane, "--", direction])?;
-                    std::thread::sleep(Duration::from_millis(20));
+                    std::thread::sleep(Duration::from_millis(24));
                 }
                 tui_tmux(&server, &["send-keys", "-t", &pane, "--", "Enter"])?;
                 Ok(())
@@ -1012,6 +1016,27 @@ fn send_tui_mouse(
     let mut args: Vec<&str> = vec!["send-keys", "-t", pane, "-H"];
     args.extend(hex.iter().map(String::as_str));
     tui_tmux(server, &args).map(|_| ())
+}
+
+fn tui_tmux_capture(server: &str, pane: &str) -> Result<String> {
+    let out = Command::new("tmux")
+        .args(["-L", server, "capture-pane", "-p", "-t", pane, "-S", "0"])
+        .output()
+        .context("capture remote TUI pane")?;
+    if !out.status.success() {
+        return Err(anyhow::anyhow!(
+            "capture remote TUI pane failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn selected_session_row(frame: &str) -> Option<u16> {
+    frame
+        .lines()
+        .enumerate()
+        .find_map(|(i, line)| line.contains('▎').then_some((i + 1) as u16))
 }
 
 fn query_param<'a>(path: &'a str, name: &str) -> Option<&'a str> {
