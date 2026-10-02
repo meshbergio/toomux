@@ -747,9 +747,13 @@ fn semantic_session_hits(ansi: &str, cols: u16) -> Vec<Value> {
     for (row, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start_matches(|c: char| c == '▎' || c.is_whitespace());
         for s in &sessions {
-            let marker = format!("● {}", s.title);
+            let active_marker = format!("● {}", s.title);
+            let attention_marker = format!("◆ {}", s.title);
             let idle_marker = format!("○ {}", s.title);
-            if trimmed.contains(&marker) || trimmed.contains(&idle_marker) {
+            if trimmed.contains(&active_marker)
+                || trimmed.contains(&attention_marker)
+                || trimmed.contains(&idle_marker)
+            {
                 hits.push(json!({
                     "id":s.id,
                     "pid":s.pid,
