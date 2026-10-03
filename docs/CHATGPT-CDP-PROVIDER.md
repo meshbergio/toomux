@@ -43,7 +43,22 @@ The retired Toomux-owned provider key is no longer consulted by the live client 
 
 The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers. On Claude Code 2.1.257 or later, the installer maps `chatgpt-browser` with `behavesAs: claude-fable-5-1`; older Claude Code releases fall back to `claude-opus-4-6`. The custom model ID is still the ID sent to the local provider. Existing Claude settings, picker rows and `replaceBuiltInOptions` policy are preserved.
 
-Fable's client profile uses a leaner agent harness and enables its long-running-agent protocol, but Claude Code also assumes a native 1M context window for Fable. To keep Toomux's existing context-pressure boundary, `toomux-claude` defaults `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to `200000`. An explicit caller value still wins. This preserves proactive compaction at 200K while retaining the Fable client behavior.
+Fable's client profile uses a leaner agent harness and enables its long-running-agent protocol, but Claude Code also assumes a native 1M context window for Fable. Toomux does not use that client assumption as a global compaction threshold. Managed sessions resolve a normal `[[context_policy]]` instead. When that policy has a known safe context ceiling and gives Toomux rollover ownership, Toomux launches only that session with a high-precedence `--settings` overlay containing `"autoCompactEnabled": false`. Explicit `/compact` remains available, and the account's settings file is not rewritten for lifecycle control.
+
+The dedicated Browser account should therefore have an explicit policy with the qualified Fable client capacity and lower Toomux handover thresholds. The current live shape is:
+
+```toml
+[[context_policy]]
+account = "bonnie"
+context_window_tokens = 1000000
+handover_turn_end_tokens = 200000
+handover_tokens = 400000
+subagent_handover_tokens = 250000
+fork_context_tokens = 200000
+compaction = "toomux"
+```
+
+The account selector is the launch-time capability hint for this dedicated routed account; once Claude's status line reports `chatgpt-browser`, model-specific rules can further refine it. Unknown or unsafe context capacities leave native/client automatic compaction enabled.
 
 Claude Code assigns custom gateway models the list price of their `behavesAs` model. Toomux therefore ignores the status-line `total_cost_usd` field when the actual model ID is a custom/non-`claude-*` provider ID such as `chatgpt-browser`; transcript token accounting already treats such local-provider IDs as zero API spend.
 

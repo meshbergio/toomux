@@ -985,8 +985,8 @@ impl App {
                 extra.push((format!("◎ {}", q.chip(now)), self.voyage_tone(q)));
             }
             if let Some(tokens) = self.info.get(&s.id).and_then(|i| i.tokens) {
-                let near =
-                    self.cfg.handover_tokens > 0 && tokens * 4 >= self.cfg.handover_tokens * 3;
+                let policy = crate::context_policy::for_session(&self.cfg, s);
+                let near = policy.handover_tokens > 0 && tokens * 4 >= policy.handover_tokens * 3;
                 extra.push((
                     format!("{}k context", tokens / 1000),
                     if near { self.pal.working_word } else { muted },

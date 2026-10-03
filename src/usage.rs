@@ -363,6 +363,7 @@ pub fn statusline(cfg: &Config) -> String {
     let mut line = render_statusline(
         cfg,
         name.as_deref(),
+        (!sid.is_empty()).then_some(sid.as_str()),
         current.as_ref().or(report.as_ref()),
         &info,
         now,
@@ -452,6 +453,7 @@ fn ansi(hex: &str) -> String {
 fn render_statusline(
     cfg: &Config,
     account: Option<&str>,
+    session: Option<&str>,
     r: Option<&Report>,
     info: &SessionInfo,
     now: i64,
@@ -462,12 +464,24 @@ fn render_statusline(
     if let Some(a) = account {
         parts.push(format!("{}{a}", ansi(&c.muted)));
     }
+    let policy = crate::context_policy::resolve(
+        cfg,
+        crate::context_policy::PolicySubject {
+            account: account.map(str::to_string),
+            provider: info
+                .model_id
+                .as_deref()
+                .and_then(crate::context_policy::provider_for_model),
+            model: info.model_id.clone(),
+            session: session.map(str::to_string),
+        },
+    );
     // Context in tokens, measured against where it hands over: amber past
     // the turn-end limit, rose near the hard one.
     match (info.tokens, info.context) {
-        (Some(t), _) if cfg.handover_tokens > 0 => {
-            let used = 100.0 * t as f64 / cfg.handover_tokens as f64;
-            let warn = 100.0 * cfg.turn_end_limit() as f64 / cfg.handover_tokens as f64;
+        (Some(t), _) if policy.handover_tokens > 0 => {
+            let used = 100.0 * t as f64 / policy.handover_tokens as f64;
+            let warn = 100.0 * policy.turn_end_limit() as f64 / policy.handover_tokens as f64;
             parts.push(format!(
                 "{}ctx {}{}k",
                 ansi(&c.muted),

@@ -4017,8 +4017,8 @@ impl App {
             if let Some(m) = &info.model {
                 whereabouts.extend([sep(), (m.to_lowercase(), Style::new().fg(p.muted))]);
             }
-            let near =
-                |t: u64| self.cfg.handover_tokens > 0 && t * 4 >= self.cfg.handover_tokens * 3;
+            let policy = crate::context_policy::for_session(&self.cfg, &s);
+            let near = |t: u64| policy.handover_tokens > 0 && t * 4 >= policy.handover_tokens * 3;
             match (info.tokens, info.context) {
                 (Some(t), _) => whereabouts.extend([
                     sep(),

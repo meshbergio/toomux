@@ -1,3 +1,4 @@
+use crate::context_policy::ContextPolicyRule;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -125,6 +126,9 @@ pub struct Config {
     /// past this many tokens the caller is asked to brief a fresh
     /// general-purpose subagent instead. 0: forks are always allowed.
     pub fork_context_tokens: u64,
+    /// Per-session/model context lifecycle overrides. Global handover fields
+    /// above remain the backwards-compatible fallback.
+    pub context_policy: Vec<ContextPolicyRule>,
     /// The model that checks a voyage after every turn (`/voyage`): a small
     /// one reads the end of the conversation in a few seconds.
     #[serde(alias = "quest_judge_model")]
@@ -171,6 +175,7 @@ impl Default for Config {
             handover_turn_end_tokens: 250_000,
             subagent_handover_tokens: 250_000,
             fork_context_tokens: 200_000,
+            context_policy: Vec::new(),
             voyage_judge_model: "haiku".into(),
             voyage_hard_model: "sonnet".into(),
             voyage_relentless_model: "opus".into(),
@@ -413,6 +418,26 @@ subagent_handover_tokens = 250000
 # subagent with a complete brief instead. 0: forks are always allowed.
 fork_context_tokens = 200000
 
+# Optional per-session/model lifecycle policies. More-specific matches override
+# only the fields they specify. compaction = "toomux" is accepted only when
+# the context window is known and the hard handover plus safety reserve fits
+# below it; otherwise native compaction remains enabled.
+# [[context_policy]]
+# model = "chatgpt-browser"
+# context_window_tokens = 1000000
+# handover_turn_end_tokens = 200000
+# handover_tokens = 400000
+# compaction = "toomux"
+#
+# [[context_policy]]
+# model = "local-qwen-*"
+# context_window_tokens = 32768
+# handover_turn_end_tokens = 12000
+# handover_tokens = 20000
+# subagent_handover_tokens = 12000
+# fork_context_tokens = 10000
+# compaction = "toomux"
+
 # /voyage <outcome> keeps a session at it, turn after turn and across
 # handovers, until it's done. After each turn this model reads the end of the
 # conversation and says whether it is (light and steady persistence).
@@ -555,6 +580,7 @@ fn lift_settings(mut t: toml::Table) -> toml::Table {
         "handover_turn_end_tokens",
         "subagent_handover_tokens",
         "fork_context_tokens",
+        "context_policy",
         "voyage_judge_model",
         "voyage_hard_model",
         "voyage_relentless_model",
@@ -620,5 +646,42 @@ mod tests {
         let cfg: Config = lift_settings(t).try_into().unwrap();
         assert_eq!((cfg.finished_minutes, cfg.notify_after_secs), (3, 5));
         assert_eq!(cfg.accounts.len(), 1);
+    }
+
+    #[test]
+    fn context_policy_rules_parse_as_partial_overrides() {
+        let raw = r#"
+handover_tokens = 400000
+handover_turn_end_tokens = 200000
+
+[[context_policy]]
+account = "bonnie"
+context_window_tokens = 1000000
+compaction = "toomux"
+
+[[context_policy]]
+model = "local-qwen-*"
+context_window_tokens = 32768
+handover_tokens = 20000
+handover_turn_end_tokens = 12000
+"#;
+        let t: toml::Table = toml::from_str(raw).unwrap();
+        let cfg: Config = lift_settings(t).try_into().unwrap();
+        assert_eq!(cfg.context_policy.len(), 2);
+        assert_eq!(cfg.context_policy[0].account.as_deref(), Some("bonnie"));
+        assert_eq!(cfg.context_policy[0].handover_tokens, None);
+        assert_eq!(cfg.context_policy[1].model.as_deref(), Some("local-qwen-*"));
+        assert_eq!(cfg.context_policy[1].handover_tokens, Some(20_000));
+    }
+
+    #[test]
+    fn an_unknown_compaction_mode_is_rejected() {
+        let raw = r#"
+[[context_policy]]
+model = "x"
+compaction = "guess"
+"#;
+        let t: toml::Table = toml::from_str(raw).unwrap();
+        assert!(lift_settings(t).try_into::<Config>().is_err());
     }
 }

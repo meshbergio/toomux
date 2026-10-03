@@ -91,10 +91,11 @@ themselves](https://www.anthropic.com/engineering/effective-context-engineering-
 When the context fills up, Claude Code compacts: it summarises the conversation
 and carries on. That usually happens mid-task, and details get lost.
 
-toomux hands over well before that. Once a session passes 250k and finishes
-its turn, it writes a brief, saves what it learned to memory, and a fresh
-session picks up in the same pane. Nothing is summarised, and the old
-conversation stays searchable.
+toomux hands over well before that. Each managed session resolves its own
+context policy, so a 32k local model can hand over far earlier than a 1M
+session. At the policy's natural break, it writes a brief, saves what it learned
+to memory, and a fresh session picks up in the same pane. Nothing is summarised,
+and the old conversation stays searchable.
 
 The first numbers I published compared the week before with the first day using
 toomux. Enough to see the shape of it, not enough to call it settled. I kept
