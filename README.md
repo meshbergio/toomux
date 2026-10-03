@@ -22,27 +22,19 @@
 
 <p align="center"><sub>Every session. Every account. What is working, what is waiting, and what needs you.</sub></p>
 
-I run about ten Claude Code sessions across two Max 20x accounts. At any moment one is
-coding, one is waiting on a permission prompt I have not seen, one has hit a usage
-limit, and another has grown into an enormous context that it keeps carrying forward.
+I run about ten Claude Code sessions across two Max 20x accounts. One is coding, one is
+waiting for me, one has hit a usage limit, and another is dragging a huge context behind
+it.
 
-That last one is the expensive failure mode. Every new turn carries more old context
-forward. In the matched workload below — exactly **33,026 calls on each side** —
-context per call was **309,783 → 147,188 tokens** with toomux, while normalized
-list-price cost per 1,000 calls was **$131.59 → $60.09: 54.3% lower**. Calls above
-400k tokens fell from **27.84% to 0.154%**.
+That last one burns money fast. Past a point, extra context is mostly baggage: every
+turn costs more, while the model has more old material to sift through.
 
-The cost is only half the problem. More context is not automatically better context:
-the model has more stale and irrelevant material to sift through as the window grows.
-[Anthropic's context-engineering guidance](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
-describes the same diminishing-return problem. toomux is built to keep useful context
-sharp instead of treating the largest possible conversation as the goal.
+Across a matched 33,026-call comparison: **$131.59 to $60.09 per 1,000 calls**,
+**309,783 to 147,188 tokens per call**, and **27.84% to 0.154% of calls above 400k**.
 
-tmux kept the terminals alive. It did not coordinate the workload. Finished sessions
-still went unnoticed, account capacity still needed manual juggling, and a long-running
-piece of work was still tied to whichever conversation happened to start it.
+tmux kept the terminals alive. It did not coordinate the work. toomux does.
 
-I built toomux to deal with that. Everything in it came from running this way for real.
+Everything in toomux came from running this way for real.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/proof-mobile-dark.svg">
