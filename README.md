@@ -26,6 +26,18 @@ I run about ten Claude Code sessions across two Max 20x accounts. At any moment 
 coding, one is waiting on a permission prompt I have not seen, one has hit a usage
 limit, and another has grown into an enormous context that it keeps carrying forward.
 
+That last one is the expensive failure mode. Every new turn carries more old context
+forward. In the matched workload below — exactly **33,026 calls on each side** —
+context per call was **309,783 → 147,188 tokens** with toomux, while normalized
+list-price cost per 1,000 calls was **$131.59 → $60.09: 54.3% lower**. Calls above
+400k tokens fell from **27.84% to 0.154%**.
+
+The cost is only half the problem. More context is not automatically better context:
+the model has more stale and irrelevant material to sift through as the window grows.
+[Anthropic's context-engineering guidance](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+describes the same diminishing-return problem. toomux is built to keep useful context
+sharp instead of treating the largest possible conversation as the goal.
+
 tmux kept the terminals alive. It did not coordinate the workload. Finished sessions
 still went unnoticed, account capacity still needed manual juggling, and a long-running
 piece of work was still tied to whichever conversation happened to start it.
@@ -63,8 +75,9 @@ check, and send the session back for proof before accepting the result.
 **Remember across sessions.** Conversations, handover briefs and project memory become
 one searchable history instead of knowledge trapped in the current chat.
 
-**Use the same system remotely.** The Android client is a native window onto the same
-host-side toomux shell, not a separate mobile dashboard.
+**Use the same system remotely.** Pair through ByteTraverse, then open the full toomux
+TUI at [toomux.com/remote](https://toomux.com/remote/) from any modern browser on any
+device, or use the native Android client. Both connect back to the same host-side system.
 
 toomux does not replace Claude Code. It coordinates the Claude Code sessions you
 already run.
@@ -100,8 +113,7 @@ already have.
 ## Handover instead of compaction
 
 Long conversations can become expensive to carry and harder for a model to use well
-before they simply run out of context. Anthropic describes the same general problem in
-[its context-engineering guidance](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+before they simply run out of context.
 
 toomux treats that as a continuity problem rather than a reason to keep stretching one
 conversation. By default, a main session becomes eligible to hand over at a natural
@@ -256,29 +268,47 @@ turns and kept outputs around them, and the memory each session found or read.
 
 </details>
 
-## The same toomux on Android
+## The same toomux, remotely
 
-The Android app is not a second dashboard. It is a native window onto the same toomux
-shell running on the host, with the same sessions, state, keyboard model and memory.
+Remote access is another window onto the host-side toomux, not another dashboard. The
+workstation stays authoritative and each paired remote client gets an isolated
+`toomux shell` backed by the same sessions, accounts, memory, handovers and voyages.
 
-<picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/android-continuity-mobile-dark.png">
-  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/android-continuity-mobile-light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/android-continuity-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/android-continuity-light.png">
-  <img src="assets/readme/android-continuity-light.png" alt="The real desktop toomux surface connected to the real native Android toomux surface, both representing the same host-side session system" width="100%">
-</picture>
+### Browser · any device
+
+Open [toomux.com/remote](https://toomux.com/remote/) from any phone, tablet, laptop or
+other device with a modern browser. After ByteTraverse pairing, it renders the full
+toomux TUI and sends input back to the host. The public site is the UI/bootstrap; it is
+not a relay for private session data.
+
+### Native Android
+
+The Android app is the dedicated native route to that same host-side shell, with the same
+session state and keyboard model rendered as an Android view.
+
+<p align="center"><sub>DESKTOP · THE HOST-SIDE TOOMUX</sub></p>
+
+<p align="center">
+  <img src="assets/hero.png" alt="The real desktop toomux TUI on the host, showing the shared session system" width="100%">
+</p>
+
+<p align="center"><sub>same host shell · ByteTraverse</sub></p>
+
+<p align="center">
+  <img src="assets/readme/android-native-qualified.png" alt="The real native Android toomux client rendering the same host-side session system over ByteTraverse" width="100%">
+</p>
 
 For each paired device, the host starts an isolated `toomux shell`, captures its ANSI
 cell grid, and the Android app renders that grid natively and sends input back. The
 ordinary app surface is a native Android view; the self-contained browser memory graph
 is the only WebView surface.
 
-Remote access is opt-in. ByteTraverse provides the encrypted device-to-host path;
-toomux adds separate per-device application authentication on top. The production
-endpoint defaults to `10.30.0.1:7462`, pairing creates a one-time code, and the Android
-bearer token is encrypted at rest with a non-exportable Android Keystore key. The exact
-boundary is documented in the [Android guide](android/README.md).
+Remote access is opt-in. Both browser remote access and native Android require a
+ByteTraverse connection to the host; toomux adds separate per-device application
+authentication on top. The browser path uses a purpose-bound ByteTraverse WebRTC
+capability and the Android path uses the ByteTraverse mesh endpoint. The exact browser
+boundary is documented in the [web remote design](docs/MOBILE-WEB-REMOTE.md), and the
+native boundary in the [Android guide](android/README.md).
 
 ## Where the tokens went
 
@@ -318,7 +348,7 @@ The product is easier to trust when the boundaries are visible.
   <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/architecture-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/architecture-light.svg">
-  <img src="assets/readme/architecture-light.svg" alt="toomux product model: sessions, memory and accounts coordinated locally, with optional remote access to the same host-side system from Android" width="100%">
+  <img src="assets/readme/architecture-light.svg" alt="toomux product model: one host-side coordination system used locally through the full TUI, sidebar, normal tmux and automation, or remotely through ByteTraverse from any browser at toomux.com/remote or the native Android app" width="100%">
 </picture>
 
 **Claude Code stays Claude Code.** toomux coordinates sessions around it; local session
@@ -327,8 +357,9 @@ coordination does not proxy Claude Code model traffic through a separate AI serv
 **Sessions stay isolated.** Every session that toomux starts, reopens or adopts runs in
 its own tmux server, so one server failing does not take the others with it.
 
-**Remote access is optional.** Local use does not require the Android path or a remote
-listener.
+**Remote access is optional.** Local use does not require ByteTraverse or a remote
+listener. When enabled, ByteTraverse is the shared transport boundary for both remote
+channels: the browser TUI at `toomux.com/remote` and the native Android client.
 
 **Memory is inspectable.** Handover briefs, archived transcripts, project memory and the
 memory graph are files and records you can inspect, search and rebuild rather than
@@ -398,10 +429,24 @@ archiving, restart recovery and memory upkeep. `toomux init` writes the config;
 `toomux where` shows every config/state/archive location. The complete setting
 reference is in the [Guide](GUIDE.md#setup).
 
+### Browser remote
+
+Any phone, tablet, laptop or other device with a modern browser can use the full remote
+TUI. Both sides need ByteTraverse connectivity. On the host:
+
+```sh
+toomux remote serve
+toomux remote phone
+```
+
+Then open [toomux.com/remote](https://toomux.com/remote/) on the remote device and scan
+the one-use pairing code. Browser transport and application authority are separate; the
+full security model is in [docs/MOBILE-WEB-REMOTE.md](docs/MOBILE-WEB-REMOTE.md).
+
 ### Android
 
-The signed Android APK is attached to tagged releases. The Android client needs an
-existing ByteTraverse route to the host; then run:
+The signed Android APK is attached to tagged releases. Android uses the same
+ByteTraverse-backed remote service; then run:
 
 ```sh
 toomux remote serve
