@@ -64,7 +64,7 @@ jobs:
           if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
           "./$name/toomux" --version
 
-          version="$(sed -n 's/^version = "\\([^"]*\\)"/\\1/p' Cargo.toml | head -1)"
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           sh packaging/bundle/package.sh \
             "${{ matrix.target }}" \
             "target/${{ matrix.target }}/release/toomux" \
