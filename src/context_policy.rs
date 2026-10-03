@@ -323,7 +323,10 @@ pub fn for_session(cfg: &Config, session: &Session) -> ResolvedContextPolicy {
     resolve(
         cfg,
         PolicySubject {
-            account: session.account.map(|i| cfg.accounts[i].name.clone()),
+            account: session
+                .account
+                .and_then(|i| cfg.accounts.get(i))
+                .map(|a| a.name.clone()),
             provider,
             model,
             session: Some(session.id.clone()),
@@ -746,6 +749,43 @@ mod tests {
             pane: None,
         };
         assert!(needs_policy_boundary_for_session(&session, &current));
+    }
+
+    #[test]
+    fn stale_session_account_index_falls_back_without_panicking() {
+        let mut cfg = Config::default();
+        cfg.accounts.clear();
+        let session = Session {
+            pid: 1,
+            proc_start: None,
+            id: "stale-account-index".into(),
+            cwd: "/tmp".into(),
+            name: "stale".into(),
+            title: "stale".into(),
+            topic: None,
+            pr: None,
+            queued: None,
+            pin: None,
+            dormant: false,
+            restore: None,
+            state: crate::registry::State::Idle,
+            waiting_for: None,
+            limit: None,
+            handover: None,
+            since_ms: 0,
+            started_ms: 0,
+            account: Some(0),
+            config_dir: None,
+            args: vec!["--model".into(), "local-qwen-32b".into()],
+            env: vec![],
+            tty: None,
+            pane: None,
+        };
+
+        let policy = for_session(&cfg, &session);
+        assert_eq!(policy.account, None);
+        assert_eq!(policy.model.as_deref(), Some("local-qwen-32b"));
+        assert_eq!(policy.provider.as_deref(), Some("local"));
     }
 
     #[test]
