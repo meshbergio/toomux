@@ -4,6 +4,33 @@ All notable user-visible changes are recorded here. toomux follows semantic
 versioning once a compatibility promise is established; the 0.x series may
 still change configuration and command details while they settle.
 
+## 0.4.1 - 2026-10-03
+
+### Added
+
+- Add authenticated per-session literal text and terminal-key input so phone
+  clients can control the selected session directly instead of steering the
+  desktop TUI through coordinate hit targets.
+- Add a native phone browser shell with semantic session cards, attention and
+  active filters, dedicated session terminals, a visible composer, terminal
+  key rail, session switcher, connection sheet, Memory and a separate Full
+  Console power surface.
+
+### Changed
+
+- Make the browser remote session-first on phones. The full Toomux TUI remains
+  available under Console, but it is no longer the navigation substrate for
+  ordinary session selection and control.
+- Make the browser shell safe-area aware with first-class phone touch targets,
+  mobile web-app metadata and explicit portrait/landscape layouts.
+
+### Reliability
+
+- Add real-Chrome regression coverage at iPhone 15 Pro, iPhone SE and
+  landscape phone sizes, including repeated list-to-session transitions,
+  filtering, direct input, terminal keys, session switching, Console, Memory
+  and settings.
+
 ## 0.4.0 - 2026-10-03
 
 ### Added
