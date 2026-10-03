@@ -2,9 +2,9 @@ mod account_cli;
 
 use toomux::setup::{BEGIN, END};
 use toomux::{
-    actions, archive, capture, config, context_policy, handover, hygiene, index, install, jobs, mcp,
-    memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens,
-    ui, upkeep, usage, voyage, watch,
+    actions, archive, capture, config, context_policy, handover, hygiene, index, install, jobs,
+    mcp, memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state, tmux,
+    tokens, ui, upkeep, usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
