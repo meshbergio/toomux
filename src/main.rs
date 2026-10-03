@@ -37,8 +37,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Reconcile standalone provider leases against the complete live Toomux session registry
-        #[arg(long)]
+        #[arg(long, conflicts_with = "configure_client")]
         reconcile: bool,
+        /// Register the standalone provider model in the dedicated Claude Code profile
+        #[arg(long, conflicts_with = "reconcile")]
+        configure_client: bool,
     },
     /// Jump to a session (pid, session-id prefix, or name), or a pin
     Jump {
@@ -345,8 +348,14 @@ fn main() -> Result<()> {
             print!("{}", status_line(&cfg));
             Ok(())
         }
-        Some(Cmd::Provider { json, reconcile }) => {
-            if reconcile {
+        Some(Cmd::Provider {
+            json,
+            reconcile,
+            configure_client,
+        }) => {
+            if configure_client {
+                provider::configure_client(json)
+            } else if reconcile {
                 let live_ids = registry::load(&cfg)
                     .into_iter()
                     .map(|session| session.id)

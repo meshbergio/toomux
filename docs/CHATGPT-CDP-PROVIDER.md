@@ -28,7 +28,8 @@ Toomux retains only:
 2. `scripts/toomux-claude`, which routes the dedicated `~/.claude-bonnie` account to the local Anthropic-compatible endpoint;
 3. `scripts/install-chatgpt-browser-client.sh`, which installs only that thin wrapper and no provider runtime;
 4. `toomux provider [--json]`, a native health/status view over the local provider;
-5. `toomux provider --reconcile [--json]`, which sends the complete live Toomux session registry to the standalone broker as the `toomux` authority.
+5. `toomux provider --reconcile [--json]`, which sends the complete live Toomux session registry to the standalone broker as the `toomux` authority;
+6. `toomux provider --configure-client`, which non-destructively registers the standalone provider model in the dedicated Claude Code profile.
 
 The wrapper stamps Toomux-owned requests with `x-toomux-provider-session-id`. The standalone broker hashes the identifier for lease storage and keeps Toomux leases in their own authority scope. Toomux's periodic status tick triggers reconciliation about every 30 seconds as best-effort background work; provider outages do not block the TUI. A lease reported absent while its request is still in flight is expired only at the request boundary by the standalone broker.
 
@@ -40,7 +41,7 @@ The wrapper uses the standalone provider credential:
 
 The retired Toomux-owned provider key is no longer consulted by the live client integration. Historical migration and rollback behavior remains available in the standalone provider repository and release history.
 
-The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers.
+The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers. To keep Claude Code's client-side model catalog and compaction/tool behavior on a known path, the installer adds a `modelPicker` row for `chatgpt-browser` with `behavesAs: claude-opus-4-6`. The custom model ID is still the ID sent to the local provider. Existing Claude settings, picker rows and `replaceBuiltInOptions` policy are preserved.
 
 ## Runtime endpoint
 
@@ -58,7 +59,7 @@ Install or refresh the Toomux-side wrapper from this repository with:
 ./scripts/install-chatgpt-browser-client.sh
 ```
 
-This copies only `toomux-claude` into `~/.local/bin` (or `$TOOMUX_BIN_DIR`). It does not install, start, stop or configure browser workers or provider services.
+This copies only `toomux-claude` into `~/.local/bin` (or `$TOOMUX_BIN_DIR`) and asks the installed Toomux binary to register the model mapping above. It does not install, start, stop or configure browser workers or provider services.
 
 ## Installing or developing the provider
 

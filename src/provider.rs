@@ -1,14 +1,150 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 const READY_URL: &str = "http://127.0.0.1:34560/readyz";
 const RECONCILE_PATH: &str = "/v1/provider/sessions/reconcile";
 const DEFAULT_BROKER_PORT: u16 = 34561;
+const CLIENT_MODEL: &str = "chatgpt-browser";
+const CLIENT_MODEL_BEHAVES_AS: &str = "claude-opus-4-6";
+
+pub fn configure_client(json: bool) -> Result<()> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let settings_path = PathBuf::from(home).join(".claude-bonnie/settings.json");
+    let mut settings = if settings_path.exists() {
+        let bytes = fs::read(&settings_path)
+            .with_context(|| format!("reading {}", settings_path.display()))?;
+        serde_json::from_slice::<Value>(&bytes)
+            .with_context(|| format!("parsing {}", settings_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let changed = ensure_client_model_picker(&mut settings)?;
+    if changed {
+        write_json_atomic(&settings_path, &settings)?;
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "changed": changed,
+                "model": CLIENT_MODEL,
+                "behaves_as": CLIENT_MODEL_BEHAVES_AS,
+                "settings": settings_path,
+            })
+        );
+    } else if changed {
+        println!(
+            "configured {CLIENT_MODEL} for Claude Code in {}",
+            settings_path.display()
+        );
+    } else {
+        println!(
+            "Claude Code model mapping already current in {}",
+            settings_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_client_model_picker(settings: &mut Value) -> Result<bool> {
+    let root = settings
+        .as_object_mut()
+        .context("Claude settings root must be a JSON object")?;
+    if !root.contains_key("modelPicker") || root.get("modelPicker") == Some(&Value::Null) {
+        root.insert("modelPicker".into(), serde_json::json!({ "options": [] }));
+    }
+    let picker = root
+        .get_mut("modelPicker")
+        .and_then(Value::as_object_mut)
+        .context("Claude modelPicker must be a JSON object")?;
+    if !picker.contains_key("options") || picker.get("options") == Some(&Value::Null) {
+        picker.insert("options".into(), Value::Array(Vec::new()));
+    }
+    let options = picker
+        .get_mut("options")
+        .and_then(Value::as_array_mut)
+        .context("Claude modelPicker.options must be a JSON array")?;
+
+    let before = options.clone();
+    let mut next = Vec::with_capacity(options.len().saturating_add(1));
+    let mut kept = false;
+    for row in options.drain(..) {
+        let is_ours = row.get("model").and_then(Value::as_str) == Some(CLIENT_MODEL);
+        if !is_ours {
+            next.push(row);
+            continue;
+        }
+        if kept {
+            continue;
+        }
+        let mut row = row.as_object().cloned().unwrap_or_default();
+        row.insert("model".into(), Value::String(CLIENT_MODEL.into()));
+        row.insert("label".into(), Value::String("GPT-5.6 Sol High".into()));
+        row.insert(
+            "description".into(),
+            Value::String("Standalone ChatGPT Browser API".into()),
+        );
+        row.insert(
+            "behavesAs".into(),
+            Value::String(CLIENT_MODEL_BEHAVES_AS.into()),
+        );
+        next.push(Value::Object(row));
+        kept = true;
+    }
+    if !kept {
+        next.push(serde_json::json!({
+            "model": CLIENT_MODEL,
+            "label": "GPT-5.6 Sol High",
+            "description": "Standalone ChatGPT Browser API",
+            "behavesAs": CLIENT_MODEL_BEHAVES_AS,
+        }));
+    }
+    let changed = before != next;
+    *options = next;
+    Ok(changed)
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("Claude settings path has no parent")?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let temp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec_pretty(value)?;
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&temp)
+        .with_context(|| format!("creating {}", temp.display()))?;
+    file.write_all(&payload)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+
+    if let Ok(metadata) = fs::metadata(path) {
+        fs::set_permissions(&temp, metadata.permissions())?;
+    } else {
+        #[cfg(unix)]
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(&temp, path).with_context(|| format!("replacing {} atomically", path.display()))?;
+    Ok(())
+}
 
 pub fn reconcile(session_ids: &[String], json: bool) -> Result<()> {
     let key_path = std::env::var("CHATGPT_BROWSER_API_KEY_FILE").unwrap_or_else(|_| {
@@ -202,6 +338,43 @@ fn summary(value: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_model_mapping_preserves_unrelated_settings_and_rows() {
+        let mut settings = serde_json::json!({
+            "model": "opus",
+            "permissions": { "defaultMode": "default" },
+            "modelPicker": {
+                "replaceBuiltInOptions": false,
+                "options": [
+                    { "model": "company-model", "label": "Company" },
+                    { "model": "chatgpt-browser", "label": "old", "behavesAs": "claude-haiku-4-5" },
+                    { "model": "chatgpt-browser", "label": "duplicate" }
+                ]
+            }
+        });
+        assert!(ensure_client_model_picker(&mut settings).unwrap());
+        assert_eq!(settings["model"], "opus");
+        assert_eq!(settings["permissions"]["defaultMode"], "default");
+        assert_eq!(settings["modelPicker"]["replaceBuiltInOptions"], false);
+        let options = settings["modelPicker"]["options"].as_array().unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["model"], "company-model");
+        assert_eq!(options[1]["model"], CLIENT_MODEL);
+        assert_eq!(options[1]["behavesAs"], CLIENT_MODEL_BEHAVES_AS);
+        assert_eq!(options[1]["label"], "GPT-5.6 Sol High");
+        assert!(!ensure_client_model_picker(&mut settings).unwrap());
+    }
+
+    #[test]
+    fn client_model_mapping_creates_picker_without_replacing_builtins() {
+        let mut settings = serde_json::json!({ "model": "opus" });
+        assert!(ensure_client_model_picker(&mut settings).unwrap());
+        let picker = settings["modelPicker"].as_object().unwrap();
+        assert!(!picker.contains_key("replaceBuiltInOptions"));
+        assert_eq!(picker["options"][0]["model"], CLIENT_MODEL);
+        assert_eq!(picker["options"][0]["behavesAs"], CLIENT_MODEL_BEHAVES_AS);
+    }
 
     #[test]
     fn concise_summary_names_provider_effort_and_queue() {
