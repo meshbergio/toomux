@@ -104,17 +104,20 @@ already have.
 
 ## Handover instead of compaction
 
-Long conversations can become expensive to carry and harder for a model to use well
-before they simply run out of context.
+Every call re-reads the whole conversation. At 800k tokens that's $0.16 a call,
+or $6.40 if the cache has gone cold. On a Max plan it eats your limits instead.
+And the model gets worse at using what's in front of it as the context grows.
+[Anthropic say so
+themselves](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
 
-toomux treats that as a continuity problem rather than a reason to keep stretching one
-conversation. By default, a main session becomes eligible to hand over at a natural
-turn boundary after **250k tokens**. **400k tokens** is the hard handover threshold.
+When the context fills up, Claude Code compacts: it summarises the conversation
+and carries on. That usually happens mid-task, and details get lost.
 
-The original transcript is not replaced. The outgoing session writes an explicit
-handover brief, updates durable memory, and the successor session receives that brief as
-its starting context in the same pane. The old conversation remains intact and
-searchable.
+toomux hands over well before that. Each managed session resolves its own
+context policy, so a 32k local model can hand over far earlier than a 1M
+session. At the policy's natural break, it writes a brief, saves what it learned
+to memory, and a fresh session picks up in the same pane. Nothing is summarised,
+and the old conversation stays searchable.
 
 The useful question is whether that actually changes the workload, not whether the
 mechanism sounds tidy.

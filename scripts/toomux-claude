@@ -3,20 +3,20 @@ set -eu
 
 CLAUDE_REAL="$HOME/.local/bin/claude"
 BONNIE_CONFIG="$HOME/.claude-bonnie"
-BONNIE_KEY_FILE="$HOME/.local/state/toomux/bonnie-bridge.key"
+PROVIDER_KEY_FILE="$HOME/.local/state/chatgpt-browser-api/api.key"
 
 if [ "${CLAUDE_CONFIG_DIR:-}" = "$BONNIE_CONFIG" ]; then
-  if [ ! -r "$BONNIE_KEY_FILE" ]; then
-    echo "toomux Bonnie provider key is missing: $BONNIE_KEY_FILE" >&2
+  if [ ! -r "$PROVIDER_KEY_FILE" ]; then
+    echo "ChatGPT Browser API key is missing. Install or repair the standalone provider." >&2
     exit 78
   fi
   export ANTHROPIC_BASE_URL="http://127.0.0.1:34560"
-  export ANTHROPIC_API_KEY="$(cat "$BONNIE_KEY_FILE")"
-  export ANTHROPIC_MODEL="bonnie"
-  export ANTHROPIC_DEFAULT_OPUS_MODEL="bonnie"
-  export ANTHROPIC_DEFAULT_SONNET_MODEL="bonnie"
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL="bonnie"
-  export ANTHROPIC_SMALL_FAST_MODEL="bonnie"
+  export ANTHROPIC_API_KEY="$(cat "$PROVIDER_KEY_FILE")"
+  export ANTHROPIC_MODEL="chatgpt-browser"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="chatgpt-browser"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="chatgpt-browser"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="chatgpt-browser"
+  export ANTHROPIC_SMALL_FAST_MODEL="chatgpt-browser"
   export CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK="1"
   if [ -n "${TOOMUX_PROVIDER_SESSION_ID:-}" ]; then
     export ANTHROPIC_CUSTOM_HEADERS="x-toomux-provider-session-id: ${TOOMUX_PROVIDER_SESSION_ID}"

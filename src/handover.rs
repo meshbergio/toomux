@@ -1,6 +1,6 @@
-//! Handover: an agent whose context has grown past the threshold (400k
-//! tokens by default) writes a complete brief and continues as a fresh one
-//! that starts from it. Main sessions and subagents follow the same rule.
+//! Handover: an agent whose context has grown past its resolved context policy
+//! writes a complete brief and continues as a fresh one that starts from it.
+//! Main sessions and subagents follow the same rule.
 //!
 //! Why: every call re-reads the whole context, so long contexts are where the
 //! tokens go. Measured on 72k real calls, 78% of cache-weighted input came from
@@ -34,6 +34,7 @@
 
 use crate::actions;
 use crate::config::Config;
+use crate::context_policy::{self, ResolvedContextPolicy};
 use crate::registry::{self, Session, State};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -195,11 +196,9 @@ fn subagent_transcript(main: &Path, session: &str, agent: &str) -> PathBuf {
 /// Called by the PreToolUse hook for every tool call. Returns the hook's
 /// answer when the call must wait for a handover.
 pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
-    if let Some(no) = fork_steer(cfg, v) {
+    let policy = context_policy::for_hook(cfg, v);
+    if let Some(no) = fork_steer(v, &policy) {
         return Some(no);
-    }
-    if cfg.handover_tokens == 0 {
-        return None;
     }
     let session = v.get("session_id").and_then(Value::as_str)?;
     let transcript = PathBuf::from(v.get("transcript_path").and_then(Value::as_str)?);
@@ -212,6 +211,10 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
     let brief = brief_path(session, agent);
     let asked_here = requested_path(session, agent).exists();
     let asked = asked_here || (agent.is_some() && drain_path(session).exists());
+    let policy_boundary = agent.is_none() && context_policy::needs_policy_boundary(&policy);
+    if policy.handover_tokens == 0 && !policy_boundary {
+        return None;
+    }
     let own = match agent {
         Some(a) => subagent_transcript(&transcript, session, a),
         None => transcript.clone(),
@@ -224,11 +227,11 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
     // Mid-turn a conversation goes only at the hard limit; a subagent has no
     // turns, so its own limit applies here.
     let limit = if agent.is_some() {
-        own_limit(cfg.subagent_limit(), &own)
+        own_limit(policy.subagent_limit(), &own)
     } else {
-        cfg.handover_tokens
+        policy.handover_tokens
     };
-    if !asked && tokens < limit {
+    if !asked && !policy_boundary && tokens < limit {
         return None;
     }
     if agent.is_none() {
@@ -246,7 +249,7 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         if !registry::is_interactive(cfg, session) {
             return None;
         }
-        if !asked && born_big(limit, &transcript) {
+        if !asked && !policy_boundary && born_big(limit, &transcript) {
             return None;
         }
         // Its context shrank (/compact) before it wrote a brief: no need any more.
@@ -289,12 +292,15 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         return None;
     }
     let k = tokens / 1000;
-    let turn_end = asked_at(session, None).is_some_and(|t| t < cfg.handover_tokens);
+    let turn_end = asked_at(session, None).is_some_and(|t| t < policy.handover_tokens);
     let reason = match (agent, written(&brief)) {
+        (None, false) if policy_boundary => {
+            policy_boundary_instruction(k, &policy, &brief, Some(&transcript))
+        }
         (None, false) => main_instruction(
             k,
             if turn_end {
-                cfg.turn_end_limit()
+                policy.turn_end_limit()
             } else {
                 limit
             } / 1000,
@@ -364,12 +370,12 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
 /// the caller's whole context into every call it makes, so the caller briefs
 /// a fresh general-purpose subagent instead. Measured on 09-30, forks born
 /// past 240k cost 2.6 times what the same work cost starting fresh.
-fn fork_steer(cfg: &Config, v: &Value) -> Option<String> {
+fn fork_steer(v: &Value, policy: &ResolvedContextPolicy) -> Option<String> {
     let tool = v.get("tool_name").and_then(Value::as_str)?;
     let kind = v
         .pointer("/tool_input/subagent_type")
         .and_then(Value::as_str)?;
-    if !matches!(tool, "Agent" | "Task") || kind != "fork" || cfg.fork_context_tokens == 0 {
+    if !matches!(tool, "Agent" | "Task") || kind != "fork" || policy.fork_context_tokens == 0 {
         return None;
     }
     let session = v.get("session_id").and_then(Value::as_str)?;
@@ -379,7 +385,7 @@ fn fork_steer(cfg: &Config, v: &Value) -> Option<String> {
         None => transcript,
     };
     let tokens = context_tokens(&own)?;
-    if tokens < cfg.fork_context_tokens {
+    if tokens < policy.fork_context_tokens {
         return None;
     }
     let reason = format!(
@@ -388,7 +394,7 @@ fn fork_steer(cfg: &Config, v: &Value) -> Option<String> {
          in full, what you already know that it needs (exact paths, decisions, constraints, what didn't work), and what to \
          report back.",
         tokens / 1000,
-        cfg.fork_context_tokens / 1000
+        policy.fork_context_tokens / 1000
     );
     Some(json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}).to_string())
 }
@@ -434,6 +440,42 @@ fn main_instruction(
          written",
         path = brief.display(),
         memory = transcript.map(memory_ask).unwrap_or_default()
+    )
+}
+
+/// A running client can change model/account policy without restarting its
+/// process. If that changes who owns compaction or lowers the hard threshold,
+/// the old launch settings are no longer safe. Cross a fresh-session boundary
+/// before doing more work, regardless of current token count.
+fn policy_boundary_instruction(
+    k: u64,
+    policy: &ResolvedContextPolicy,
+    brief: &Path,
+    transcript: Option<&Path>,
+) -> String {
+    let model = policy.model.as_deref().unwrap_or("unknown model");
+    let owner = match policy.compaction_owner {
+        context_policy::CompactionOwner::Native => "native client",
+        context_policy::CompactionOwner::Toomux => "Toomux",
+    };
+    format!(
+        "STOP. toomux: this conversation is at {k}k tokens, but its resolved context lifecycle changed while it was running \
+         (model {model}, hard handover {}k, compaction owner {owner}). The current process was launched under a different \
+         lifecycle policy, so further work must continue in a fresh session that applies the new policy. Write a complete, \
+         standalone handover brief to {path} with the Write tool: the next session will have nothing else, except that it can \
+         search this conversation. Begin it with one heading that names the work as it stands now in a few words, \
+         \"# Handover: <the work>\" (it becomes the next session's name; not \"Handover brief\"). Include the goal and what \
+         the user wants (in their words where it matters); the current state and what is done; decisions made and why; where \
+         recent additions came from and why anything in progress is being done; what was tried and didn't work; exact \
+         references (file paths, commands, branches, commits, PRs, URLs, ids); work in progress: what each running subagent \
+         and background command is for (they carry over: toomux lists their briefs and job ids for the next session, so don't \
+         wait for them); open questions and anything the user is waiting on; and the precise next steps. If the user has just \
+         asked for something: when it needs no tools, answer it first and then write the brief; otherwise don't start it, and \
+         put the request first among the next steps, in their words, so the fresh session does it. Be thorough rather than \
+         short.{memory} Then end your turn with: handover written",
+        policy.handover_tokens / 1000,
+        path = brief.display(),
+        memory = transcript.map(memory_ask).unwrap_or_default(),
     )
 }
 
@@ -550,8 +592,10 @@ fn in_memory_dir(tool: &str, v: &Value, transcript: &Path) -> bool {
 /// Past the turn-end limit and not yet asked: ask it now (the gate holds it
 /// to the brief from here). Returns what to tell it.
 fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
-    let soft = cfg.turn_end_limit();
-    if soft == 0 || soft >= cfg.handover_tokens {
+    let policy = context_policy::for_hook(cfg, v);
+    let soft = policy.turn_end_limit();
+    let policy_boundary = context_policy::needs_policy_boundary(&policy);
+    if !policy_boundary && (soft == 0 || soft >= policy.handover_tokens) {
         return None;
     }
     let session = v.get("session_id").and_then(Value::as_str)?;
@@ -563,7 +607,8 @@ fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
     // At a stop the turn's last call lands in the transcript a moment after
     // the hook starts: within reach of the limit, give it a second.
     let start = Instant::now();
-    while how == "stop"
+    while !policy_boundary
+        && how == "stop"
         && tokens < soft
         && tokens >= soft / 2
         && start.elapsed() < Duration::from_secs(1)
@@ -571,8 +616,8 @@ fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
         std::thread::sleep(Duration::from_millis(100));
         tokens = context_tokens(&transcript)?;
     }
-    if tokens < soft
-        || born_big(soft, &transcript)
+    if (!policy_boundary && tokens < soft)
+        || (!policy_boundary && born_big(soft, &transcript))
         || load_lineage().iter().any(|l| l.old_id == session)
         || !registry::is_interactive(cfg, session)
     {
@@ -583,13 +628,12 @@ fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
     log(
         json!({"session": session, "event": format!("asked at turn end ({how})"), "tokens": tokens}),
     );
-    Some(main_instruction(
-        tokens / 1000,
-        soft / 1000,
-        &brief_path(session, None),
-        true,
-        Some(&transcript),
-    ))
+    let brief = brief_path(session, None);
+    Some(if policy_boundary {
+        policy_boundary_instruction(tokens / 1000, &policy, &brief, Some(&transcript))
+    } else {
+        main_instruction(tokens / 1000, soft / 1000, &brief, true, Some(&transcript))
+    })
 }
 
 /// `toomux hook prompt`: you've sent a prompt to a conversation past the
@@ -768,9 +812,6 @@ fn write_marker(m: &Marker) {
 /// Main sessions ready to hand over now: idle past the threshold, or asked by
 /// the gate and done writing their brief.
 pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
-    if cfg.handover_tokens == 0 {
-        return Vec::new();
-    }
     let info = crate::usage::sessions();
     let lineage = load_lineage();
     sessions
@@ -789,6 +830,11 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
         // Background work no longer holds a handover back: it carries over.
         .filter(|s| matches!(s.state, State::Idle | State::Finished | State::Background))
         .filter(|s| {
+            let policy = context_policy::for_session(cfg, s);
+            let policy_boundary = context_policy::needs_policy_boundary_for_session(s, &policy);
+            if policy.handover_tokens == 0 && !policy_boundary {
+                return false;
+            }
             let asked = requested(&s.id);
             let idle = now - s.since_ms;
             let quiet = idle >= if asked { 5_000 } else { QUIET_MS };
@@ -804,8 +850,9 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
             let tokens = || transcript.as_deref().and_then(context_tokens);
             if asked {
                 // Compacted instead of writing a brief: nothing to hand over.
-                if !written(&brief_path(&s.id, None))
-                    && tokens().is_some_and(|t| shrank(&s.id, None, t, cfg.handover_tokens))
+                if !policy_boundary
+                    && !written(&brief_path(&s.id, None))
+                    && tokens().is_some_and(|t| shrank(&s.id, None, t, policy.handover_tokens))
                 {
                     let _ = std::fs::remove_file(requested_path(&s.id, None));
                     let _ = std::fs::remove_file(drain_path(&s.id));
@@ -813,9 +860,12 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
                 }
                 return true;
             }
+            if policy_boundary {
+                return true;
+            }
             // Past the hard limit after a short quiet; past only the turn-end
             // limit after a longer one.
-            let limit = idle_limit(cfg, idle);
+            let limit = idle_limit(&policy, idle);
             // The status line's figure first (cheap), then the transcript's,
             // which a /compact since has changed.
             info.get(&s.id)
@@ -847,11 +897,11 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
 }
 
 /// The context past which a session idle this long is asked to hand over.
-fn idle_limit(cfg: &Config, idle_ms: i64) -> u64 {
+fn idle_limit(policy: &ResolvedContextPolicy, idle_ms: i64) -> u64 {
     if idle_ms >= TURN_END_QUIET_MS {
-        cfg.turn_end_limit()
+        policy.turn_end_limit()
     } else {
-        cfg.handover_tokens
+        policy.handover_tokens
     }
 }
 
@@ -946,7 +996,9 @@ pub fn start_due(cfg: &Config, sessions: &[Session], now: i64) {
 /// has to hand over (or has grown past the limit), look again shortly, when
 /// it has settled.
 pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
-    if cfg.handover_tokens == 0 {
+    let policy = context_policy::for_hook(cfg, v);
+    let policy_boundary = context_policy::needs_policy_boundary(&policy);
+    if policy.handover_tokens == 0 && !policy_boundary {
         return None;
     }
     // Not twice in a row: a stop that follows our own instruction is the
@@ -962,11 +1014,11 @@ pub fn stop_hook(cfg: &Config, v: &Value) -> Option<String> {
     {
         return Some(json!({"decision": "block", "reason": said}).to_string());
     }
-    schedule_tick(cfg, v);
+    schedule_tick(v, &policy);
     None
 }
 
-fn schedule_tick(cfg: &Config, v: &Value) {
+fn schedule_tick(v: &Value, policy: &ResolvedContextPolicy) {
     let Some(session) = v.get("session_id").and_then(Value::as_str) else {
         return;
     };
@@ -979,7 +1031,8 @@ fn schedule_tick(cfg: &Config, v: &Value) {
     // transcript yet when this runs (it lands a few ms later), and one turn can
     // add tens of thousands of tokens. The tick decides on settled numbers.
     if !asked
-        && transcript.as_deref().and_then(context_tokens).unwrap_or(0) < cfg.turn_end_limit() / 2
+        && !context_policy::needs_policy_boundary(policy)
+        && transcript.as_deref().and_then(context_tokens).unwrap_or(0) < policy.turn_end_limit() / 2
     {
         return;
     }
@@ -1165,6 +1218,8 @@ fn hand_over(
     tokens: u64,
     transcript: Option<&Path>,
 ) -> Result<String> {
+    let policy = context_policy::for_session(cfg, s);
+    let policy_boundary = context_policy::needs_policy_boundary_for_session(s, &policy);
     let brief = brief_path(&s.id, None);
     if !written(&brief) {
         let Some(pane) = pane else {
@@ -1184,16 +1239,18 @@ fn hand_over(
     touch(&requested_path(&s.id, None), &tokens.to_string());
     touch(&drain_path(&s.id), "");
     if let (false, Some(pane)) = (written(&brief), pane) {
-        let turn_end = tokens < cfg.handover_tokens;
-        let limit = if turn_end {
-            cfg.turn_end_limit()
+        let turn_end = tokens < policy.handover_tokens;
+        let ask = if policy_boundary {
+            policy_boundary_instruction(tokens / 1000, &policy, &brief, transcript)
         } else {
-            cfg.handover_tokens
-        };
-        let ask = format!(
-            "[toomux handover] {}",
+            let limit = if turn_end {
+                policy.turn_end_limit()
+            } else {
+                policy.handover_tokens
+            };
             main_instruction(tokens / 1000, limit / 1000, &brief, turn_end, transcript)
-        );
+        };
+        let ask = format!("[toomux handover] {}", ask);
         actions::type_prompt(pane, &ask)?;
     }
     // The brief, and the session settled after writing it.
@@ -2420,8 +2477,9 @@ mod tests {
         assert!(!shrank("w", None, 300_000, c.handover_tokens));
         assert!(shrank("w", None, 100_000, c.handover_tokens));
         // Idle: the hard limit after a short quiet, the turn-end one after ten minutes.
-        assert_eq!(idle_limit(&c, 60_000), 400_000);
-        assert_eq!(idle_limit(&c, TURN_END_QUIET_MS), 250_000);
+        let p = context_policy::resolve(&c, Default::default());
+        assert_eq!(idle_limit(&p, 60_000), 400_000);
+        assert_eq!(idle_limit(&p, TURN_END_QUIET_MS), 250_000);
         // Off means off.
         let mut off = c.clone();
         off.handover_turn_end_tokens = 0;

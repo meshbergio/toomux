@@ -4,6 +4,7 @@ use crate::tmux;
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -123,7 +124,14 @@ pub fn launch_for(cfg: &Config, s: &Session, account: usize) -> Launch {
 /// A launch for this session's account and flags: resuming its conversation,
 /// or (with `fresh`) a new conversation that opens with that prompt.
 pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str>) -> Launch {
-    let mut env: Vec<String> = s.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let same_account = s.account == Some(account);
+    let inherited: Vec<(String, String)> = s
+        .env
+        .iter()
+        .filter(|(k, _)| same_account || !k.starts_with("TOOMUX_CONTEXT_"))
+        .cloned()
+        .collect();
+    let mut env: Vec<String> = inherited.iter().map(|(k, v)| format!("{k}={v}")).collect();
     if !env
         .iter()
         .any(|v| v.starts_with("TOOMUX_PROVIDER_SESSION_ID="))
@@ -152,6 +160,19 @@ pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str
         if !name.is_empty() {
             carried.extend(["--name".to_string(), name.to_string()]);
         }
+    }
+    let prepared = crate::context_policy::prepare_launch(
+        cfg,
+        account,
+        Path::new(&s.cwd),
+        &carried,
+        if same_account { &inherited } else { &[] },
+        Some(&s.id),
+    );
+    carried = prepared.args;
+    for (key, value) in prepared.env {
+        env.retain(|entry| !entry.starts_with(&format!("{key}=")));
+        env.push(format!("{key}={value}"));
     }
     argv.extend(carried);
     if fresh.is_none() {
@@ -483,7 +504,12 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     )];
     config_dir(cfg, account, &mut env, &mut argv);
     argv.push(expand(&cfg.claude_bin).display().to_string());
-    argv.extend(args.iter().cloned());
+    let prepared =
+        crate::context_policy::prepare_launch(cfg, account, Path::new(folder), args, &[], None);
+    for (key, value) in prepared.env {
+        env.push(format!("{key}={value}"));
+    }
+    argv.extend(prepared.args);
     let cmd = shell_words::join(&argv);
     let name = folder
         .rsplit('/')

@@ -7,6 +7,7 @@ pub mod actions;
 pub mod archive;
 pub mod capture;
 pub mod config;
+pub mod context_policy;
 pub mod control;
 pub mod credentials;
 pub mod graph;

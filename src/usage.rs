@@ -84,7 +84,8 @@ pub struct SessionInfo {
     pub tokens: Option<u64>,
     pub model: Option<String>,
     /// Claude Code's own tally of what the session has cost, in dollars at
-    /// API prices.
+    /// first-party Claude API prices. Custom-provider model IDs omit this
+    /// because Claude Code prices their `behavesAs` model, not the provider.
     #[serde(default)]
     pub cost: Option<f64>,
     #[serde(default)]
@@ -310,7 +311,7 @@ pub fn statusline(cfg: &Config) -> String {
             .pointer("/model/display_name")
             .and_then(Value::as_str)
             .map(str::to_string),
-        cost: v.pointer("/cost/total_cost_usd").and_then(Value::as_f64),
+        cost: status_cost(&v),
         model_id: v
             .pointer("/model/id")
             .and_then(Value::as_str)
@@ -362,6 +363,7 @@ pub fn statusline(cfg: &Config) -> String {
     let mut line = render_statusline(
         cfg,
         name.as_deref(),
+        (!sid.is_empty()).then_some(sid.as_str()),
         current.as_ref().or(report.as_ref()),
         &info,
         now,
@@ -414,6 +416,16 @@ pub fn statusline(cfg: &Config) -> String {
     line
 }
 
+fn status_cost(v: &Value) -> Option<f64> {
+    if v.pointer("/model/id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty() && !id.starts_with("claude-") && !id.starts_with('<'))
+    {
+        return None;
+    }
+    v.pointer("/cost/total_cost_usd").and_then(Value::as_f64)
+}
+
 /// Which account a status line call comes from: its CLAUDE_CONFIG_DIR, else
 /// the config dir its transcript lives under.
 fn account_of(cfg: &Config, v: &Value) -> Option<usize> {
@@ -441,6 +453,7 @@ fn ansi(hex: &str) -> String {
 fn render_statusline(
     cfg: &Config,
     account: Option<&str>,
+    session: Option<&str>,
     r: Option<&Report>,
     info: &SessionInfo,
     now: i64,
@@ -451,12 +464,24 @@ fn render_statusline(
     if let Some(a) = account {
         parts.push(format!("{}{a}", ansi(&c.muted)));
     }
+    let policy = crate::context_policy::resolve(
+        cfg,
+        crate::context_policy::PolicySubject {
+            account: account.map(str::to_string),
+            provider: info
+                .model_id
+                .as_deref()
+                .and_then(crate::context_policy::provider_for_model),
+            model: info.model_id.clone(),
+            session: session.map(str::to_string),
+        },
+    );
     // Context in tokens, measured against where it hands over: amber past
     // the turn-end limit, rose near the hard one.
     match (info.tokens, info.context) {
-        (Some(t), _) if cfg.handover_tokens > 0 => {
-            let used = 100.0 * t as f64 / cfg.handover_tokens as f64;
-            let warn = 100.0 * cfg.turn_end_limit() as f64 / cfg.handover_tokens as f64;
+        (Some(t), _) if policy.handover_tokens > 0 => {
+            let used = 100.0 * t as f64 / policy.handover_tokens as f64;
+            let warn = 100.0 * policy.turn_end_limit() as f64 / policy.handover_tokens as f64;
             parts.push(format!(
                 "{}ctx {}{}k",
                 ansi(&c.muted),
@@ -1076,6 +1101,21 @@ mod tests {
             window(sl.get("seven_day"), "used_percentage").unwrap().used,
             42.5
         );
+    }
+
+    #[test]
+    fn custom_provider_status_does_not_report_behaves_as_list_price() {
+        let custom = serde_json::json!({
+            "model": { "id": "chatgpt-browser" },
+            "cost": { "total_cost_usd": 12.34 }
+        });
+        assert_eq!(status_cost(&custom), None);
+
+        let claude = serde_json::json!({
+            "model": { "id": "claude-fable-5-1" },
+            "cost": { "total_cost_usd": 12.34 }
+        });
+        assert_eq!(status_cost(&claude), Some(12.34));
     }
 
     #[test]
