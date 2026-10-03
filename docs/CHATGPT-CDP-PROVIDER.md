@@ -32,13 +32,15 @@ Toomux retains only:
 
 The wrapper stamps Toomux-owned requests with `x-toomux-provider-session-id`. The standalone broker hashes the identifier for lease storage and keeps Toomux leases in their own authority scope. Toomux's periodic status tick triggers reconciliation about every 30 seconds as best-effort background work; provider outages do not block the TUI. A lease reported absent while its request is still in flight is expired only at the request boundary by the standalone broker.
 
-The wrapper prefers the standalone provider credential:
+The wrapper uses the standalone provider credential:
 
 ```text
 ~/.local/state/chatgpt-browser-api/api.key
 ```
 
-and temporarily accepts the historical Toomux key path as a rollback fallback.
+The retired Toomux-owned provider key is no longer consulted by the live client integration. Historical migration and rollback behavior remains available in the standalone provider repository and release history.
+
+The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers.
 
 ## Runtime endpoint
 

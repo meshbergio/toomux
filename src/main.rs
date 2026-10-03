@@ -347,11 +347,9 @@ fn main() -> Result<()> {
         }
         Some(Cmd::Provider { json, reconcile }) => {
             if reconcile {
-                let all = registry::load(&cfg);
-                let live_ids = all
-                    .iter()
-                    .filter(|session| !session.dormant && session.restore.is_none())
-                    .map(|session| session.id.clone())
+                let live_ids = registry::load(&cfg)
+                    .into_iter()
+                    .map(|session| session.id)
                     .collect::<Vec<_>>();
                 provider::reconcile(&live_ids, json)
             } else {
