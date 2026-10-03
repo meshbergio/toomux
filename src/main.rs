@@ -2,9 +2,9 @@ mod account_cli;
 
 use toomux::setup::{BEGIN, END};
 use toomux::{
-    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths,
-    provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep,
-    usage, voyage, watch,
+    actions, archive, capture, config, context_policy, handover, hygiene, index, jobs, mcp, memory,
+    paths, provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens, ui,
+    upkeep, usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,23 @@ enum Cmd {
     },
     /// One-line summary for the tmux status bar
     Status,
+    /// Explain the resolved context lifecycle policy
+    ContextPolicy {
+        /// Account name to match
+        #[arg(long)]
+        account: Option<String>,
+        /// Provider identifier to match
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model identifier to match
+        #[arg(long)]
+        model: Option<String>,
+        /// Session id to match
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Deep status of the local ChatGPT model provider
     Provider {
         #[arg(long)]
@@ -346,6 +363,29 @@ fn main() -> Result<()> {
         Some(Cmd::List { json }) => list(&cfg, json),
         Some(Cmd::Status) => {
             print!("{}", status_line(&cfg));
+            Ok(())
+        }
+        Some(Cmd::ContextPolicy {
+            account,
+            provider,
+            model,
+            session,
+            json,
+        }) => {
+            let policy = context_policy::resolve(
+                &cfg,
+                context_policy::PolicySubject {
+                    account,
+                    provider,
+                    model,
+                    session,
+                },
+            );
+            if json {
+                println!("{}", serde_json::to_string_pretty(&policy)?);
+            } else {
+                println!("{}", policy.summary());
+            }
             Ok(())
         }
         Some(Cmd::Provider {
@@ -1536,7 +1576,7 @@ fn what_acts(cfg: &Config) -> String {
         (
             cfg.handover_tokens > 0,
             format!(
-                "handover: past {}k tokens a conversation writes a complete brief and continues in a fresh session (subagents past {}k)",
+                "handover: global fallback is {}k at a turn break (subagents {}k); context_policy can set different limits per account/model/session",
                 k(cfg.turn_end_limit()),
                 k(cfg.subagent_limit())
             ),
@@ -1544,7 +1584,7 @@ fn what_acts(cfg: &Config) -> String {
         ),
         (
             cfg.fork_context_tokens > 0,
-            format!("fork gate: past {}k of context, a fork is refused in favour of a briefed subagent", k(cfg.fork_context_tokens)),
+            format!("fork gate: global fallback is {}k; a resolved context_policy can override it per session", k(cfg.fork_context_tokens)),
             "fork_context_tokens = 0",
         ),
         (cfg.capture_bash, "bash capture: long output kept whole and shown short; background commands carried over a handover".into(), "capture_bash = false"),

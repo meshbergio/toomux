@@ -64,8 +64,10 @@ every call, and calls above 400k tokens of context are 78% of it. Tool output is
 ~30%, but completely lossless rewriting of it saves only ~0.1%, so there is no
 proxy in front of your sessions. Instead:
 
-- **Handover** (`handover_tokens`, default 400k). Every agent follows it, main
-  sessions and subagents alike:
+- **Handover.** The global `handover_tokens` setting (default 400k) is the
+  fallback. Every managed session resolves a context policy first, so models
+  with different windows can use different limits concurrently. Main sessions
+  and subagents follow the resolved policy:
   - *The gate.* The PreToolUse hook measures whoever calls a tool. Past the
     limit it refuses the call and has that agent write a complete brief (goal,
     state, decisions, what failed, exact references, next steps) to
@@ -104,6 +106,57 @@ proxy in front of your sessions. Instead:
 
   Simulated on the same traffic: ~59% less weighted input. `toomux handover
   <target>` does it now.
+
+### Context policies
+
+Global handover settings remain valid and are the fallback for old configs.
+Add `[[context_policy]]` rules only where a model, provider or account needs
+different lifecycle behaviour:
+
+```toml
+handover_turn_end_tokens = 200000
+handover_tokens = 400000
+subagent_handover_tokens = 250000
+fork_context_tokens = 200000
+
+[[context_policy]]
+model = "local-qwen-*"
+context_window_tokens = 32768
+handover_turn_end_tokens = 12000
+handover_tokens = 20000
+subagent_handover_tokens = 12000
+fork_context_tokens = 10000
+compaction = "toomux"
+
+[[context_policy]]
+account = "personal"
+model = "claude-*"
+compaction = "native"
+```
+
+Rules can match `account`, `provider`, `model` and `session`; `*` and
+`?` wildcards are accepted. Rules are partial overrides. Resolution starts
+with the global fallback, then account rules, provider/model rules, combined
+rules, and finally session-specific rules. Within the same specificity, the
+later matching rule wins. Use `toomux context-policy --account <name> --model
+<id>` (add `--json` for structured output) to see the exact limits, capacity,
+compaction owner and matched-rule provenance.
+
+`compaction = "toomux"` means Toomux should own automatic rollover.
+`compaction = "native"` leaves the client's automatic compaction alone.
+`"auto"` lets Toomux choose. Toomux only disables native automatic compaction
+when the context capacity is known and the hard handover plus a safety reserve
+fits strictly below it. Unknown or unsafe capacity always fails safe to native
+compaction. For Claude Code this is a session-scoped `--settings` overlay, not
+an account-file edit, so explicit `/compact` still works. If manual compact
+shrinks a threshold-driven pending handover, Toomux releases it. A model switch
+to a materially smaller policy is different: Toomux crosses a fresh-session
+boundary so the new launch settings and limits take effect safely.
+
+The resolved policy is carried through normal resume, automatic and manual
+handover, subagent/fork decisions and reboot restoration. Sessions Toomux
+cannot safely restart, such as non-interactive `claude -p`/SDK calls, are
+never trapped by the handover gate.
 - **Output capping.** A PreToolUse hook routes Bash commands through `toomux
   cap`. Output up to 4k characters comes back byte for byte; larger output is
   kept whole and the agent sees its head, the lines mentioning errors, its tail,

@@ -615,7 +615,7 @@ fn placeholders(
                 args: std::iter::once("claude".to_string())
                     .chain(e.args.iter().cloned())
                     .collect(),
-                env: vec![],
+                env: e.context_env.clone(),
                 tty: None,
                 pane: None,
             };
@@ -685,7 +685,8 @@ pub fn carry_env(k: &str) -> bool {
     let relevant = k.starts_with("ANTHROPIC_")
         || k.starts_with("CLAUDE_CODE_")
         || k.starts_with("OHI_")
-        || k == "TOOMUX_PROVIDER_SESSION_ID";
+        || k == "TOOMUX_PROVIDER_SESSION_ID"
+        || k.starts_with("TOOMUX_CONTEXT_");
     relevant && !secret && k != "CLAUDE_CONFIG_DIR" && !RUNTIME_VARS.contains(&k)
 }
 

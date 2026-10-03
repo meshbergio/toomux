@@ -17,6 +17,11 @@ pub struct Entry {
     pub title: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Toomux-owned context lifecycle metadata. Recomputed from the currently
+    /// observed model before each snapshot so an interactive model change is
+    /// restored safely after a reboot.
+    #[serde(default)]
+    pub context_env: Vec<(String, String)>,
     /// tmux session and window name it lived in, if any.
     pub tmux_session: Option<String>,
     pub window: Option<String>,
@@ -82,9 +87,35 @@ fn entry(cfg: &Config, s: &Session) -> Entry {
         account: s.account_name(cfg).to_string(),
         title: s.title.clone(),
         args: crate::actions::carried_args(&s.args),
+        context_env: context_env(cfg, s),
         tmux_session: s.pane.as_ref().map(|p| p.session.clone()),
         window,
     }
+}
+
+fn context_env(cfg: &Config, s: &Session) -> Vec<(String, String)> {
+    let policy = crate::context_policy::for_session(cfg, s);
+    let mut out = vec![(
+        crate::context_policy::POLICY_ENV.to_string(),
+        serde_json::to_string(&policy).unwrap_or_default(),
+    )];
+    if let Some(model) = policy.model {
+        out.push((crate::context_policy::MODEL_ENV.into(), model));
+    }
+    if let Some(provider) = policy.provider {
+        out.push((crate::context_policy::PROVIDER_ENV.into(), provider));
+    }
+    if let Some((_, settings)) = s
+        .env
+        .iter()
+        .find(|(k, _)| k == crate::context_policy::USER_SETTINGS_ENV)
+    {
+        out.push((
+            crate::context_policy::USER_SETTINGS_ENV.into(),
+            settings.clone(),
+        ));
+    }
+    out
 }
 
 /// Bring running.json up to date. Cheap when nothing changed: it compares
@@ -116,9 +147,14 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
     let live: Vec<&Session> = sessions.iter().filter(|s| !s.dormant).collect();
     let same = live.len() == snap.entries.len()
         && live.iter().all(|s| {
+            let args = crate::actions::carried_args(&s.args);
+            let context_env = context_env(cfg, s);
             snap.entries.iter().any(|e| {
                 e.id == s.id
                     && e.title == s.title
+                    && e.account == s.account_name(cfg)
+                    && e.args == args
+                    && e.context_env == context_env
                     && e.tmux_session == s.pane.as_ref().map(|p| p.session.clone())
             })
         });
@@ -231,6 +267,7 @@ mod tests {
                 account: "x".into(),
                 title: "work".into(),
                 args: vec![],
+                context_env: vec![],
                 tmux_session: None,
                 window: None,
             };
@@ -271,5 +308,20 @@ mod tests {
         assert_eq!(recorded(), (0, vec![]));
         assert!(restorable(&[]).entries.is_empty());
         let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn old_snapshot_entries_without_context_metadata_still_parse() {
+        let raw = r#"{
+            "id":"a",
+            "cwd":"/tmp",
+            "account":"personal",
+            "title":"work",
+            "args":["--model","x"],
+            "tmux_session":null,
+            "window":null
+        }"#;
+        let entry: Entry = serde_json::from_str(raw).unwrap();
+        assert!(entry.context_env.is_empty());
     }
 }

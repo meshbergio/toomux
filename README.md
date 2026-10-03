@@ -108,13 +108,15 @@ Long conversations can become expensive to carry and harder for a model to use w
 before they simply run out of context.
 
 toomux treats that as a continuity problem rather than a reason to keep stretching one
-conversation. By default, a main session becomes eligible to hand over at a natural
-turn boundary after **250k tokens**. **400k tokens** is the hard handover threshold.
+conversation. The built-in fallback makes a main session eligible to hand over at a
+natural turn boundary after **250k tokens**, with **400k tokens** as the hard limit.
+Each managed session can override that with its own context policy, so a 32k local
+model can hand over far earlier than a 1M session without changing either one globally.
 
-The original transcript is not replaced. The outgoing session writes an explicit
-handover brief, updates durable memory, and the successor session receives that brief as
-its starting context in the same pane. The old conversation remains intact and
-searchable.
+The original transcript is not replaced. At the resolved policy's natural break, the
+outgoing session writes an explicit handover brief, updates durable memory, and the
+successor receives that brief as its starting context in the same pane. The old
+conversation remains intact and searchable.
 
 The useful question is whether that actually changes the workload, not whether the
 mechanism sounds tidy.
