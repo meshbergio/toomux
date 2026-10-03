@@ -100,6 +100,15 @@ struct KeysRequest {
 }
 
 #[derive(Deserialize)]
+struct SessionInputRequest {
+    kind: String,
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct TuiInput {
     kind: String,
     #[serde(default)]
@@ -463,6 +472,7 @@ fn route(cfg: &Config, req: Request) -> Response {
         ("GET", "screen") => screen(cfg, target, &req.path),
         ("POST", "prompt") => prompt(cfg, target, &req.body),
         ("POST", "keys") => keys(cfg, target, &req.body),
+        ("POST", "input") => session_input(cfg, target, &req.body),
         ("POST", "activate") => activate_session(cfg, target),
         _ => json_response(404, json!({"error":"not found"})),
     }
@@ -625,6 +635,58 @@ fn keys(cfg: &Config, target: &str, body: &[u8]) -> Response {
         }
     }
     json_response(200, json!({"ok":true}))
+}
+
+fn session_input(cfg: &Config, target: &str, body: &[u8]) -> Response {
+    let input: SessionInputRequest = match parse_json(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let all = registry::load(cfg);
+    let s = match registry::find(&all, target) {
+        Ok(s) => s,
+        Err(e) => return json_response(404, json!({"error":e.to_string()})),
+    };
+    let Some(pane) = &s.pane else {
+        return json_response(409, json!({"error":"session is not in tmux"}));
+    };
+
+    let result = match input.kind.as_str() {
+        "key" => {
+            let Some(key) = input.key.as_deref() else {
+                return json_response(400, json!({"error":"key is required"}));
+            };
+            if !allowed_tui_key(key) {
+                return json_response(400, json!({"error":"unsupported session key"}));
+            }
+            tmux::run(&["send-keys", "-t", &pane.id, "--", key]).map(|_| ())
+        }
+        "text" | "submit" => {
+            let Some(text) = input.text.as_deref() else {
+                return json_response(400, json!({"error":"text is required"}));
+            };
+            if !valid_remote_text(text) {
+                return json_response(400, json!({"error":"text is invalid"}));
+            }
+            if let Err(e) = tmux::run(&["send-keys", "-t", &pane.id, "-l", "--", text]) {
+                return json_response(502, json!({"error":e.to_string()}));
+            }
+            if input.kind == "submit" {
+                tmux::run(&["send-keys", "-t", &pane.id, "--", "Enter"]).map(|_| ())
+            } else {
+                Ok(())
+            }
+        }
+        _ => return json_response(400, json!({"error":"unsupported session input kind"})),
+    };
+    match result {
+        Ok(()) => json_response(200, json!({"ok":true})),
+        Err(e) => json_response(502, json!({"error":e.to_string()})),
+    }
+}
+
+fn valid_remote_text(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 16 * 1024 && !text.chars().any(|c| c == '\0' || c == '\r')
 }
 
 fn allowed_key(key: &str) -> bool {
@@ -883,10 +945,7 @@ fn tui_input(headers: &HashMap<String, String>, body: &[u8]) -> Response {
             let Some(text) = input.text.as_deref() else {
                 return json_response(400, json!({"error":"text is required"}));
             };
-            if text.is_empty()
-                || text.len() > 16 * 1024
-                || text.chars().any(|c| c == '\0' || c == '\r')
-            {
+            if !valid_remote_text(text) {
                 return json_response(400, json!({"error":"text is invalid"}));
             }
             tui_tmux(&server, &["send-keys", "-t", &pane, "-l", "--", text]).map(|_| ())
@@ -1683,5 +1742,15 @@ mod tests {
         ] {
             assert!(!allowed_tui_key(key), "{key:?}");
         }
+    }
+
+    #[test]
+    fn remote_literal_text_is_bounded_and_never_contains_carriage_return_or_nul() {
+        assert!(valid_remote_text("echo hello"));
+        assert!(valid_remote_text("line one\nline two"));
+        assert!(!valid_remote_text(""));
+        assert!(!valid_remote_text("bad\rsubmit"));
+        assert!(!valid_remote_text("bad\0byte"));
+        assert!(!valid_remote_text(&"x".repeat(16 * 1024 + 1)));
     }
 }
