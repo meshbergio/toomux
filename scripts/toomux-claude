@@ -3,15 +3,19 @@ set -eu
 
 CLAUDE_REAL="$HOME/.local/bin/claude"
 BONNIE_CONFIG="$HOME/.claude-bonnie"
-BONNIE_KEY_FILE="$HOME/.local/state/toomux/bonnie-bridge.key"
+PROVIDER_KEY_FILE="$HOME/.local/state/chatgpt-browser-api/api.key"
+LEGACY_KEY_FILE="$HOME/.local/state/toomux/bonnie-bridge.key"
 
 if [ "${CLAUDE_CONFIG_DIR:-}" = "$BONNIE_CONFIG" ]; then
-  if [ ! -r "$BONNIE_KEY_FILE" ]; then
-    echo "toomux Bonnie provider key is missing: $BONNIE_KEY_FILE" >&2
+  if [ ! -r "$PROVIDER_KEY_FILE" ]; then
+    PROVIDER_KEY_FILE="$LEGACY_KEY_FILE"
+  fi
+  if [ ! -r "$PROVIDER_KEY_FILE" ]; then
+    echo "ChatGPT Browser API key is missing. Install the provider or restore the legacy key." >&2
     exit 78
   fi
   export ANTHROPIC_BASE_URL="http://127.0.0.1:34560"
-  export ANTHROPIC_API_KEY="$(cat "$BONNIE_KEY_FILE")"
+  export ANTHROPIC_API_KEY="$(cat "$PROVIDER_KEY_FILE")"
   export ANTHROPIC_MODEL="bonnie"
   export ANTHROPIC_DEFAULT_OPUS_MODEL="bonnie"
   export ANTHROPIC_DEFAULT_SONNET_MODEL="bonnie"

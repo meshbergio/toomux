@@ -57,19 +57,19 @@ fn summary(value: &Value) -> Result<String> {
             .iter()
             .map(|w| {
                 let id = w.get("id").and_then(Value::as_str).unwrap_or("worker");
-                let sessions = w
-                    .get("sessions")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join("+")
+                let effort = w.get("effort").and_then(Value::as_str).unwrap_or("unknown");
+                let worker_active = w.get("active").and_then(Value::as_u64).unwrap_or(0);
+                let worker_leases = w
+                    .get("lease_count")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        w.get("sessions")
+                            .and_then(Value::as_array)
+                            .map(|items| items.len() as u64)
                     })
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "idle".into());
-                format!("{id}:{sessions}")
+                    .unwrap_or(0);
+                let activity = if worker_active > 0 { "busy" } else { "idle" };
+                format!("{id}:{effort}/{activity}/{worker_leases} leases")
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -148,12 +148,16 @@ mod tests {
                     {
                         "id": "worker-1",
                         "sessions": ["session-a"],
+                        "lease_count": 1,
+                        "effort": "high",
                         "active": 1,
                         "healthy": true
                     },
                     {
                         "id": "worker-2",
                         "sessions": ["session-b"],
+                        "lease_count": 1,
+                        "effort": "medium",
                         "active": 0,
                         "healthy": true
                     }
@@ -162,7 +166,7 @@ mod tests {
         });
         assert_eq!(
             summary(&v).unwrap(),
-            "gpt-5.6-sol · 2/2 workers ready · active 1 · leases 2 · worker-1:session-a, worker-2:session-b"
+            "gpt-5.6-sol · 2/2 workers ready · active 1 · leases 2 · worker-1:high/busy/1 leases, worker-2:medium/idle/1 leases"
         );
     }
 }
