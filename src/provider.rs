@@ -43,6 +43,41 @@ fn summary(value: &Value) -> Result<String> {
     if !state.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         bail!("model provider reported not ready");
     }
+    if let Some(workers) = state.get("workers").and_then(Value::as_array) {
+        let healthy = workers
+            .iter()
+            .filter(|w| w.get("healthy").and_then(Value::as_bool) == Some(true))
+            .count();
+        let active: u64 = workers
+            .iter()
+            .filter_map(|w| w.get("active").and_then(Value::as_u64))
+            .sum();
+        let leases = state.get("leases").and_then(Value::as_u64).unwrap_or(0);
+        let names = workers
+            .iter()
+            .map(|w| {
+                let id = w.get("id").and_then(Value::as_str).unwrap_or("worker");
+                let sessions = w
+                    .get("sessions")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join("+")
+                    })
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "idle".into());
+                format!("{id}:{sessions}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(format!(
+            "gpt-5.6-sol · {healthy}/{} workers ready · active {active} · leases {leases} · {names}",
+            workers.len()
+        ));
+    }
     let provider = state
         .get("provider")
         .and_then(Value::as_str)
@@ -99,6 +134,35 @@ mod tests {
         assert_eq!(
             summary(&v).unwrap(),
             "gpt-5.6-sol · high · Temporary ready · temporary-root · active 0 · queued 2 (1 fg, 1 bg)"
+        );
+    }
+
+    #[test]
+    fn worker_pool_summary_names_capacity_and_leases() {
+        let v = serde_json::json!({
+            "bridge": true,
+            "upstream": {
+                "ok": true,
+                "leases": 2,
+                "workers": [
+                    {
+                        "id": "worker-1",
+                        "sessions": ["session-a"],
+                        "active": 1,
+                        "healthy": true
+                    },
+                    {
+                        "id": "worker-2",
+                        "sessions": ["session-b"],
+                        "active": 0,
+                        "healthy": true
+                    }
+                ]
+            }
+        });
+        assert_eq!(
+            summary(&v).unwrap(),
+            "gpt-5.6-sol · 2/2 workers ready · active 1 · leases 2 · worker-1:session-a, worker-2:session-b"
         );
     }
 }

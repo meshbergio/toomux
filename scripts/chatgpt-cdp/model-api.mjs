@@ -15,14 +15,15 @@ const DEFAULT_MODEL_ALIAS = process.env.TOOMUX_CHATGPT_MODEL_NAME || "bonnie";
 const DEFAULT_REASONING_EFFORT = String(process.env.TOOMUX_CHATGPT_REASONING_EFFORT || "high").toLowerCase();
 const REQUEST_TIMEOUT_MS = Math.max(30_000, Math.min(240_000, Number(process.env.TOOMUX_CHATGPT_MODEL_TIMEOUT_MS || 150_000)));
 const TOKEN_CHARS_PER_TOKEN = Math.max(2.5, Math.min(5, Number(process.env.TOOMUX_CHATGPT_TOKEN_CHARS_PER_TOKEN || 3.2)));
+const MAX_LANES = 1;
 const MAX_BODY = 12 * 1024 * 1024;
-const requestQueues = { foreground: [], background: [] };
+const lanes = new Map();
+const sessionLeases = new Map();
+let laneManagerTail = Promise.resolve();
 let queueDepth = 0;
 let queuedForeground = 0;
 let queuedBackground = 0;
 let activeRequests = 0;
-let queueDraining = false;
-let resetPromise = Promise.resolve();
 
 function readSecret(path) {
   const value = fs.readFileSync(path, "utf8").trim();
@@ -462,31 +463,89 @@ async function openTarget(url = TEMPORARY_URL) {
   return target;
 }
 
-async function persistentChatTarget() {
-  const targets = await listTargets();
-  const pages = targets.filter((target) => target.type === "page" && /^https:\/\/chatgpt\.com\//.test(String(target.url || "")));
-  let target = pages.find((page) => page.url === TEMPORARY_URL)
-    || pages.find((page) => String(page.url || "").includes("temporary-chat=true"))
-    || pages[0]
-    || null;
-  if (!target) target = await openTarget(TEMPORARY_URL);
-
-  for (const extra of pages) {
-    if (extra.id !== target.id) await closeTarget(extra.id);
-  }
-  return target;
+function laneSnapshot(lane) {
+  return {
+    id: lane.id,
+    target_id: lane.targetId,
+    session_id: lane.sessionId || null,
+    active: lane.active ? 1 : 0,
+    queued: lane.queues.foreground.length + lane.queues.background.length,
+    queued_foreground: lane.queues.foreground.length,
+    queued_background: lane.queues.background.length,
+    effort: lane.effort || null,
+    healthy: lane.healthy !== false,
+  };
 }
 
-async function attachPersistentChat() {
-  await resetPromise.catch(() => {});
-  const target = await persistentChatTarget();
+async function syncLaneTargets() {
+  const targets = await listTargets();
+  const pages = targets.filter((target) => target.type === "page" && /^https:\/\/chatgpt\.com\//.test(String(target.url || "")));
+  for (const lane of lanes.values()) {
+    const page = pages.find((p) => p.id === lane.targetId);
+    if (!page) {
+      lane.healthy = false;
+      lane.target = null;
+    } else {
+      lane.target = page;
+      lane.healthy = true;
+    }
+  }
+  for (const page of pages) {
+    if ([...lanes.values()].some((lane) => lane.targetId === page.id)) continue;
+    if (lanes.size >= MAX_LANES) break;
+    const lane = {
+      id: `lane-${lanes.size + 1}`,
+      targetId: page.id,
+      target: page,
+      sessionId: null,
+      active: false,
+      healthy: true,
+      effort: null,
+      queues: { foreground: [], background: [] },
+      draining: false,
+      resetPromise: Promise.resolve(),
+      lastUsedAt: 0,
+    };
+    lanes.set(lane.id, lane);
+  }
+  while (lanes.size < MAX_LANES) {
+    const target = await openTarget(TEMPORARY_URL);
+    const lane = {
+      id: `lane-${lanes.size + 1}`,
+      targetId: target.id,
+      target,
+      sessionId: null,
+      active: false,
+      healthy: true,
+      effort: null,
+      queues: { foreground: [], background: [] },
+      draining: false,
+      resetPromise: Promise.resolve(),
+      lastUsedAt: 0,
+    };
+    lanes.set(lane.id, lane);
+  }
+  return [...lanes.values()];
+}
+
+async function attachLane(lane) {
+  await lane.resetPromise.catch(() => {});
+  const targets = await listTargets();
+  let target = targets.find((t) => t.id === lane.targetId);
+  if (!target) {
+    target = await openTarget(TEMPORARY_URL);
+    lane.targetId = target.id;
+    lane.target = target;
+    lane.healthy = true;
+  } else {
+    lane.target = target;
+  }
   const client = createClient(target.webSocketDebuggerUrl);
   await Promise.race([client.ready, delay(8000).then(() => { throw new Error("CDP connect timed out"); })]);
   await client.send("Runtime.enable");
   await client.send("DOM.enable");
   try { await client.send("Page.enable"); } catch {}
-  try { await client.send("Page.bringToFront"); } catch {}
-  return { target, client };
+  return { target, client, lane };
 }
 
 async function waitForTemporaryReady(client, timeoutMs = 10_000) {
@@ -540,64 +599,138 @@ async function resetTemporaryChat(client) {
 }
 
 async function deepReadiness() {
-  let client = null;
   try {
-    await resetPromise.catch(() => {});
-    const target = await persistentChatTarget();
-    client = createClient(target.webSocketDebuggerUrl);
-    await Promise.race([client.ready, delay(5000).then(() => { throw new Error("CDP connect timed out"); })]);
-    await client.send("Runtime.enable");
-    const state = await waitForTemporaryReady(client, 5000);
+    const pool = await syncLaneTargets();
+    const states = [];
+    for (const lane of pool) {
+      let client = null;
+      try {
+        await lane.resetPromise.catch(() => {});
+        ({ client } = await attachLane(lane));
+        const state = await waitForTemporaryReady(client, 5000);
+        states.push({ lane, state });
+        lane.healthy = true;
+      } catch (error) {
+        lane.healthy = false;
+        states.push({ lane, state: { error: String(error?.message || error) } });
+      } finally {
+        client?.close();
+      }
+    }
+    const healthy = states.filter(({ lane }) => lane.healthy);
     return {
-      ok: Boolean(state.authenticated && state.composer && state.temporary),
-      authenticated: Boolean(state.authenticated),
-      composer: Boolean(state.composer),
-      temporary: Boolean(state.temporary),
+      ok: healthy.length > 0,
+      authenticated: healthy.length > 0,
+      composer: healthy.length > 0,
+      temporary: healthy.length > 0,
       provider: MODEL_NAME,
-      reasoning_effort: /high/i.test(String(state.model || "")) ? "high" : (/medium/i.test(String(state.model || "")) ? "medium" : null),
-      selector: state.model || null,
-      streaming: Boolean(state.streaming),
+      reasoning_effort: healthy[0]?.lane.effort || null,
+      selector: healthy[0]?.state.model || null,
+      streaming: states.some(({ state }) => Boolean(state.streaming)),
       active: activeRequests,
       queued: queueDepth,
       queued_foreground: queuedForeground,
       queued_background: queuedBackground,
-      urlKind: /\/c\//.test(String(state.url || "")) ? "temporary-conversation" : "temporary-root",
+      lanes: states.map(({ lane, state }) => ({
+        ...laneSnapshot(lane),
+        selector: state.model || null,
+        urlKind: /\/c\//.test(String(state.url || "")) ? "temporary-conversation" : "temporary-root",
+        error: state.error || null,
+      })),
+      max_lanes: MAX_LANES,
+      leased_sessions: sessionLeases.size,
+      urlKind: healthy.every(({ state }) => !/\/c\//.test(String(state.url || ""))) ? "temporary-root" : "mixed",
     };
   } catch (error) {
-    return { ok: false, error: String(error?.message || error), active: activeRequests, queued: queueDepth };
-  } finally {
-    client?.close();
+    return { ok: false, error: String(error?.message || error), active: activeRequests, queued: queueDepth, lanes: [] };
   }
 }
 
-async function drainRequestQueues() {
-  if (queueDraining) return;
-  queueDraining = true;
+async function selectLaneUnlocked(sessionId, effort) {
+  await syncLaneTargets();
+  if (sessionId && sessionLeases.has(sessionId)) {
+    const leased = lanes.get(sessionLeases.get(sessionId));
+    if (leased && leased.healthy !== false) return leased;
+    sessionLeases.delete(sessionId);
+  }
+  const all = [...lanes.values()].filter((lane) => lane.healthy !== false);
+  const matching = all.filter((lane) => lane.effort === effort);
+  const convertible = all.filter((lane) => !lane.active && lane.queues.foreground.length === 0 && lane.queues.background.length === 0 && !lane.sessionId);
+  if (!matching.length && convertible.length) {
+    const lane = convertible[0];
+    let client = null;
+    try {
+      ({ client } = await attachLane(lane));
+      const ready = await prepareTemporaryChat(client);
+      const attested = await ensureSolEffort(client, effort);
+      lane.effort = attested.reasoning_effort;
+      lane.healthy = true;
+      console.error(`[model-api] repurposed ${lane.id} target=${lane.targetId} from=${ready.model || "unknown"} to=${lane.effort}`);
+    } finally {
+      client?.close();
+    }
+  }
+  const candidates = all.filter((lane) => lane.effort === effort);
+  if (!candidates.length) throw new Error(`no ${effort} ChatGPT browser lane available`);
+  const idle = candidates.filter((lane) => !lane.active && lane.queues.foreground.length === 0 && lane.queues.background.length === 0);
+  let lane = idle.find((candidate) => !candidate.sessionId)
+    || idle[0]
+    || candidates.sort((a, b) => {
+      const aq = a.queues.foreground.length + a.queues.background.length + (a.active ? 1 : 0);
+      const bq = b.queues.foreground.length + b.queues.background.length + (b.active ? 1 : 0);
+      return aq - bq;
+    })[0];
+  if (!lane) throw new Error("no healthy ChatGPT browser lane available");
+  if (sessionId) {
+    if (lane.sessionId && lane.sessionId !== sessionId) sessionLeases.delete(lane.sessionId);
+    lane.sessionId = sessionId;
+    sessionLeases.set(sessionId, lane.id);
+  }
+  return lane;
+}
+
+function selectLane(sessionId, effort) {
+  const run = laneManagerTail.catch(() => {}).then(() => selectLaneUnlocked(sessionId, effort));
+  laneManagerTail = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function drainLane(lane) {
+  if (lane.draining) return;
+  lane.draining = true;
   try {
-    while (requestQueues.foreground.length || requestQueues.background.length) {
-      const priority = requestQueues.foreground.length ? "foreground" : "background";
-      const item = requestQueues[priority].shift();
+    while (lane.queues.foreground.length || lane.queues.background.length) {
+      const priority = lane.queues.foreground.length ? "foreground" : "background";
+      const item = lane.queues[priority].shift();
       queueDepth -= 1;
       if (priority === "foreground") queuedForeground -= 1;
       else queuedBackground -= 1;
+      lane.active = true;
       activeRequests += 1;
-      try { item.resolve(await item.task()); }
+      try {
+        item.resolve(await item.task(lane));
+        lane.lastUsedAt = Date.now();
+      }
       catch (error) { item.reject(error); }
-      finally { activeRequests -= 1; }
+      finally {
+        lane.active = false;
+        activeRequests -= 1;
+      }
     }
   } finally {
-    queueDraining = false;
+    lane.draining = false;
   }
 }
 
-function enqueueModelTask(task, priority = "foreground") {
-  const lane = normalizePriority(priority);
+async function enqueueModelTask(task, priority = "foreground", sessionId = "", effort = DEFAULT_REASONING_EFFORT) {
+  const priorityName = normalizePriority(priority);
+  const lane = await selectLane(sessionId, normalizeEffort(effort));
   queueDepth += 1;
-  if (lane === "foreground") queuedForeground += 1;
+  if (priorityName === "foreground") queuedForeground += 1;
   else queuedBackground += 1;
   return new Promise((resolve, reject) => {
-    requestQueues[lane].push({ task, resolve, reject });
-    void drainRequestQueues();
+    lane.queues[priorityName].push({ task, resolve, reject });
+    void drainLane(lane);
   });
 }
 
@@ -737,7 +870,7 @@ function estimateTokens(text) {
   return Math.max(0, Math.ceil(String(text || "").length / TOKEN_CHARS_PER_TOKEN));
 }
 
-async function modelCompletion({ model, reasoning_effort, messages, tools, tool_choice, response_format, onText = null }) {
+async function modelCompletion({ model, reasoning_effort, messages, tools, tool_choice, response_format, onText = null }, lane) {
   const resolved = resolveModelRequest({ model, reasoning_effort });
   const prompt = serializePrompt({ messages, tools, toolChoice: tool_choice, responseFormat: response_format });
   console.error(`[model-api] request provider=${resolved.model} effort=${resolved.reasoning_effort} requested_model=${resolved.requested_model} prompt_chars=${prompt.length} messages=${Array.isArray(messages) ? messages.length : 0} tools=${Array.isArray(tools) ? tools.length : 0} queued=${queueDepth}`);
@@ -746,10 +879,19 @@ async function modelCompletion({ model, reasoning_effort, messages, tools, tool_
   let client = null;
   const startedAt = Date.now();
   try {
-    ({ target, client } = await attachPersistentChat());
+    ({ target, client } = await attachLane(lane));
     const ready = await prepareTemporaryChat(client);
-    const attested = await ensureSolEffort(client, resolved.reasoning_effort);
-    console.error(`[model-api] persistent target=${target?.id || "unknown"} temporary=true provider=${attested.model} effort=${attested.reasoning_effort} slider=${attested.slider_value} previous_selector=${ready.model || "unknown"}`);
+    if (lane.effort !== resolved.reasoning_effort) {
+      throw new Error(`lane ${lane.id} is pinned to ${lane.effort}, cannot serve ${resolved.reasoning_effort}`);
+    }
+    const attested = {
+      model: MODEL_NAME,
+      reasoning_effort: lane.effort,
+      slider_value: lane.effort === "high" ? 2 : 1,
+      label: lane.effort === "high" ? "High, 3 of 3." : "Medium, 2 of 3.",
+      reused: true,
+    };
+    console.error(`[model-api] lane=${lane.id} session=${lane.sessionId || "none"} target=${target?.id || "unknown"} temporary=true provider=${attested.model} effort=${attested.reasoning_effort} slider=${attested.slider_value} reused_effort=${attested.reused ? "yes" : "no"} previous_selector=${ready.model || "unknown"}`);
 
     const composer = await findComposer(client);
     if (!composer) throw new Error("signed-in Temporary Chat composer did not appear");
@@ -818,12 +960,14 @@ async function modelCompletion({ model, reasoning_effort, messages, tools, tool_
       const resetClient = client;
       const resetStartedAt = Date.now();
       client = null;
-      resetPromise = (async () => {
+      lane.resetPromise = (async () => {
         try {
           const state = await resetTemporaryChat(resetClient);
-          console.error(`[model-api] temporary reset ready reset_ms=${Date.now() - resetStartedAt} model=${state.model || "preserve"}`);
+          lane.healthy = true;
+          console.error(`[model-api] lane=${lane.id} temporary reset ready reset_ms=${Date.now() - resetStartedAt} model=${state.model || "preserve"}`);
         } catch (error) {
-          console.error(`[model-api] temporary reset failed: ${error?.message || error}`);
+          lane.healthy = false;
+          console.error(`[model-api] lane=${lane.id} temporary reset failed: ${error?.message || error}`);
         } finally {
           resetClient.close();
         }
@@ -852,6 +996,8 @@ const server = http.createServer(async (req, res) => {
         queued: queueDepth,
         queued_foreground: queuedForeground,
         queued_background: queuedBackground,
+        lanes: [...lanes.values()].map(laneSnapshot),
+        max_lanes: MAX_LANES,
       });
     }
     if (req.method === "GET" && url.pathname === "/readyz") {
@@ -872,7 +1018,8 @@ const server = http.createServer(async (req, res) => {
     const body = await readJson(req);
     const resolved = resolveModelRequest(body);
     const priority = normalizePriority(body.priority);
-    const requestBody = { ...body, model: resolved.model, reasoning_effort: resolved.reasoning_effort };
+    const providerSessionId = String(body.provider_session_id || "").trim();
+    const requestBody = { ...body, model: resolved.model, reasoning_effort: resolved.reasoning_effort, provider_session_id: providerSessionId || undefined };
     const id = `chatcmpl_${crypto.randomBytes(10).toString("hex")}`;
     const created = Math.floor(Date.now() / 1000);
     const hasTools = Array.isArray(body.tools) && body.tools.some((tool) => tool?.type === "function") && body.tool_choice !== "none";
@@ -886,13 +1033,13 @@ const server = http.createServer(async (req, res) => {
       });
       sse(res, { id, object: "chat.completion.chunk", created, model: MODEL_NAME, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
       let streamedText = false;
-      const out = await enqueueModelTask(() => modelCompletion({
+      const out = await enqueueModelTask((lane) => modelCompletion({
         ...requestBody,
         onText: (delta) => {
           streamedText = true;
           sse(res, { id, object: "chat.completion.chunk", created, model: MODEL_NAME, choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
         },
-      }), priority);
+      }, lane), priority, providerSessionId, resolved.reasoning_effort);
       if (!streamedText && out.content) {
         sse(res, { id, object: "chat.completion.chunk", created, model: out.model, choices: [{ index: 0, delta: { content: out.content }, finish_reason: null }] });
       }
@@ -903,7 +1050,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const out = await enqueueModelTask(() => modelCompletion(requestBody), priority);
+    const out = await enqueueModelTask((lane) => modelCompletion(requestBody, lane), priority, providerSessionId, resolved.reasoning_effort);
     const message = { role: "assistant", content: out.tool_calls ? null : out.content };
     if (out.tool_calls) message.tool_calls = out.tool_calls.map(({ id, function: fn }) => ({ id, type: "function", function: fn }));
 
@@ -945,24 +1092,32 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  process.stdout.write(`toomux ChatGPT temporary-chat model API listening on http://${HOST}:${PORT}\n`);
+  process.stdout.write(`toomux ChatGPT multi-lane temporary-chat model API listening on http://${HOST}:${PORT} lanes=${MAX_LANES}\n`);
   void (async () => {
-    let lastError = null;
-    for (let attempt = 1; attempt <= 20; attempt += 1) {
-      let client = null;
-      try {
-        const attached = await attachPersistentChat();
-        client = attached.client;
-        const state = await prepareTemporaryChat(client);
-        console.error(`[model-api] prewarmed temporary target=${attached.target?.id || "unknown"} model=${state.model || "preserve"} attempt=${attempt}`);
-        return;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 20) await delay(250);
-      } finally {
-        client?.close();
+    const pool = await syncLaneTargets();
+    for (const lane of pool) {
+      let lastError = null;
+      let ready = false;
+      for (let attempt = 1; attempt <= 20; attempt += 1) {
+        let client = null;
+        try {
+          ({ client } = await attachLane(lane));
+          const state = await prepareTemporaryChat(client);
+          lane.effort = /high/i.test(String(state.model || "")) ? "high" : (/medium/i.test(String(state.model || "")) ? "medium" : null);
+          if (!lane.effort) throw new Error(`could not attest effort from selector ${state.model || "unknown"}`);
+          lane.healthy = true;
+          console.error(`[model-api] prewarmed ${lane.id} target=${lane.targetId} model=${state.model || "preserve"} effort=${lane.effort} attempt=${attempt}`);
+          ready = true;
+          break;
+        } catch (error) {
+          lastError = error;
+          lane.healthy = false;
+          if (attempt < 20) await delay(250);
+        } finally {
+          client?.close();
+        }
       }
+      if (!ready) console.error(`[model-api] ${lane.id} prewarm failed after retries: ${lastError?.message || lastError}`);
     }
-    console.error(`[model-api] prewarm failed after retries: ${lastError?.message || lastError}`);
-  })();
+  })().catch((error) => console.error(`[model-api] pool prewarm failed: ${error?.message || error}`));
 });

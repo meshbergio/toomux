@@ -188,15 +188,21 @@ function requestFingerprint(body) {
     tools,
     system_hash: crypto.createHash("sha256").update(system).digest("hex").slice(0, 16),
     background_candidate: tools === 0 && serialized.length >= 100_000,
+    provider_session_hash: (() => {
+      const id = String(body?.metadata?.toomux_provider_session_id || body.provider_session_id || "").trim();
+      return id ? crypto.createHash("sha256").update(id).digest("hex").slice(0, 12) : null;
+    })(),
   };
 }
 
 function openAiRequest(body, stream) {
   const preset = resolveProviderPreset(body);
+  const providerSessionId = String(body?.metadata?.toomux_provider_session_id || body.provider_session_id || "").trim();
   const request = {
     model: preset.model,
     reasoning_effort: preset.reasoning_effort,
     priority: preset.priority,
+    provider_session_id: providerSessionId || undefined,
     messages: anthropicToOpenAiMessages(body),
     tools: anthropicToolsToOpenAi(body.tools),
     tool_choice: anthropicToolChoice(body.tool_choice),
@@ -249,7 +255,7 @@ async function upstreamFetch(body, stream, signal) {
   const token = readSecret(UPSTREAM_TOKEN_FILE);
   const preset = resolveProviderPreset(body);
   const fingerprint = requestFingerprint(body);
-  console.error(`[bridge] request provider=${preset.model} effort=${preset.reasoning_effort} priority=${preset.priority} requested_model=${preset.requested_model} chars=${fingerprint.chars} tools=${fingerprint.tools} system_hash=${fingerprint.system_hash} background_candidate=${fingerprint.background_candidate}`);
+  console.error(`[bridge] request provider=${preset.model} effort=${preset.reasoning_effort} priority=${preset.priority} requested_model=${preset.requested_model} session_hash=${fingerprint.provider_session_hash || "none"} chars=${fingerprint.chars} tools=${fingerprint.tools} system_hash=${fingerprint.system_hash} background_candidate=${fingerprint.background_candidate}`);
   return fetch(`${UPSTREAM}/chat/completions`, {
     method: "POST",
     headers: {
@@ -448,6 +454,10 @@ const server = http.createServer(async (req, res) => {
       return anthropicError(res, 405, "method not allowed", "invalid_request_error");
     }
     const body = await readJson(req);
+    const providerSessionId = String(req.headers["x-toomux-provider-session-id"] || "").trim();
+    if (providerSessionId) {
+      body.metadata = { ...(body.metadata || {}), toomux_provider_session_id: providerSessionId };
+    }
     if (url.pathname === "/v1/messages/count_tokens") {
       return json(res, 200, { input_tokens: approximateInputTokens(body) });
     }

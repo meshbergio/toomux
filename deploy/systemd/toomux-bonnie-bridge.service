@@ -1,7 +1,7 @@
 [Unit]
 Description=Toomux Bonnie Anthropic compatibility bridge
-After=toomux-chatgpt-model-api.service
-Requires=toomux-chatgpt-model-api.service
+After=toomux-chatgpt-worker-broker.service
+Requires=toomux-chatgpt-worker-broker.service
 
 [Service]
 Type=simple

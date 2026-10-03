@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+CLAUDE_REAL="$HOME/.local/bin/claude"
+BONNIE_CONFIG="$HOME/.claude-bonnie"
+BONNIE_KEY_FILE="$HOME/.local/state/toomux/bonnie-bridge.key"
+
+if [ "${CLAUDE_CONFIG_DIR:-}" = "$BONNIE_CONFIG" ]; then
+  if [ ! -r "$BONNIE_KEY_FILE" ]; then
+    echo "toomux Bonnie provider key is missing: $BONNIE_KEY_FILE" >&2
+    exit 78
+  fi
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:34560"
+  export ANTHROPIC_API_KEY="$(cat "$BONNIE_KEY_FILE")"
+  export ANTHROPIC_MODEL="bonnie"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="bonnie"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="bonnie"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="bonnie"
+  export ANTHROPIC_SMALL_FAST_MODEL="bonnie"
+  export CLAUDE_CODE_DISABLE_MODEL_ACCESS_FALLBACK="1"
+  if [ -n "${TOOMUX_PROVIDER_SESSION_ID:-}" ]; then
+    export ANTHROPIC_CUSTOM_HEADERS="x-toomux-provider-session-id: ${TOOMUX_PROVIDER_SESSION_ID}"
+  fi
+  unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+fi
+
+exec "$CLAUDE_REAL" "$@"

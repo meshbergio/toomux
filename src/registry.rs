@@ -682,8 +682,10 @@ pub fn carry_env(k: &str) -> bool {
         || k.ends_with("_TOKEN")
         || k.contains("SECRET")
         || k.contains("PASSWORD");
-    let relevant =
-        k.starts_with("ANTHROPIC_") || k.starts_with("CLAUDE_CODE_") || k.starts_with("OHI_");
+    let relevant = k.starts_with("ANTHROPIC_")
+        || k.starts_with("CLAUDE_CODE_")
+        || k.starts_with("OHI_")
+        || k == "TOOMUX_PROVIDER_SESSION_ID";
     relevant && !secret && k != "CLAUDE_CONFIG_DIR" && !RUNTIME_VARS.contains(&k)
 }
 
