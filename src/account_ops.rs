@@ -93,7 +93,7 @@ pub fn add(cfg: &mut Config, name: &str, dir: Option<PathBuf>) -> Result<Added> 
             "made"
         }
     )];
-    let bin = std::env::current_exe()?.display().to_string();
+    let bin = setup::integration_bin()?;
     notes.push(format!(
         "{name}: {}",
         setup::install_statusline(&dir, &bin)?

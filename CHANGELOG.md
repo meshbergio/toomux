@@ -4,6 +4,22 @@ All notable user-visible changes are recorded here. toomux follows semantic
 versioning once a compatibility promise is established; the 0.x series may
 still change configuration and command details while they settle.
 
+## 0.4.2 - 2026-10-03
+
+### Added
+
+- Add delta-aware rich per-session terminal frames for phone clients, with ANSI styling, content hashes, pane geometry and cursor metadata while preserving the plain-screen Android contract.
+- Add browser-native history and keyboard-aware visual viewport behavior to the phone web remote, so Back/Forward stays inside semantic Toomux surfaces and the command deck remains visible as the mobile keyboard changes the viewport.
+
+### Changed
+
+- Persist Toomux-owned Claude hooks, status-line commands, tmux bindings and the remote service against the stable `~/.local/bin/toomux` launcher when running from an installer-managed bundle, rather than stamping an immutable version payload path.
+- Make unchanged phone terminal polls return metadata-only frames, avoiding repeated ANSI capture, parsing and DOM repaint work.
+
+### Reliability
+
+- Preserve compatibility for already-running sessions during launcher migrations and add regression coverage for stable-launcher resolution, rich-frame compatibility, browser Back/Forward, delta polling and mobile visual-viewport sizing.
+
 ## 0.4.1 - 2026-10-03
 
 ### Added

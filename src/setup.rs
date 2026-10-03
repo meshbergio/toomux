@@ -84,6 +84,27 @@ pub fn strip_segment(s: &str) -> String {
 /// maps them down for a terminal that can't show them.
 pub const TRUECOLOR_ENV: &str = "CLAUDE_CODE_TMUX_TRUECOLOR";
 
+/// The path persisted into tmux/Claude integration must survive bundle upgrades.
+/// `current_exe()` resolves the immutable bundle payload, so prefer the stable
+/// ~/.local/bin launcher only when it resolves back to this exact executable.
+/// Other install modes keep using their own executable path.
+pub fn integration_bin() -> Result<String> {
+    let exe = std::env::current_exe().context("resolving current toomux executable")?;
+    Ok(integration_bin_for(
+        &exe,
+        &config::home().join(".local/bin/toomux"),
+    ))
+}
+
+fn integration_bin_for(exe: &std::path::Path, stable: &std::path::Path) -> String {
+    let resolved_exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    if std::fs::canonicalize(stable).ok().as_ref() == Some(&resolved_exe) {
+        stable.display().to_string()
+    } else {
+        resolved_exe.display().to_string()
+    }
+}
+
 /// Route Bash through toomux, so large outputs are kept whole but shown short.
 pub fn install_hook(dir: &std::path::Path, bin: &str) -> Result<String> {
     let path = std::fs::canonicalize(dir.join("settings.json"))
@@ -283,6 +304,38 @@ mod tests {
         assert_eq!(strip_segment("A #(/x/toomux status)  B"), "A B");
         assert_eq!(strip_segment("#(/x/toomux status)"), "");
         assert_eq!(strip_segment("#h"), "#h");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn integration_bin_prefers_matching_stable_launcher() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("toomux-integration-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("versions/v1/bin")).unwrap();
+        std::fs::create_dir_all(root.join(".local/bin")).unwrap();
+        let exe = root.join("versions/v1/bin/toomux");
+        std::fs::write(&exe, b"test").unwrap();
+        let stable = root.join(".local/bin/toomux");
+        symlink(&exe, &stable).unwrap();
+
+        assert_eq!(
+            integration_bin_for(&exe, &stable),
+            stable.display().to_string()
+        );
+
+        std::fs::remove_file(&stable).unwrap();
+        let other = root.join("versions/v2/bin/toomux");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        symlink(&other, &stable).unwrap();
+        assert_eq!(
+            integration_bin_for(&exe, &stable),
+            exe.display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

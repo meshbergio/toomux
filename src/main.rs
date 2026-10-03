@@ -1440,7 +1440,7 @@ fn init(apply: bool) -> Result<()> {
         println!("config: wrote {}", cfg_path.display());
     }
 
-    let bin = std::env::current_exe()?.display().to_string();
+    let bin = setup::integration_bin()?;
     // The whole terminal, status bar included: the same full screen as
     // outside tmux, drawn over whatever you were looking at. tmux 3.2 has
     // no borderless popups, so there it keeps a thin border.

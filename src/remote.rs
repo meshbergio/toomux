@@ -567,20 +567,137 @@ fn screen(cfg: &Config, target: &str, request_path: &str) -> Response {
     let Some(pane) = &s.pane else {
         return json_response(409, json!({"error":"session is not in tmux"}));
     };
-    let lines = request_path
-        .split_once('?')
-        .and_then(|(_, q)| q.split('&').find_map(|p| p.strip_prefix("lines=")))
+    let lines = query_param(request_path, "lines")
         .and_then(|n| n.parse::<u16>().ok())
         .unwrap_or(80)
         .clamp(10, 200);
+    let want_ansi = query_param(request_path, "ansi") == Some("1");
     let start = format!("-{lines}");
-    match tmux::run(&["capture-pane", "-p", "-t", &pane.id, "-S", &start]) {
-        Ok(text) => json_response(
+
+    let screen = match tmux::run(&["capture-pane", "-p", "-N", "-t", &pane.id, "-S", &start]) {
+        Ok(text) => text,
+        Err(e) => return json_response(502, json!({"error":e.to_string()})),
+    };
+    let geometry = tmux::run(&[
+        "display-message",
+        "-p",
+        "-t",
+        &pane.id,
+        "#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{cursor_flag}",
+    ])
+    .unwrap_or_default();
+    let mut parts = geometry
+        .split_whitespace()
+        .filter_map(|v| v.parse::<u16>().ok());
+    let cols = parts.next().unwrap_or(0);
+    let rows = parts.next().unwrap_or(0);
+    let cursor_x = parts.next().unwrap_or(0);
+    let cursor_y = parts.next().unwrap_or(0);
+    let cursor_visible = parts.next().unwrap_or(0) != 0;
+
+    // The version covers everything that can materially change the phone's
+    // rendered session surface. ANSI is derived from the same pane capture, so
+    // the plain screen plus geometry/cursor is sufficient to decide whether a
+    // second styled capture is necessary.
+    let sha256 = digest(&format!(
+        "{screen}\0{cols}\0{rows}\0{cursor_x}\0{cursor_y}\0{}",
+        u8::from(cursor_visible)
+    ));
+    let same = query_param(request_path, "since").is_some_and(|since| constant_eq(since, &sha256));
+
+    if same {
+        return json_response(
             200,
-            json!({"session_id":s.id,"title":s.title,"screen":text,"lines":lines}),
-        ),
-        Err(e) => json_response(502, json!({"error":e.to_string()})),
+            session_screen_json(
+                &s.id,
+                &s.title,
+                lines,
+                &sha256,
+                cols,
+                rows,
+                cursor_x,
+                cursor_y,
+                cursor_visible,
+                true,
+                None,
+                None,
+            ),
+        );
     }
+
+    let ansi = if want_ansi {
+        match tmux::run(&[
+            "capture-pane",
+            "-p",
+            "-e",
+            "-N",
+            "-t",
+            &pane.id,
+            "-S",
+            &start,
+        ]) {
+            Ok(text) => Some(text),
+            Err(e) => return json_response(502, json!({"error":e.to_string()})),
+        }
+    } else {
+        None
+    };
+
+    json_response(
+        200,
+        session_screen_json(
+            &s.id,
+            &s.title,
+            lines,
+            &sha256,
+            cols,
+            rows,
+            cursor_x,
+            cursor_y,
+            cursor_visible,
+            false,
+            Some(screen),
+            ansi,
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn session_screen_json(
+    session_id: &str,
+    title: &str,
+    lines: u16,
+    sha256: &str,
+    cols: u16,
+    rows: u16,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    same: bool,
+    screen: Option<String>,
+    ansi: Option<String>,
+) -> Value {
+    let mut out = json!({
+        "session_id": session_id,
+        "title": title,
+        "lines": lines,
+        "same": same,
+        "sha256": sha256,
+        "cols": cols,
+        "rows": rows,
+        "cursor": {
+            "x": cursor_x,
+            "y": cursor_y,
+            "visible": cursor_visible,
+        },
+    });
+    if let Some(screen) = screen {
+        out["screen"] = Value::String(screen);
+    }
+    if let Some(ansi) = ansi {
+        out["ansi"] = Value::String(ansi);
+    }
+    out
 }
 
 fn prompt(cfg: &Config, target: &str, body: &[u8]) -> Response {
@@ -1742,6 +1859,38 @@ mod tests {
         ] {
             assert!(!allowed_tui_key(key), "{key:?}");
         }
+    }
+
+    #[test]
+    fn session_screen_frames_keep_android_fields_and_support_delta_payloads() {
+        let full = session_screen_json(
+            "s1",
+            "Work",
+            120,
+            "abc",
+            80,
+            24,
+            4,
+            7,
+            true,
+            false,
+            Some("plain".into()),
+            Some("\u{1b}[1mstyled\u{1b}[0m".into()),
+        );
+        assert_eq!(full["session_id"], "s1");
+        assert_eq!(full["title"], "Work");
+        assert_eq!(full["screen"], "plain");
+        assert_eq!(full["ansi"], "\u{1b}[1mstyled\u{1b}[0m");
+        assert_eq!(full["same"], false);
+        assert_eq!(full["cursor"]["visible"], true);
+
+        let delta = session_screen_json(
+            "s1", "Work", 120, "abc", 80, 24, 4, 7, true, true, None, None,
+        );
+        assert_eq!(delta["same"], true);
+        assert!(delta.get("screen").is_none());
+        assert!(delta.get("ansi").is_none());
+        assert_eq!(delta["sha256"], "abc");
     }
 
     #[test]
