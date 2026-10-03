@@ -333,7 +333,7 @@ mod tests {
         symlink(&other, &stable).unwrap();
         assert_eq!(
             integration_bin_for(&exe, &stable),
-            exe.display().to_string()
+            std::fs::canonicalize(&exe).unwrap().display().to_string()
         );
         let _ = std::fs::remove_dir_all(root);
     }
