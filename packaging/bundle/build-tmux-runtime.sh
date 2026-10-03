@@ -7,9 +7,11 @@ out=${1:?usage: build-tmux-runtime.sh <output-dir>}
 TMUX_VERSION=3.4
 LIBEVENT_VERSION=2.1.12-stable
 NCURSES_VERSION=6.5
+UTF8PROC_VERSION=2.9.0
 TMUX_SHA256=551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa
 LIBEVENT_SHA256=92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb
 NCURSES_SHA256=136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6
+UTF8PROC_SHA256=18c1626e9fc5a2e192311e36b3010bfc698078f692888940f1fa150547abb0c1
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -80,6 +82,9 @@ mkdir -p "$prefix" "$out/bin" "$out/share"
 fetch tmux "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz" "$TMUX_SHA256"
 fetch libevent "https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VERSION/libevent-$LIBEVENT_VERSION.tar.gz" "$LIBEVENT_SHA256"
 fetch ncurses "https://invisible-island.net/archives/ncurses/ncurses-$NCURSES_VERSION.tar.gz" "$NCURSES_SHA256"
+if [ "$os" = Darwin ]; then
+  fetch utf8proc "https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v$UTF8PROC_VERSION.tar.gz" "$UTF8PROC_SHA256"
+fi
 
 (
   cd "$work/ncurses-src"
@@ -112,6 +117,22 @@ ln -sf libtinfow.a "$prefix/lib/libtinfo.a"
   make install
 )
 
+if [ "$os" = Darwin ]; then
+  (
+    cd "$work/utf8proc-src"
+    # Install only the static archive. utf8proc's normal macOS install also
+    # installs a dylib whose install name points into this temporary prefix.
+    # The private tmux runtime must remain self-contained after the build tree
+    # is deleted.
+    make -j"$jobs" CC="$cc" libutf8proc.a
+    make prefix="$prefix" libutf8proc.pc
+    mkdir -p "$prefix/include" "$prefix/lib/pkgconfig"
+    cp utf8proc.h "$prefix/include/"
+    cp libutf8proc.a "$prefix/lib/"
+    cp libutf8proc.pc "$prefix/lib/pkgconfig/"
+  )
+fi
+
 (
   cd "$work/tmux-src"
   export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
@@ -121,7 +142,7 @@ ln -sf libtinfow.a "$prefix/lib/libtinfo.a"
     ac_cv_search_forkpty='none required' CC="$cc" ./configure --prefix="$prefix"
   else
     export LDFLAGS="-L$prefix/lib"
-    CC="$cc" ./configure --prefix="$prefix"
+    CC="$cc" ./configure --prefix="$prefix" --enable-utf8proc
   fi
   make -j"$jobs"
   cp tmux "$out/bin/tmux"
@@ -153,6 +174,11 @@ else
     otool -L "$out/bin/tmux" >&2
     exit 1
   fi
+  if otool -L "$out/bin/tmux" | grep -F "$prefix" >/dev/null; then
+    echo "build-tmux-runtime: macOS tmux still depends on the temporary build prefix" >&2
+    otool -L "$out/bin/tmux" >&2
+    exit 1
+  fi
 fi
 
 [ "$("$out/bin/tmux" -V)" = "tmux $TMUX_VERSION" ] || {
@@ -173,5 +199,14 @@ ncurses $NCURSES_VERSION
 https://invisible-island.net/archives/ncurses/ncurses-$NCURSES_VERSION.tar.gz
 sha256 $NCURSES_SHA256
 EOF
+
+if [ "$os" = Darwin ]; then
+  cat >> "$out/SOURCES.txt" <<EOF
+
+utf8proc $UTF8PROC_VERSION
+https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v$UTF8PROC_VERSION.tar.gz
+sha256 $UTF8PROC_SHA256
+EOF
+fi
 
 echo "private runtime: $("$out/bin/tmux" -V) -> $out"
