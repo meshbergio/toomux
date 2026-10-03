@@ -4,15 +4,22 @@ All notable user-visible changes are recorded here. toomux follows semantic
 versioning once a compatibility promise is established; the 0.x series may
 still change configuration and command details while they settle.
 
-## Unreleased
+## 0.4.0 - 2026-10-03
 
 ### Added
 
+- Add provider-agnostic context lifecycle policies so each provider/model can
+  own a different safe context window, handover threshold and compaction
+  posture without hard-coding Claude's limits.
+- Add the standalone ChatGPT browser-provider path, including Fable 5.1 model
+  mapping, concurrent browser-worker capacity and provider reconciliation.
 - Add self-contained Linux and macOS release bundles with a pinned private tmux 3.4 runtime and terminfo database, verified by archive and manifest hashes.
 - Add atomic versioned curl installs with `current` / `previous` bundles and `toomux rollback`.
 
 ### Changed
 
+- Make automatic handover ownership explicit per provider/model and fail safe
+  to the provider's native behavior when context capacity is unknown or unsafe.
 - Make `https://toomux.com/install` the canonical installer path; Homebrew and npm remain supported package-manager alternatives.
 - Use the exact tmux server executable when toomux is already inside an existing tmux server, and the bundled runtime for new standalone servers, avoiding client/server version mismatches.
 - Make self-contained uninstall remove only installer-owned launchers/runtime and restore a migrated pre-bundle toomux launcher.
