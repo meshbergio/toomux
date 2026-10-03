@@ -2,9 +2,9 @@ mod account_cli;
 
 use toomux::setup::{BEGIN, END};
 use toomux::{
-    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths, queue,
-    registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep, usage, voyage,
-    watch,
+    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths,
+    provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep,
+    usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,17 @@ enum Cmd {
     },
     /// One-line summary for the tmux status bar
     Status,
+    /// Deep status of the local ChatGPT model provider
+    Provider {
+        #[arg(long)]
+        json: bool,
+        /// Reconcile standalone provider leases against the complete live Toomux session registry
+        #[arg(long, conflicts_with = "configure_client")]
+        reconcile: bool,
+        /// Register the standalone provider model in the dedicated Claude Code profile
+        #[arg(long, conflicts_with = "reconcile")]
+        configure_client: bool,
+    },
     /// Jump to a session (pid, session-id prefix, or name), or a pin
     Jump {
         #[arg(required_unless_present = "pin")]
@@ -336,6 +347,23 @@ fn main() -> Result<()> {
         Some(Cmd::Status) => {
             print!("{}", status_line(&cfg));
             Ok(())
+        }
+        Some(Cmd::Provider {
+            json,
+            reconcile,
+            configure_client,
+        }) => {
+            if configure_client {
+                provider::configure_client(json)
+            } else if reconcile {
+                let live_ids = registry::load(&cfg)
+                    .into_iter()
+                    .map(|session| session.id)
+                    .collect::<Vec<_>>();
+                provider::reconcile(&live_ids, json)
+            } else {
+                provider::status(json)
+            }
         }
         Some(Cmd::Jump { target, pin }) => {
             let all = registry::load(&cfg);
@@ -1181,6 +1209,9 @@ fn status_line(cfg: &Config) -> String {
     }
     let notices = watch::notices();
     let now = registry::now_ms();
+    if due_every("provider-reconcile.stamp", 30_000, now) {
+        in_background(&["provider", "--reconcile"]);
+    }
     let usage = usage::summary(cfg, &all, now);
     for msg in usage::crossed(cfg, &usage) {
         watch::announce_text(cfg, &msg, "usage", "", "");

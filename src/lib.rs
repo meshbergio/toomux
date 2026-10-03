@@ -22,6 +22,7 @@ pub mod paths;
 pub mod places;
 pub mod platform;
 pub mod price;
+pub mod provider;
 pub mod queue;
 pub mod redact;
 pub mod registry;

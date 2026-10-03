@@ -124,6 +124,12 @@ pub fn launch_for(cfg: &Config, s: &Session, account: usize) -> Launch {
 /// or (with `fresh`) a new conversation that opens with that prompt.
 pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str>) -> Launch {
     let mut env: Vec<String> = s.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    if !env
+        .iter()
+        .any(|v| v.starts_with("TOOMUX_PROVIDER_SESSION_ID="))
+    {
+        env.push(format!("TOOMUX_PROVIDER_SESSION_ID={}", s.id));
+    }
     // Panes inherit the tmux server's environment, which may carry another
     // session's runtime markers; strip them so the relaunch starts clean.
     let mut argv = vec!["env".to_string()];
@@ -470,7 +476,11 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
     }
-    let mut env = Vec::new();
+    let mut env = vec![format!(
+        "TOOMUX_PROVIDER_SESSION_ID=launch-{}-{}",
+        std::process::id(),
+        crate::registry::now_ms()
+    )];
     config_dir(cfg, account, &mut env, &mut argv);
     argv.push(expand(&cfg.claude_bin).display().to_string());
     argv.extend(args.iter().cloned());
