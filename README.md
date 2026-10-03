@@ -110,14 +110,16 @@ And the model gets worse at using what's in front of it as the context grows.
 [Anthropic say so
 themselves](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
 
-When the context fills up, Claude Code compacts: it summarises the conversation
-and carries on. That usually happens mid-task, and details get lost.
+toomux treats that as a continuity problem rather than a reason to keep stretching one
+conversation. The built-in fallback makes a main session eligible to hand over at a
+natural turn boundary after **250k tokens**, with **400k tokens** as the hard limit.
+Each managed session can override that with its own context policy, so a 32k local
+model can hand over far earlier than a 1M session without changing either one globally.
 
-toomux hands over well before that. Each managed session resolves its own
-context policy, so a 32k local model can hand over far earlier than a 1M
-session. At the policy's natural break, it writes a brief, saves what it learned
-to memory, and a fresh session picks up in the same pane. Nothing is summarised,
-and the old conversation stays searchable.
+The original transcript is not replaced. At the resolved policy's natural break, the
+outgoing session writes an explicit handover brief, updates durable memory, and the
+successor receives that brief as its starting context in the same pane. The old
+conversation remains intact and searchable.
 
 The useful question is whether that actually changes the workload, not whether the
 mechanism sounds tidy.
