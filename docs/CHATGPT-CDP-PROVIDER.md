@@ -41,7 +41,11 @@ The wrapper uses the standalone provider credential:
 
 The retired Toomux-owned provider key is no longer consulted by the live client integration. Historical migration and rollback behavior remains available in the standalone provider repository and release history.
 
-The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers. To keep Claude Code's client-side model catalog and compaction/tool behavior on a known path, the installer adds a `modelPicker` row for `chatgpt-browser` with `behavesAs: claude-opus-4-6`. The custom model ID is still the ID sent to the local provider. Existing Claude settings, picker rows and `replaceBuiltInOptions` policy are preserved.
+The Claude wrapper requests the standalone provider's stable High alias, `chatgpt-browser`; the old `bonnie` model name is retained only as standalone compatibility for older external callers. On Claude Code 2.1.257 or later, the installer maps `chatgpt-browser` with `behavesAs: claude-fable-5-1`; older Claude Code releases fall back to `claude-opus-4-6`. The custom model ID is still the ID sent to the local provider. Existing Claude settings, picker rows and `replaceBuiltInOptions` policy are preserved.
+
+Fable's client profile uses a leaner agent harness and enables its long-running-agent protocol, but Claude Code also assumes a native 1M context window for Fable. To keep Toomux's existing context-pressure boundary, `toomux-claude` defaults `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to `200000`. An explicit caller value still wins. This preserves proactive compaction at 200K while retaining the Fable client behavior.
+
+Claude Code assigns custom gateway models the list price of their `behavesAs` model. Toomux therefore ignores the status-line `total_cost_usd` field when the actual model ID is a custom/non-`claude-*` provider ID such as `chatgpt-browser`; transcript token accounting already treats such local-provider IDs as zero API spend.
 
 ## Runtime endpoint
 

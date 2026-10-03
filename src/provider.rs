@@ -15,7 +15,44 @@ const READY_URL: &str = "http://127.0.0.1:34560/readyz";
 const RECONCILE_PATH: &str = "/v1/provider/sessions/reconcile";
 const DEFAULT_BROKER_PORT: u16 = 34561;
 const CLIENT_MODEL: &str = "chatgpt-browser";
-const CLIENT_MODEL_BEHAVES_AS: &str = "claude-opus-4-6";
+const CLIENT_MODEL_FABLE: &str = "claude-fable-5-1";
+const CLIENT_MODEL_FALLBACK: &str = "claude-opus-4-6";
+const FABLE_MIN_CLAUDE_CODE: (u64, u64, u64) = (2, 1, 257);
+
+fn parse_claude_code_version(raw: &str) -> Option<(u64, u64, u64)> {
+    let token = raw.split_whitespace().next()?.trim_start_matches('v');
+    let mut parts = token.split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
+fn supports_fable(raw: &str) -> bool {
+    parse_claude_code_version(raw).is_some_and(|version| version >= FABLE_MIN_CLAUDE_CODE)
+}
+
+fn client_model_behaves_as() -> &'static str {
+    let claude = std::env::var_os("TOOMUX_CLAUDE_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".local/bin/claude"))
+        });
+    let Some(claude) = claude else {
+        return CLIENT_MODEL_FALLBACK;
+    };
+    let Ok(output) = Command::new(claude).arg("--version").output() else {
+        return CLIENT_MODEL_FALLBACK;
+    };
+    if output.status.success() && supports_fable(&String::from_utf8_lossy(&output.stdout)) {
+        CLIENT_MODEL_FABLE
+    } else {
+        CLIENT_MODEL_FALLBACK
+    }
+}
 
 pub fn configure_client(json: bool) -> Result<()> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
@@ -29,7 +66,8 @@ pub fn configure_client(json: bool) -> Result<()> {
         serde_json::json!({})
     };
 
-    let changed = ensure_client_model_picker(&mut settings)?;
+    let behaves_as = client_model_behaves_as();
+    let changed = ensure_client_model_picker(&mut settings, behaves_as)?;
     if changed {
         write_json_atomic(&settings_path, &settings)?;
     }
@@ -41,7 +79,7 @@ pub fn configure_client(json: bool) -> Result<()> {
                 "ok": true,
                 "changed": changed,
                 "model": CLIENT_MODEL,
-                "behaves_as": CLIENT_MODEL_BEHAVES_AS,
+                "behaves_as": behaves_as,
                 "settings": settings_path,
             })
         );
@@ -59,7 +97,7 @@ pub fn configure_client(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn ensure_client_model_picker(settings: &mut Value) -> Result<bool> {
+fn ensure_client_model_picker(settings: &mut Value, behaves_as: &str) -> Result<bool> {
     let root = settings
         .as_object_mut()
         .context("Claude settings root must be a JSON object")?;
@@ -97,10 +135,7 @@ fn ensure_client_model_picker(settings: &mut Value) -> Result<bool> {
             "description".into(),
             Value::String("Standalone ChatGPT Browser API".into()),
         );
-        row.insert(
-            "behavesAs".into(),
-            Value::String(CLIENT_MODEL_BEHAVES_AS.into()),
-        );
+        row.insert("behavesAs".into(), Value::String(behaves_as.into()));
         next.push(Value::Object(row));
         kept = true;
     }
@@ -109,7 +144,7 @@ fn ensure_client_model_picker(settings: &mut Value) -> Result<bool> {
             "model": CLIENT_MODEL,
             "label": "GPT-5.6 Sol High",
             "description": "Standalone ChatGPT Browser API",
-            "behavesAs": CLIENT_MODEL_BEHAVES_AS,
+            "behavesAs": behaves_as,
         }));
     }
     let changed = before != next;
@@ -353,7 +388,7 @@ mod tests {
                 ]
             }
         });
-        assert!(ensure_client_model_picker(&mut settings).unwrap());
+        assert!(ensure_client_model_picker(&mut settings, CLIENT_MODEL_FABLE).unwrap());
         assert_eq!(settings["model"], "opus");
         assert_eq!(settings["permissions"]["defaultMode"], "default");
         assert_eq!(settings["modelPicker"]["replaceBuiltInOptions"], false);
@@ -361,19 +396,28 @@ mod tests {
         assert_eq!(options.len(), 2);
         assert_eq!(options[0]["model"], "company-model");
         assert_eq!(options[1]["model"], CLIENT_MODEL);
-        assert_eq!(options[1]["behavesAs"], CLIENT_MODEL_BEHAVES_AS);
+        assert_eq!(options[1]["behavesAs"], CLIENT_MODEL_FABLE);
         assert_eq!(options[1]["label"], "GPT-5.6 Sol High");
-        assert!(!ensure_client_model_picker(&mut settings).unwrap());
+        assert!(!ensure_client_model_picker(&mut settings, CLIENT_MODEL_FABLE).unwrap());
     }
 
     #[test]
     fn client_model_mapping_creates_picker_without_replacing_builtins() {
         let mut settings = serde_json::json!({ "model": "opus" });
-        assert!(ensure_client_model_picker(&mut settings).unwrap());
+        assert!(ensure_client_model_picker(&mut settings, CLIENT_MODEL_FABLE).unwrap());
         let picker = settings["modelPicker"].as_object().unwrap();
         assert!(!picker.contains_key("replaceBuiltInOptions"));
         assert_eq!(picker["options"][0]["model"], CLIENT_MODEL);
-        assert_eq!(picker["options"][0]["behavesAs"], CLIENT_MODEL_BEHAVES_AS);
+        assert_eq!(picker["options"][0]["behavesAs"], CLIENT_MODEL_FABLE);
+    }
+
+    #[test]
+    fn fable_requires_a_new_enough_claude_code() {
+        assert!(!supports_fable("2.1.256 (Claude Code)"));
+        assert!(supports_fable("2.1.257 (Claude Code)"));
+        assert!(supports_fable("2.1.288 (Claude Code)"));
+        assert!(supports_fable("v2.2.0"));
+        assert!(!supports_fable("not-a-version"));
     }
 
     #[test]
