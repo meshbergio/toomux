@@ -58,6 +58,47 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
+  bundle:
+    name: self-contained bundle (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          # WSL 2 consumes the x86_64 Linux bundle through the existing Windows launcher.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Linux bundle build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools bison pkg-config
+      - name: macOS bundle build tools
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: private tmux runtime
+        run: sh packaging/bundle/build-tmux-runtime.sh "$RUNNER_TEMP/toomux-runtime"
+      - name: package and lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\\([^"]*\\)"/\\1/p' Cargo.toml | head -1)"
+          sh packaging/bundle/package.sh \
+            "${{ matrix.target }}" \
+            "target/${{ matrix.target }}/release/toomux" \
+            "$RUNNER_TEMP/toomux-runtime" \
+            "$RUNNER_TEMP" \
+            "$version" \
+            "$GITHUB_SHA"
+          sh scripts/test-self-contained-install.sh "$RUNNER_TEMP/toomux-bundle-${{ matrix.target }}.tar.gz"
+
   msrv:
     name: msrv (Rust 1.88.0)
     runs-on: ubuntu-latest

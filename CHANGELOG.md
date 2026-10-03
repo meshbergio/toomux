@@ -6,6 +6,17 @@ still change configuration and command details while they settle.
 
 ## Unreleased
 
+### Added
+
+- Add self-contained Linux and macOS release bundles with a pinned private tmux 3.4 runtime and terminfo database, verified by archive and manifest hashes.
+- Add atomic versioned curl installs with `current` / `previous` bundles and `toomux rollback`.
+
+### Changed
+
+- Make `https://toomux.com/install` the canonical installer path; Homebrew and npm remain supported package-manager alternatives.
+- Use the exact tmux server executable when toomux is already inside an existing tmux server, and the bundled runtime for new standalone servers, avoiding client/server version mismatches.
+- Make self-contained uninstall remove only installer-owned launchers/runtime and restore a migrated pre-bundle toomux launcher.
+
 ## 0.3.0 - 2026-10-02
 
 ### Added

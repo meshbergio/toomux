@@ -3,6 +3,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+/// The executable backing a live process.
+pub fn exe(pid: i32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// A process's state letter and the rest of its stat line after the name.
 fn stat(pid: i32) -> Option<String> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;

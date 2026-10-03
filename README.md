@@ -77,7 +77,7 @@ already run.
 ### Try it
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
+curl -fsSL https://toomux.com/install | sh
 ```
 
 macOS · Linux · WSL 2 · [complete installation](#install)
@@ -359,6 +359,23 @@ invisible model state.
 
 ## Install
 
+### Self-contained installer
+
+Linux, macOS, or Windows through WSL 2:
+
+```sh
+curl -fsSL https://toomux.com/install | sh
+```
+
+This is the canonical install. It verifies the published bundle checksum and the hashes
+inside its manifest, then installs an immutable version under `~/.local/lib/toomux`
+with its own tested tmux runtime and terminfo database. If you already have tmux, it
+leaves it alone. If you do not, it exposes the bundled tmux in `~/.local/bin`.
+
+Upgrades install a new version beside the old one and atomically switch `current`.
+The previous verified bundle stays available through `toomux rollback`. The installer
+does not install Claude Code, configure your shell, or enable ByteTraverse.
+
 ### Homebrew
 
 macOS:
@@ -367,7 +384,7 @@ macOS:
 brew install meshbergio/tap/toomux
 ```
 
-Homebrew installs tmux too.
+Homebrew installs tmux too and manages both through Homebrew.
 
 ### npm
 
@@ -378,23 +395,12 @@ npm install -g toomux
 ```
 
 The npm package installs the matching toomux binary. On Windows, the launcher delegates
-into WSL 2 rather than pretending to provide a native Windows tmux port.
-
-### Shell installer
-
-Linux or macOS:
-
-```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
-```
-
-The installer verifies the published checksum and writes the binary to
-`~/.local/bin` by default. It does not configure tmux or Claude Code until you run
-`toomux init --apply`.
+into WSL 2. npm does not install tmux.
 
 ### Requirements
 
-Linux or macOS, or Windows through WSL 2; tmux 3.2 or later; Claude Code.
+Claude Code. The self-contained installer includes tmux. Homebrew installs tmux as a
+dependency. npm and source installs need tmux 3.2 or later already available.
 
 ### First run
 
@@ -462,7 +468,7 @@ npm:
 npm install -g toomux@latest
 ```
 
-Shell install: rerun the installer command above.
+Self-contained install: rerun the installer command above. The old bundle becomes the rollback target.
 
 ### Uninstall
 
@@ -470,9 +476,7 @@ Shell install: rerun the installer command above.
 toomux uninstall
 ```
 
-`toomux uninstall --dry-run` shows what would be removed first. `--purge` also
-deletes toomux's own config, state and transcript archive; your Claude Code memory
-folders are not touched.
+`toomux uninstall --dry-run` shows what would be removed first. A self-contained install also removes its owned runtime and managed tmux launcher, and restores a pre-bundle toomux launcher if one was migrated. `--purge` also deletes toomux's own config, state and transcript archive; your Claude Code memory folders are not touched.
 
 ---
 

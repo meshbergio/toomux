@@ -2,7 +2,7 @@ mod account_cli;
 
 use toomux::setup::{BEGIN, END};
 use toomux::{
-    actions, archive, capture, config, handover, hygiene, index, jobs, mcp, memory, paths,
+    actions, archive, capture, config, handover, hygiene, index, install, jobs, mcp, memory, paths,
     provider, queue, registry, remote, scene, setup, snapshot, state, tmux, tokens, ui, upkeep,
     usage, voyage, watch,
 };
@@ -245,6 +245,8 @@ enum Cmd {
         #[arg(long)]
         purge: bool,
     },
+    /// Switch a self-contained install back to its previous verified bundle
+    Rollback,
 }
 
 #[derive(Subcommand)]
@@ -314,6 +316,7 @@ fn main() -> Result<()> {
                 | Cmd::Tick { .. }
                 | Cmd::Index
                 | Cmd::Out { .. }
+                | Cmd::Rollback
         )
     );
     let cfg = match Config::load() {
@@ -524,6 +527,10 @@ fn main() -> Result<()> {
             RemoteCmd::Revoke { device } => remote::revoke(&device),
         },
         Some(Cmd::Uninstall { dry_run, purge }) => uninstall(dry_run, purge),
+        Some(Cmd::Rollback) => {
+            println!("{}", install::rollback()?);
+            Ok(())
+        }
         Some(Cmd::Statusline) => {
             print!("{}", usage::statusline(&cfg));
             Ok(())
@@ -1309,7 +1316,7 @@ fn status_line(cfg: &Config) -> String {
 /// (popups) and Claude Code where the config says it is.
 /// tmux's version as (major, minor), and how it names itself.
 fn tmux_version() -> Option<((u32, u32), String)> {
-    let o = std::process::Command::new("tmux").arg("-V").output().ok()?;
+    let o = tmux::command().arg("-V").output().ok()?;
     let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
     let n: Vec<u32> = v
         .trim_start_matches("tmux ")
@@ -1688,6 +1695,9 @@ fn where_() -> Result<()> {
     println!("  each account's MCP servers  \"toomux\" (user scope)");
     println!("  each account's commands/voyage.md  the /voyage command");
     println!("\ntoomux uninstall takes these back; --purge also deletes config, state and data.");
+    if let Some(bundle) = install::description() {
+        println!("self-contained runtime  {bundle}");
+    }
     Ok(())
 }
 
@@ -1852,6 +1862,10 @@ fn uninstall(dry_run: bool, purge: bool) -> Result<()> {
             "accounts stay sharing {}: Claude Code works the same through the links.",
             t(&toomux::accounts::shared_dir(&config::home()))
         );
+    }
+    if let Some(message) = install::uninstall_bundle(dry_run)? {
+        println!("{message}");
+        return Ok(());
     }
     let exe = std::env::current_exe()?;
     let how = match exe.to_string_lossy() {

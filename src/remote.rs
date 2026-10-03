@@ -947,7 +947,7 @@ fn memory_page() -> Response {
 
 fn ensure_tui(device: &str, cols: u16, rows: u16) -> Result<String> {
     let server = tui_server(device);
-    let alive = Command::new("tmux")
+    let alive = crate::tmux::command()
         .args(["-L", &server, "has-session", "-t", "app"])
         .status()
         .is_ok_and(|s| s.success());
@@ -1007,7 +1007,7 @@ fn tui_pane(server: &str) -> Result<String> {
 }
 
 fn tui_tmux(server: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new("tmux")
+    let out = crate::tmux::command()
         .arg("-L")
         .arg(server)
         .args(args)
@@ -1021,7 +1021,7 @@ fn tui_tmux(server: &str, args: &[&str]) -> Result<String> {
 
 fn kill_tui(device: &str) {
     let server = tui_server(device);
-    let _ = Command::new("tmux")
+    let _ = crate::tmux::command()
         .args(["-L", &server, "kill-server"])
         .status();
 }
