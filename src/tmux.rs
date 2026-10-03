@@ -8,6 +8,7 @@
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -21,6 +22,72 @@ pub struct Pane {
 
 /// Servers toomux makes for its sessions are named with this.
 pub const OWN: &str = "toomux-";
+/// Explicit override, useful for development and controlled packaging tests.
+pub const BIN_ENV: &str = "TOOMUX_TMUX_BIN";
+
+fn server_pid_in(tmux_var: &str) -> Option<i32> {
+    tmux_var.split(',').nth(1)?.parse().ok()
+}
+
+fn server_binary() -> Option<PathBuf> {
+    let pid = server_pid_in(&std::env::var("TMUX").ok()?)?;
+    crate::platform::exe(pid).filter(|p| p.is_file())
+}
+
+fn bundled_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let tmux = exe.parent()?.join("tmux");
+    tmux.is_file().then_some(tmux)
+}
+
+fn path_binary() -> Option<PathBuf> {
+    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
+        let candidate = dir.join("tmux");
+        if candidate.is_file() {
+            return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+        }
+    }
+    None
+}
+
+/// The tmux client to use.
+///
+/// Inside tmux, use the executable of the server named by $TMUX so an
+/// existing user server is always spoken to by a protocol-compatible client.
+/// Outside tmux, a self-contained release's sibling runtime wins over PATH.
+/// Package-manager and source installs keep using PATH as before.
+pub fn binary() -> PathBuf {
+    if let Some(bin) = std::env::var_os(BIN_ENV).filter(|v| !v.is_empty()) {
+        return PathBuf::from(bin);
+    }
+    server_binary()
+        .or_else(bundled_binary)
+        .or_else(path_binary)
+        .unwrap_or_else(|| PathBuf::from("tmux"))
+}
+
+fn bundled_terminfo(bin: &std::path::Path) -> Option<PathBuf> {
+    let bin = std::fs::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
+    let dir = bin.parent()?.parent()?.join("share").join("terminfo");
+    dir.is_dir().then_some(dir)
+}
+
+/// A tmux command with a release bundle's terminfo database prepended. The
+/// empty list element keeps the operating system's normal database as a
+/// fallback for terminal types installed by the user.
+pub fn command() -> Command {
+    let bin = binary();
+    let mut command = Command::new(&bin);
+    if let Some(terminfo) = bundled_terminfo(&bin) {
+        let mut dirs = OsString::from(terminfo);
+        dirs.push(":");
+        if let Some(existing) = std::env::var_os("TERMINFO_DIRS").filter(|v| !v.is_empty()) {
+            dirs.push(existing);
+        }
+        command.env("TERMINFO_DIRS", dirs);
+    }
+    command
+}
 
 /// Where tmux keeps its sockets, as tmux itself works it out: the folder
 /// resolved, as tmux does, so on macOS `/tmp` is `/private/tmp` and matches
@@ -94,14 +161,14 @@ pub fn run(args: &[&str]) -> Result<String> {
     let server = args.iter().find_map(|a| server_of(a));
     match server {
         Some(s) => run_on(s, args),
-        None => output(Command::new("tmux").args(args), args),
+        None => output(command().args(args), args),
     }
 }
 
 /// Run a tmux command on one server by name.
 pub fn run_on(server: &str, args: &[&str]) -> Result<String> {
     let bare: Vec<&str> = args.iter().map(|a| bare(a)).collect();
-    let mut c = Command::new("tmux");
+    let mut c = command();
     c.arg("-S").arg(socket(server)).args(&bare);
     output(&mut c, &bare)
 }
@@ -120,7 +187,7 @@ fn output(c: &mut Command, args: &[&str]) -> Result<String> {
 
 /// A command that will talk to `server` (for exec, attach, control mode).
 pub fn command_on(server: &str) -> Command {
-    let mut c = Command::new("tmux");
+    let mut c = command();
     c.arg("-S").arg(socket(server));
     c
 }
@@ -460,16 +527,24 @@ pub fn attach_here(pane: &str, client: Option<&str>) -> Result<()> {
         run(&[&["switch-client"], to_client.as_slice(), &["-t", pane]].concat())?;
         return Ok(());
     }
+    let bin = binary();
     let attach = format!(
         "{} -S {} attach-session -t {}",
-        "tmux",
+        shell_words::quote(&bin.display().to_string()),
         shell_words::quote(&socket(server).display().to_string()),
         bare(pane)
     );
+    let attach = match bundled_terminfo(&bin) {
+        Some(terminfo) => format!(
+            "TERMINFO_DIRS={} {attach}",
+            shell_words::quote(&format!("{}:", terminfo.display()))
+        ),
+        None => attach,
+    };
     if inside() {
         // The terminal leaves this server and attaches to the pane's.
         let target: Vec<&str> = client.map(|c| vec!["-t", c]).unwrap_or_default();
-        Command::new("tmux")
+        command()
             .arg("detach-client")
             .args(target)
             .args(["-E", &attach])
@@ -486,6 +561,20 @@ pub fn attach_here(pane: &str, client: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tmux_var_carries_server_pid() {
+        assert_eq!(server_pid_in("/tmp/tmux-1000/default,4321,0"), Some(4321));
+        assert_eq!(server_pid_in("bad"), None);
+    }
+
+    #[test]
+    fn tmux_binary_override_is_exact() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var(BIN_ENV, "/private/toomux/tmux") };
+        assert_eq!(binary(), PathBuf::from("/private/toomux/tmux"));
+        unsafe { std::env::remove_var(BIN_ENV) };
+    }
 
     #[test]
     fn our_servers_leave_out_layout_restoring_plugins() {

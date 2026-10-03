@@ -624,24 +624,34 @@ same from the command line, for these, pins, and anything last recorded running.
 
 ## Setup
 
-Needs Linux or macOS (on Windows, inside WSL 2), tmux 3.2 or later, and Claude Code.
-On macOS, `brew install meshbergio/tap/toomux` installs toomux and tmux together,
-and `brew upgrade` keeps it current. Or use the installer below, with
-`brew install tmux` if you haven't got it.
+Needs Linux or macOS (on Windows, inside WSL 2) and Claude Code. The canonical
+installer carries its own tested tmux runtime, so a clean machine does not need
+Homebrew, npm, Rust or tmux first.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/meshbergio/toomux/master/install.sh | sh
+curl -fsSL https://toomux.com/install | sh
 toomux init --apply      # tmux and Claude Code set up; lists what toomux does by itself
 toomux account setup     # optional: name your accounts, choose which share history
 ```
 
-The installer puts a binary for your machine (Linux or macOS, x86_64 or arm64) in
-`~/.local/bin`, checked against its published checksum, and changes nothing else.
-On Linux it's static, so any distro will do.
-With npm instead: `npm install -g toomux` installs the same binary for your machine
-(from `@toomux/<os>-<cpu>`); it doesn't bring tmux.
-From source instead: `cargo install --git https://github.com/meshbergio/toomux`
-(Rust 1.88 or later), or `cargo install --path .` in a clone.
+The installer verifies the published bundle checksum and the binary hashes recorded
+inside its manifest. It installs immutable versions under `~/.local/lib/toomux/versions`
+and points `~/.local/bin/toomux` at `current`. Each bundle contains toomux, tmux 3.4
+and its terminfo database. If the machine already has tmux, that tmux stays untouched;
+toomux uses the private runtime for its own new servers when it is outside an existing
+tmux server. Inside an existing server, it uses that server process's own tmux
+executable so client and server protocol versions stay matched.
+
+Rerunning the installer puts the new verified bundle beside the old one, switches
+`current` atomically, and retains the old bundle as `previous`. `toomux rollback`
+swaps them. `toomux uninstall` removes an installer-owned runtime and managed tmux
+launcher, and restores a pre-bundle toomux launcher if the installer migrated one.
+
+On macOS, `brew install meshbergio/tap/toomux` is the package-manager alternative and
+installs tmux as a Homebrew dependency. With npm, `npm install -g toomux` installs the
+matching binary but not tmux. Source installs likewise need tmux 3.2 or later.
+From source: `cargo install --git https://github.com/meshbergio/toomux` (Rust 1.88 or
+later), or `cargo install --path .` in a clone.
 
 On Windows, toomux runs inside WSL 2, the same as tmux. It sees the Claude Code
 you run in WSL, with its own `~/.claude`, not one installed on the Windows side.
@@ -723,7 +733,8 @@ toomux turn <id>                one conversation turn whole, by its memory id
 toomux upkeep [--dry-run]       archive transcripts, check memory against the disk (hourly)
 toomux where                    every place toomux reads or writes, and what init changed
 toomux init [--apply]           write the config; with --apply, set up tmux and each account
-toomux uninstall [--dry-run] [--purge]   take back what init added
+toomux uninstall [--dry-run] [--purge]   take back init; self-contained installs remove their owned runtime too
+toomux rollback                       switch a self-contained install to its previous verified bundle
 toomux tokens [--since 24h|7d|"2026-09-29 21:43"] [--session <prefix>] [--json]
                                 where the tokens go, in dollars at API list prices
 toomux digest [--day 2026-09-29]  a day's report; made each morning after 8, with a one-line notice

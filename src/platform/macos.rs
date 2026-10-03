@@ -96,6 +96,15 @@ fn procargs(pid: i32) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// The executable path the kernel kept for a live process.
+pub fn exe(pid: i32) -> Option<PathBuf> {
+    let buf = procargs(pid)?;
+    let rest = buf.get(4..)?;
+    let end = rest.iter().position(|&b| b == 0)?;
+    let path = std::str::from_utf8(&rest[..end]).ok()?;
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
 /// The kernel's own strings, which follow the environment (xnu
 /// bsd/kern/kern_exec.c, `exec_add_apple_strings`). Usually a run of NULs
 /// ends the environment first, but not when it happens to end aligned.
