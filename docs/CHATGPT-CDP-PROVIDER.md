@@ -27,7 +27,10 @@ Toomux retains only:
 1. `TOOMUX_PROVIDER_SESSION_ID` generation/carrying for stable worker affinity;
 2. `scripts/toomux-claude`, which routes the dedicated `~/.claude-bonnie` account to the local Anthropic-compatible endpoint;
 3. `scripts/install-chatgpt-browser-client.sh`, which installs only that thin wrapper and no provider runtime;
-4. `toomux provider [--json]`, a native health/status view over the local provider.
+4. `toomux provider [--json]`, a native health/status view over the local provider;
+5. `toomux provider --reconcile [--json]`, which sends the complete live Toomux session registry to the standalone broker as the `toomux` authority.
+
+The wrapper stamps Toomux-owned requests with `x-toomux-provider-session-id`. The standalone broker hashes the identifier for lease storage and keeps Toomux leases in their own authority scope. Toomux's periodic status tick triggers reconciliation about every 30 seconds as best-effort background work; provider outages do not block the TUI. A lease reported absent while its request is still in flight is expired only at the request boundary by the standalone broker.
 
 The wrapper prefers the standalone provider credential:
 

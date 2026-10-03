@@ -36,6 +36,9 @@ enum Cmd {
     Provider {
         #[arg(long)]
         json: bool,
+        /// Reconcile standalone provider leases against the complete live Toomux session registry
+        #[arg(long)]
+        reconcile: bool,
     },
     /// Jump to a session (pid, session-id prefix, or name), or a pin
     Jump {
@@ -342,7 +345,19 @@ fn main() -> Result<()> {
             print!("{}", status_line(&cfg));
             Ok(())
         }
-        Some(Cmd::Provider { json }) => provider::status(json),
+        Some(Cmd::Provider { json, reconcile }) => {
+            if reconcile {
+                let all = registry::load(&cfg);
+                let live_ids = all
+                    .iter()
+                    .filter(|session| !session.dormant && session.restore.is_none())
+                    .map(|session| session.id.clone())
+                    .collect::<Vec<_>>();
+                provider::reconcile(&live_ids, json)
+            } else {
+                provider::status(json)
+            }
+        }
         Some(Cmd::Jump { target, pin }) => {
             let all = registry::load(&cfg);
             match (pin, target) {
@@ -1187,6 +1202,9 @@ fn status_line(cfg: &Config) -> String {
     }
     let notices = watch::notices();
     let now = registry::now_ms();
+    if due_every("provider-reconcile.stamp", 30_000, now) {
+        in_background(&["provider", "--reconcile"]);
+    }
     let usage = usage::summary(cfg, &all, now);
     for msg in usage::crossed(cfg, &usage) {
         watch::announce_text(cfg, &msg, "usage", "", "");
