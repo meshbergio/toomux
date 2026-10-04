@@ -768,6 +768,13 @@ fn prompt_of(v: &Value) -> Option<String> {
         }
         _ => return None,
     };
+    user_authored_prompt(&text).map(str::to_string)
+}
+
+/// Text that came from the person, not Claude Code's synthetic user-channel
+/// plumbing. UserPromptSubmit fires for both, so lifecycle code must use this
+/// before treating a prompt as an instruction from the user.
+pub(crate) fn user_authored_prompt(text: &str) -> Option<&str> {
     let t = text.trim();
     // Claude Code's own plumbing arrives as user messages too; pasted text is
     // wrapped in a tag but is a real prompt.
@@ -798,7 +805,7 @@ fn prompt_of(v: &Value) -> Option<String> {
             .trim(),
         None => t,
     };
-    (!t.is_empty()).then(|| t.to_string())
+    (!t.is_empty()).then_some(t)
 }
 
 fn text_of(content: Option<&Value>) -> Option<String> {

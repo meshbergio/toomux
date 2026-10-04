@@ -669,9 +669,11 @@ pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
         .strip_prefix("/voyage")
         .filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))
     else {
-        // Anything you say to a voyage that stopped for you carries it on,
-        // unless it was the budget: that takes /voyage resume.
-        if !prompt.starts_with('/')
+        // Only something the person actually typed carries a paused voyage on.
+        // Claude Code also fires UserPromptSubmit for synthetic user-channel
+        // events such as <task-notification>; those must leave it paused.
+        if crate::index::user_authored_prompt(prompt).is_some()
+            && !prompt.starts_with('/')
             && !prompt.starts_with("[toomux")
             && let Some(mut q) = open_for(session)
             && q.status == Status::Paused
@@ -1729,6 +1731,16 @@ mod tests {
         assert!(for_successor("s2").unwrap().contains("the docs build"));
         let mut q = open_for("s2").unwrap();
         pause(&mut q, "which database?");
+        // Claude's background-task completion arrives through UserPromptSubmit,
+        // but it is not the user's answer and must not resume the voyage.
+        assert!(
+            prompt_hook(
+                &cfg,
+                &json!({"session_id": "s2", "prompt": "<task-notification>agent finished</task-notification>"}),
+            )
+            .is_none()
+        );
+        assert_eq!(open_for("s2").unwrap().status, Status::Paused);
         // Your next message carries a paused voyage on.
         assert!(
             prompt_hook(&cfg, &json!({"session_id": "s2", "prompt": "use postgres"})).is_none()

@@ -642,8 +642,12 @@ fn ask_at_turn_end(cfg: &Config, v: &Value, how: &str) -> Option<String> {
 /// the first next step, and the fresh session does it.
 pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
     let prompt = v.get("prompt").and_then(Value::as_str).unwrap_or("");
-    // Commands, and toomux's own requests, aren't work to move.
-    if prompt.trim_start().starts_with('/') || prompt.starts_with("[toomux") {
+    // Commands, toomux's own requests, and Claude Code's synthetic user-channel
+    // plumbing aren't work from the person to move into a fresh session.
+    if crate::index::user_authored_prompt(prompt).is_none()
+        || prompt.trim_start().starts_with('/')
+        || prompt.starts_with("[toomux")
+    {
         return None;
     }
     let said = ask_at_turn_end(cfg, v, "prompt")?;
@@ -2396,6 +2400,16 @@ mod tests {
             prompt("w", &t, "/model").is_none(),
             "commands aren't work to move"
         );
+        assert!(
+            prompt(
+                "w",
+                &t,
+                "<task-notification>background agent finished</task-notification>",
+            )
+            .is_none(),
+            "background notifications aren't user work to move"
+        );
+        assert!(!requested("w"), "a notification must not start handover");
         let s = transcript(&tmp, "p/small.jsonl", 200_000);
         assert!(
             prompt("small", &s, "go on").is_none(),
