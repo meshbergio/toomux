@@ -4,6 +4,17 @@ All notable user-visible changes are recorded here. toomux follows semantic
 versioning once a compatibility promise is established; the 0.x series may
 still change configuration and command details while they settle.
 
+## 0.4.3 - 2026-10-04
+
+### Fixed
+
+- Keep a paused Voyage paused when Claude Code delivers synthetic user-channel events such as background task completions, system reminders or teammate notifications; only a genuine user prompt (or explicit `/voyage resume`) can carry a `needs you` Voyage forward.
+- Apply the same human-input classification to turn-end handover so background notifications cannot be mistaken for the user's next request and spuriously trigger lifecycle transitions.
+
+### Reliability
+
+- Add regression coverage for the exact `<task-notification>` false-resume incident and for synthetic notifications arriving at a handover boundary.
+
 ## 0.4.2 - 2026-10-03
 
 ### Added
