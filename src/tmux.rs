@@ -292,7 +292,13 @@ pub fn new_server(
     if let Some(conf) = server_conf() {
         c.arg("-f").arg(conf);
     }
-    c.args(&args).env_remove("TMUX").env_remove("TMUX_PANE");
+    c.args(&args)
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        // Keep interactive prompt attributes even when an automation process
+        // with NO_COLOR starts the server. launch_with also strips it for
+        // existing servers, whose global environment may already contain it.
+        .env_remove("NO_COLOR");
     // tmux makes its socket directory for -L, not for -S, and after a reboot
     // (/tmp cleared) it may not be there yet.
     if let Some(dir) = socket(server).parent() {
