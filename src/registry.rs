@@ -1203,6 +1203,8 @@ mod tests {
     #[test]
     fn a_claude_in_a_pane_without_a_registry_record_is_still_listed() {
         use std::os::unix::process::CommandExt;
+        // Other tests point HOME (whose .claude/sessions is looked in) elsewhere.
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let id = "0f0f0f0f-1234-4abc-8def-000000000002";
         let dir = std::env::temp_dir().join(format!("toomux-unreg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1216,6 +1218,13 @@ mod tests {
             .arg("30")
             .spawn()
             .unwrap();
+        // Under load the process may not show its command line at once.
+        let t = std::time::Instant::now();
+        while crate::running::holder_at(claude.id() as i32).is_none()
+            && t.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let pane = |n: u32| crate::tmux::Pane {
             id: format!("%{n}@toomux-test"),
             session: "t".into(),
