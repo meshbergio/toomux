@@ -296,7 +296,7 @@ const START_WAIT: Duration = Duration::from_secs(20);
 /// When it doesn't come up, the old conversation is resumed in its place and
 /// the error is a [`LaunchFailed`].
 pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<Option<String>> {
-    trust_real_path(&session_dir(cfg, s), &s.cwd);
+    ready_account(cfg, &session_dir(cfg, s), &s.cwd, false);
     let account = s.account.context("its account isn't known")?;
     let pane = s.pane.clone().context("it isn't in tmux")?;
     // Claude started from a shell in the pane: keep the shell, start the
@@ -624,7 +624,7 @@ fn relaunch_from_shell(
 /// the fresh conversation in a tmux window of its own (same account, same
 /// flags). Returns the new pane.
 pub fn relaunch_fresh_in_tmux(cfg: &Config, s: &Session, prompt: &str) -> Result<String> {
-    trust_real_path(&session_dir(cfg, s), &s.cwd);
+    ready_account(cfg, &session_dir(cfg, s), &s.cwd, false);
     let account = s.account.context("its account isn't known")?;
     let launch = launch_with(cfg, s, account, Some(prompt));
     let name = window_name(&s.title);
@@ -780,7 +780,7 @@ pub fn window_name(title: &str) -> String {
 /// current tmux session, else the adopt session.
 /// Returns the new pane id.
 pub fn revive(cfg: &Config, s: &Session) -> Result<String> {
-    trust_real_path(&launch_dir(cfg, s.account), &s.cwd);
+    ready_account(cfg, &launch_dir(cfg, s.account), &s.cwd, false);
     let account = s
         .account
         .context("the account it last ran on isn't configured")?;
@@ -893,10 +893,11 @@ fn last_words(pane: &str, mark: Option<i64>) -> Option<String> {
 /// Start a new Claude session in `folder` on `account`, in a tmux server of
 /// its own. Returns the pane id.
 pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Result<String> {
-    trust_real_path(&launch_dir(cfg, Some(account)), folder);
     if !std::path::Path::new(folder).is_dir() {
         bail!("{folder} isn't a folder");
     }
+    // The person picked this folder to work in: that's their trust.
+    ready_account(cfg, &launch_dir(cfg, Some(account)), folder, true);
     let mut argv = interactive_env_argv();
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
@@ -1510,12 +1511,44 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
 
 /// Record in one account's .claude.json that the person trusts `key`.
 fn mark_trusted(path: &std::path::Path, key: &str) -> Result<()> {
+    edit_claude_json(
+        path,
+        |v| trusted(v, key, true),
+        |v| {
+            let projects = v
+                .as_object_mut()
+                .context("unexpected .claude.json shape")?
+                .entry("projects")
+                .or_insert_with(|| serde_json::json!({}));
+            let entry = projects
+                .as_object_mut()
+                .context("unexpected projects shape")?
+                .entry(key.to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(o) = entry.as_object_mut() {
+                o.insert(
+                    "hasTrustDialogAccepted".into(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Change one account's .claude.json with `apply`, unless `done` already
+/// holds. A missing or unreadable file is left alone.
+fn edit_claude_json(
+    path: &std::path::Path,
+    done: impl Fn(&serde_json::Value) -> bool,
+    apply: impl Fn(&mut serde_json::Value) -> Result<()>,
+) -> Result<()> {
     let read = |path: &std::path::Path| -> Option<serde_json::Value> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     };
     // Live sessions on the target account rewrite this file too, and nothing
     // coordinates writers. So: write only if the file is unchanged since we
-    // read it, and check afterwards that the entry survived.
+    // read it, and check afterwards that the change survived.
     let stamp = |p: &std::path::Path| {
         std::fs::metadata(p)
             .ok()
@@ -1526,25 +1559,10 @@ fn mark_trusted(path: &std::path::Path, key: &str) -> Result<()> {
         let Some(mut dst) = read(path) else {
             return Ok(());
         };
-        if trusted(&dst, key, true) {
+        if done(&dst) {
             return Ok(());
         }
-        let projects = dst
-            .as_object_mut()
-            .context("unexpected .claude.json shape")?
-            .entry("projects")
-            .or_insert_with(|| serde_json::json!({}));
-        let entry = projects
-            .as_object_mut()
-            .context("unexpected projects shape")?
-            .entry(key.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(o) = entry.as_object_mut() {
-            o.insert(
-                "hasTrustDialogAccepted".into(),
-                serde_json::Value::Bool(true),
-            );
-        }
+        apply(&mut dst)?;
         let tmp = path.with_file_name(format!(".claude.json.toomux-{}", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(&dst)?)?;
         if let Ok(meta) = std::fs::metadata(path) {
@@ -1557,11 +1575,103 @@ fn mark_trusted(path: &std::path::Path, key: &str) -> Result<()> {
         }
         std::fs::rename(&tmp, path)?;
         sleep(Duration::from_millis(400));
-        if read(path).is_some_and(|v| trusted(&v, key, true)) {
+        if read(path).is_some_and(|v| done(&v)) {
             return Ok(());
         }
     }
     bail!("another session kept rewriting {}", path.display())
+}
+
+/// Every .claude.json toomux knows of: each account's, and Claude's own
+/// default ones (with and without `CLAUDE_CONFIG_DIR=~/.claude`).
+fn known_claude_jsons(cfg: &Config) -> Vec<std::path::PathBuf> {
+    let home = crate::config::home();
+    let mut out: Vec<std::path::PathBuf> = (0..cfg.accounts.len())
+        .map(|i| crate::credentials::claude_json(&cfg.account_dir(i)))
+        .chain([
+            home.join(".claude.json"),
+            home.join(".claude").join(".claude.json"),
+        ])
+        .collect();
+    out.dedup();
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(crate::config::canon(p)));
+    out
+}
+
+/// What first-run onboarding records once it's done: with these, Claude
+/// skips its welcome and theme picker.
+const ONBOARDING_KEYS: &[&str] = &["hasCompletedOnboarding", "lastOnboardingVersion", "theme"];
+
+fn onboarded(v: &serde_json::Value) -> bool {
+    v.get("hasCompletedOnboarding") == Some(&serde_json::Value::Bool(true))
+}
+
+/// Get an account ready for a Claude launch in `cwd`, so it goes straight to
+/// its prompt instead of stopping at screens the person has already been
+/// through on this machine:
+/// - first-run onboarding (the theme picker), when another account of
+///   theirs has finished it;
+/// - folder trust, when `chosen` (they just picked this folder to work in)
+///   or when any of their accounts already trusts it.
+///
+/// An account with no .claude.json yet (never signed in) is left to Claude's
+/// own sign-in screens.
+fn ready_account(cfg: &Config, config_dir: &std::path::Path, cwd: &str, chosen: bool) {
+    let path = crate::credentials::claude_json(config_dir);
+    let canon = crate::config::canon(&path);
+    let others: Vec<_> = known_claude_jsons(cfg)
+        .into_iter()
+        .filter(|p| crate::config::canon(p) != canon)
+        .collect();
+    ready_claude_json(&path, &others, cwd, chosen);
+    trust_real_path(config_dir, cwd);
+}
+
+/// [`ready_account`] on one .claude.json, given the person's others.
+fn ready_claude_json(
+    path: &std::path::Path,
+    others: &[std::path::PathBuf],
+    cwd: &str,
+    chosen: bool,
+) {
+    let read = |p: &std::path::Path| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+    };
+    let Some(target) = read(path) else {
+        return;
+    };
+    let others: Vec<serde_json::Value> = others.iter().filter_map(|p| read(p)).collect();
+    if !onboarded(&target)
+        && let Some(src) = others.iter().find(|v| onboarded(v))
+    {
+        let _ = edit_claude_json(path, onboarded, |v| {
+            let o = v.as_object_mut().context("unexpected .claude.json shape")?;
+            for k in ONBOARDING_KEYS {
+                match src.get(*k) {
+                    Some(val) if !val.is_null() => {
+                        o.insert((*k).to_string(), val.clone());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
+    }
+    let real = std::fs::canonicalize(cwd)
+        .map(|r| r.display().to_string())
+        .unwrap_or_else(|_| cwd.to_string());
+    let elsewhere = || {
+        others
+            .iter()
+            .any(|v| trusted(v, cwd, false) || trusted(v, &real, false))
+    };
+    if !trusted(&target, cwd, false) && (chosen || elsewhere()) {
+        let _ = mark_trusted(path, cwd);
+    }
+    if !trusted(&target, &real, false) && (chosen || elsewhere()) {
+        let _ = mark_trusted(path, &real);
+    }
 }
 
 /// A session just started in `pane` that stopped at a screen that needs the
@@ -1635,7 +1745,7 @@ pub fn switch(
         (None, None) => "~/.claude".to_string(),
     };
     carry_trust(cfg, &s, account).context("copying folder trust")?;
-    trust_real_path(&cfg.account_dir(account), &s.cwd);
+    ready_account(cfg, &cfg.account_dir(account), &s.cwd, false);
     carry_conversation(cfg, &s, account)
         .with_context(|| format!("copying the conversation to {target}"))?;
 
@@ -2488,6 +2598,82 @@ mod tests {
             "no trust the person hasn't given"
         );
         assert_eq!(v["other"], 1, "the rest of the file is left as it was");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_launch_skips_first_run_screens_the_person_has_been_through_elsewhere() {
+        let root = std::env::temp_dir().join(format!("toomux-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["new", "known", "picked", "untouched"] {
+            std::fs::create_dir_all(root.join("work").join(d)).unwrap();
+        }
+        let work = |d: &str| {
+            std::fs::canonicalize(root.join("work").join(d))
+                .unwrap()
+                .display()
+                .to_string()
+        };
+        let write = |name: &str, v: serde_json::Value| {
+            let p = root.join(name);
+            std::fs::write(&p, v.to_string()).unwrap();
+            p
+        };
+        let read = |p: &std::path::Path| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+        };
+        let other = write(
+            "other.json",
+            serde_json::json!({
+                "hasCompletedOnboarding": true,
+                "lastOnboardingVersion": "2.1.296",
+                "theme": "dark",
+                "projects": { work("known"): { "hasTrustDialogAccepted": true } }
+            }),
+        );
+        let target = write(
+            "target.json",
+            serde_json::json!({ "userID": "keep", "projects": {} }),
+        );
+        let others = vec![other.clone(), root.join("missing.json")];
+
+        // Handover, voyage, reopen: only what the person already gave.
+        super::ready_claude_json(&target, &others, &work("known"), false);
+        super::ready_claude_json(&target, &others, &work("untouched"), false);
+        // A folder they just picked to start in.
+        super::ready_claude_json(&target, &others, &work("picked"), true);
+
+        let v = read(&target);
+        assert!(super::onboarded(&v), "onboarding carried over");
+        assert_eq!(v["lastOnboardingVersion"], "2.1.296");
+        assert_eq!(v["theme"], "dark");
+        assert_eq!(
+            v["userID"], "keep",
+            "the rest of the file is left as it was"
+        );
+        assert!(
+            super::trusted(&v, &work("known"), true),
+            "trust another account gave"
+        );
+        assert!(
+            super::trusted(&v, &work("picked"), true),
+            "a folder they picked"
+        );
+        assert!(
+            !super::trusted(&v, &work("untouched"), false),
+            "no trust the person hasn't given"
+        );
+
+        // Nothing to copy from: onboarding stays Claude's to run.
+        let lone = write("lone.json", serde_json::json!({ "projects": {} }));
+        super::ready_claude_json(&lone, &[], &work("new"), false);
+        let v = read(&lone);
+        assert!(!super::onboarded(&v) && !super::trusted(&v, &work("new"), false));
+
+        // An account that has never been signed in gets no file made for it.
+        let unsigned = root.join("unsigned.json");
+        super::ready_claude_json(&unsigned, &others, &work("picked"), true);
+        assert!(!unsigned.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
