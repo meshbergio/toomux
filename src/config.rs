@@ -156,6 +156,14 @@ pub struct Config {
     /// Upkeep keeps a compressed copy of every transcript, which Claude
     /// Code otherwise deletes after 30 days.
     pub archive_transcripts: bool,
+    /// Once a usage limit resets, which sessions it stopped carry on by
+    /// themselves: "working" (cut off mid-work, or with a voyage or handover
+    /// under way), "all" (also a prompt the limit refused outright) or "off".
+    pub resume_after_limit: String,
+    /// At a usage-limit dialog, choose Claude Code's own "Wait here, then
+    /// continue automatically" (resets under a day away) instead of waiting
+    /// for the reset to dismiss it.
+    pub auto_continue_at_limit: bool,
     pub rules: Vec<Rule>,
     pub colors: Colors,
 }
@@ -185,6 +193,8 @@ impl Default for Config {
             fix_memory: true,
             tidy_worktrees: true,
             archive_transcripts: true,
+            resume_after_limit: "working".into(),
+            auto_continue_at_limit: false,
             rules: Vec::new(),
             colors: Colors::default(),
         }
@@ -316,6 +326,11 @@ impl Config {
             (hard, 0) => hard,
             (hard, sub) => sub.min(hard),
         }
+    }
+
+    /// Which sessions carry on once their usage limit resets.
+    pub fn limit_resume(&self) -> crate::limits::Resume {
+        crate::limits::Resume::parse(&self.resume_after_limit).unwrap_or_default()
     }
 
     /// A voyage's persistence when `/voyage` doesn't say.
@@ -481,6 +496,17 @@ tidy_worktrees = true
 # days), so old conversations stay searchable and whole.
 archive_transcripts = true
 
+# Once a usage limit resets, sessions it stopped carry on by themselves: toomux
+# closes Claude Code's limit dialog and types a short "carry on".
+#   working  a turn the limit cut off mid-work, or a voyage or handover under way
+#   all      also a prompt the limit refused before any work began
+#   off      only voyages and handovers already under way carry on
+resume_after_limit = "working"
+# At the limit dialog, choose Claude Code's own "Wait here, then continue
+# automatically" when the reset is less than a day away, and leave the rest to
+# Claude. false: the dialog is left alone until the reset.
+auto_continue_at_limit = false
+
 # Launch flags for new sessions (ctrl-n). Leave unset to use the flags most of
 # your running sessions were started with.
 # new_session_args = ["--dangerously-skip-permissions"]
@@ -590,6 +616,8 @@ fn lift_settings(mut t: toml::Table) -> toml::Table {
         "fix_memory",
         "tidy_worktrees",
         "archive_transcripts",
+        "resume_after_limit",
+        "auto_continue_at_limit",
     ];
     let mut lifted = Vec::new();
     if let Some(toml::Value::Array(accounts)) = t.get_mut("accounts") {

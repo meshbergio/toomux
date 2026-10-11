@@ -166,7 +166,9 @@ it.
 toomux tracks each account's five-hour and weekly windows, reset timing and recent pace.
 `ctrl-u` opens the full usage view. If a conversation is parked on a limit, `ctrl-a`
 can move that same conversation to an account with room; a busy session can queue the
-move until it becomes idle.
+move until it becomes idle. Left where it is, a session the limit cut off mid-work
+carries on by itself once the limit resets, with or without a terminal attached
+(`resume_after_limit`).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/account-capacity-mobile-dark.svg">

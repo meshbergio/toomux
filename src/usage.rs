@@ -283,6 +283,9 @@ pub fn statusline(cfg: &Config) -> String {
         return String::new();
     };
     let now = crate::registry::now_ms();
+    // Runs in every session, attached or not: a limit hit just now gets a
+    // wake-up for its reset.
+    crate::limits::seen_in_statusline(cfg, &v, now);
     let account = account_of(cfg, &v);
     // Claude Code hands over the limits from its last API response, however
     // old. Only a session that just talked to the API (its transcript was
