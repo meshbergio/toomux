@@ -1229,6 +1229,9 @@ impl App {
                 KeyCode::Char('x') if ctrl => self.exec(Cmd::Close),
                 KeyCode::Char('p') if ctrl => self.exec(Cmd::Pin),
                 KeyCode::Char('n') if ctrl => self.exec(Cmd::New),
+                KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::ALT) => {
+                    self.exec(Cmd::New)
+                }
                 KeyCode::Char('s') if ctrl => self.exec(Cmd::Sweep),
                 KeyCode::Char('e') if ctrl => self.exec(Cmd::RestoreAll),
                 KeyCode::Char('?') if self.filter.is_empty() => self.mode = Mode::Help,
@@ -1972,6 +1975,13 @@ impl App {
             return;
         }
         if matches!(cmd, Cmd::New) {
+            // The picker lives in the list's place: keep it in view and give
+            // it the keyboard, wherever the keyboard was.
+            if let Some(sh) = self.shell.as_mut() {
+                sh.show_list = true;
+                sh.focus_live = false;
+            }
+            self.usage_view = None;
             let places = crate::places::frecent(&self.cfg, now_ms());
             self.mode = Mode::New(NewFlow {
                 places,
@@ -3036,7 +3046,10 @@ impl App {
                         ("alt-s", "between the session and the list"),
                         ("alt-j", "go there: close toomux on that session"),
                         ("alt-b", "hide or show the list"),
+                        ("alt-n", "a new session, wherever the keyboard is"),
                         ("alt-u", "usage in place of the session"),
+                        ("alt-m", "the memory graph"),
+                        ("alt-?", "these keys, wherever the keyboard is"),
                         ("alt-1..9", "a pin"),
                         ("shift-drag", "select text in your terminal"),
                         ("^c", "close toomux (in the list); sessions keep running"),
@@ -3048,7 +3061,10 @@ impl App {
                     &[
                         ("alt-s", "between the session and the list"),
                         ("alt-b", "hide or show the list"),
+                        ("alt-n", "a new session, wherever the keyboard is"),
                         ("alt-u", "usage in place of the session"),
+                        ("alt-m", "the memory graph"),
+                        ("alt-?", "these keys, wherever the keyboard is"),
                         ("alt-1..9", "a pin"),
                         ("shift-drag", "select text in your terminal"),
                         ("^c", "leave toomux (in the list); sessions keep running"),
@@ -5094,6 +5110,7 @@ impl App {
                         1,
                     ));
                 }
+                h.push(("^n".into(), "new", Cmd::New, 1));
                 h.push(("alt-a".into(), "accounts", Cmd::Accounts, 1));
                 h.push(("alt-r".into(), "remote", Cmd::Remote, 1));
                 if outside {
@@ -5997,6 +6014,32 @@ mod tests {
                 .is_some_and(|(m, _, _)| m.contains("still not signed in"))
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn new_session_key_is_advertised_and_its_flags_settle_when_the_picker_opens() {
+        let mut app = App::with(cfg(), sample());
+        let out = render(&mut app, 200, 20);
+        assert!(out.lines().last().unwrap().contains("^n new"), "{out}");
+        for key in [
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+        ] {
+            app.mode = Mode::Normal;
+            app.key(key);
+            let Mode::New(flow) = &app.mode else {
+                panic!("the new-session picker should open");
+            };
+            let settled = flow.args.clone();
+            // Sessions coming and going while it's open don't change what
+            // the picker shows and starts.
+            app.sessions[0].args = vec!["claude".into(), "--model".into(), "other".into()];
+            app.sessions[1].args = app.sessions[0].args.clone();
+            let Mode::New(flow) = &app.mode else {
+                unreachable!()
+            };
+            assert_eq!(flow.args, settled);
+        }
     }
 
     #[test]

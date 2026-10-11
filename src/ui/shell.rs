@@ -513,6 +513,13 @@ impl App {
                 self.exec(Cmd::Accounts);
                 return;
             }
+            // A new session from anywhere: with the keyboard in a session,
+            // ctrl-n is that program's own key, so it's alt-n here.
+            KeyCode::Char('n') if alt => {
+                self.memory = None;
+                self.exec(Cmd::New);
+                return;
+            }
             KeyCode::Char('r') if alt => {
                 let sh = self.shell_mut();
                 sh.show_list = true;
@@ -541,7 +548,9 @@ impl App {
             self.dirty = true;
             return;
         }
-        if focus_live && self.usage_view.is_none() {
+        // A toomux overlay (help, the new-session picker, a prompt) has the
+        // keyboard over the session until it closes.
+        if focus_live && self.usage_view.is_none() && matches!(self.mode, Mode::Normal) {
             let Some(pane) = self.live_target() else {
                 self.shell_mut().focus_live = false;
                 return;
@@ -1079,6 +1088,7 @@ impl App {
             vec![
                 ("esc", "sessions", None),
                 ("alt-s", "sessions", None),
+                ("alt-n", "new", Some(Cmd::New)),
                 ("alt-u", "usage", Some(Cmd::UsageToggle)),
                 ("alt-m", "memory", Some(Cmd::MemoryToggle)),
                 ("alt-b", "list", None),
@@ -1086,9 +1096,11 @@ impl App {
         } else {
             vec![
                 ("alt-s", "sessions", None),
+                ("alt-n", "new", Some(Cmd::New)),
                 ("alt-u", "usage", Some(Cmd::UsageToggle)),
                 ("alt-m", "memory", Some(Cmd::MemoryToggle)),
                 ("alt-b", "list", None),
+                ("alt-?", "keys", Some(Cmd::Help)),
             ]
         };
         if self.shell_ref().popup {

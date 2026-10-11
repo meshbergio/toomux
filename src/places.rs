@@ -296,7 +296,7 @@ mod tests {
         let h = handovers();
         // Every handover successor carries its own --name; none may become
         // the new session's flags, whatever order the sessions come in.
-        let mut argvs = vec![
+        let mut argvs = [
             v(&["claude", "--add-dir", &h, "--name", "Tradeeze"]),
             v(&["claude", "--add-dir", &h, "--name", "A much longer name"]),
             v(&[
