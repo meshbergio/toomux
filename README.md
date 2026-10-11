@@ -47,7 +47,7 @@
 </picture>
 
 <p align="center"><sub>
-  33,026 real calls before toomux against 33,026 with it, same workload, both priced at the same rates.
+  33,026 real calls just before toomux's first handover (25–29 Sep 2026) against 33,026 with it (30 Sep–1 Oct), same workload, same prices.
   <a href="docs/EVIDENCE.md">How it was measured</a> · <a href="#measure-your-own">measure your own</a>
 </sub></p>
 
