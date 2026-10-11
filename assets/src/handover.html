@@ -1,0 +1,222 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0b0d11; --win: #12151b; --panel: #151920; --line: #262b34;
+    --text: #d7dbe0; --dim: #7c8590; --faint: #4a515b;
+    --amber: #e8a33d; --teal: #4fd1b5; --pink: #ff6b8b; --green: #3fb950;
+    --violet: #a48bf0; --sel: #1b2a2a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 800px; background: var(--bg); overflow: hidden; }
+  body { font: 15px/22px "JetBrainsMono NF", "JetBrains Mono", monospace; color: var(--text);
+         -webkit-font-smoothing: antialiased;
+         font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+  .win { position: absolute; left: 36px; top: 28px; width: 1208px; height: 648px;
+         background: var(--win); border: 1px solid #2a2f38; border-radius: 14px; overflow: hidden;
+         box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+  .chrome { height: 34px; text-align: center; color: var(--dim); font-size: 13px; line-height: 34px;
+            border-bottom: 1px solid #1c2027; }
+  .frame { position: absolute; left: 22px; right: 22px; top: 50px; bottom: 18px;
+           border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .top { height: 32px; line-height: 32px; padding: 0 14px; border-bottom: 1px solid var(--line);
+         background: #13171d; white-space: pre; }
+  .brand { color: var(--teal); }
+  .bar { display: inline-block; vertical-align: middle; width: 120px; height: 3px; background: #2a3039;
+         position: relative; margin: 0 8px; top: -2px; border-radius: 2px; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
+  .left { position: absolute; left: 0; top: 32px; bottom: 30px; width: 372px; border-right: 1px solid var(--line);
+          padding: 10px 0 0 0; }
+  .right { position: absolute; left: 373px; right: 0; top: 32px; bottom: 30px; }
+  .foot { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; line-height: 30px; padding: 0 14px;
+          border-top: 1px solid var(--line); background: #13171d; color: var(--dim); white-space: pre; }
+  .foot b { color: var(--text); font-weight: 400; }
+  .h { color: var(--dim); padding: 0 14px; white-space: pre; }
+  .grp { margin-top: 12px; }
+  .row { padding: 0 14px 0 14px; white-space: pre; position: relative; }
+  .row.sel { background: var(--sel); }
+  .row.sel::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--teal); }
+  .sub { padding-left: 46px; white-space: pre; }
+  .age { position: absolute; right: 14px; color: var(--dim); }
+  .amber { color: var(--amber); } .teal { color: var(--teal); } .pink { color: var(--pink); }
+  .dimc { color: var(--dim); } .faint { color: var(--faint); } .green { color: var(--green); }
+  .violet { color: var(--violet); }
+  .phead { height: 30px; line-height: 30px; padding: 0 14px; background: #171c23; white-space: pre; }
+  .meter { position: absolute; right: 14px; top: 9px; width: 96px; height: 12px; }
+  .meter .track { position: absolute; left: 0; right: 0; top: 5px; height: 3px; background: #2a3039; border-radius: 2px; }
+  .meter .fill { position: absolute; left: 0; top: 5px; height: 3px; border-radius: 2px; transition: none; }
+  .meter .tick { position: absolute; top: 0; width: 1px; height: 13px; background: var(--dim); }
+  .pane { position: absolute; left: 0; right: 0; top: 30px; bottom: 0; padding: 10px 16px; overflow: hidden; }
+  .ln { white-space: pre; min-height: 22px; }
+  .hook { margin: 6px 0; padding: 7px 12px; border-left: 2px solid var(--amber); background: rgba(232,163,61,.07);
+          color: #cdb48a; white-space: normal; line-height: 21px; }
+  .brief { margin: 4px 0 0 18px; padding: 6px 12px; border-left: 1px solid #2c333c; background: rgba(255,255,255,.02); }
+  .cursor { display: inline-block; width: 9px; height: 17px; background: var(--text); vertical-align: -3px; }
+  .wipe { position: absolute; inset: 30px 0 0 0; background: var(--win); display: flex; align-items: center;
+          justify-content: center; color: var(--dim); font-size: 14px; letter-spacing: .02em; }
+  .caption { position: absolute; left: 36px; right: 36px; top: 694px; height: 84px; display: flex; gap: 14px; }
+  .step { flex: 1; border: 1px solid #222731; border-radius: 10px; padding: 12px 16px; color: var(--faint);
+          background: #0f1216; font-size: 14px; line-height: 20px; }
+  .step .n { display: inline-block; width: 22px; height: 22px; line-height: 22px; text-align: center; border-radius: 11px;
+             border: 1px solid #2a2f38; margin-right: 8px; font-size: 12px; }
+  .step .big { display: block; margin-top: 6px; font-size: 18px; line-height: 24px; }
+  .step.on { color: var(--text); border-color: #3a4250; background: #12161c; }
+  .step.on .n { border-color: var(--teal); color: var(--teal); }
+  .step.done { color: var(--dim); }
+  .step.done .n { border-color: #2f5f55; color: #2f8f7c; }
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="chrome">toomux</div>
+  <div class="frame">
+    <div class="top" id="top"></div>
+    <div class="left" id="left"></div>
+    <div class="right">
+      <div class="phead" id="phead"></div>
+      <div class="pane" id="pane"></div>
+      <div class="wipe" id="wipe" style="display:none"></div>
+    </div>
+    <div class="foot"><b>enter</b> open   <b>^a</b> move   <b>alt-n</b> new   <b>esc</b> back   <b>?</b> keys</div>
+  </div>
+</div>
+<div class="caption" id="caption"></div>
+<script>
+const T = parseFloat((location.hash.match(/t=([\d.]+)/) || [0, 0])[1]);
+const ID = "7c1e2a90";
+const BRIEF = "~/.local/state/toomux/handovers/" + ID + ".md";
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * clamp(t, 0, 1);
+const typed = (s, t0, cps) => s.slice(0, Math.max(0, Math.floor((T - t0) * cps)));
+const shown = t0 => T >= t0;
+
+// Timeline (seconds)
+const END_TURN = 2.6, HOOK = 3.0, WRITE = 3.9, WRITTEN = 7.5, WIPE = 8.1, FRESH = 8.8, CAPTION = 12.2;
+
+// context
+let ctx;
+if (T < END_TURN) ctx = Math.round(lerp(236, 251, T / 2.4));
+else if (T < WIPE) ctx = Math.round(lerp(251, 256, (T - HOOK) / 4));
+else ctx = Math.round(lerp(18, 23, (T - FRESH) / 4));
+const fresh = T >= WIPE;
+
+// list status of the session
+let status;
+if (T < END_TURN) status = '<span class="amber">working</span> · work';
+else if (T < WRITTEN) status = '<span class="amber">handing over · writing brief</span>';
+else if (T < FRESH) status = '<span class="amber">handing over · starting fresh</span>';
+else status = '<span class="amber">working</span> · work';
+
+document.getElementById("top").innerHTML =
+  '<span class="brand">toomux</span>     work  5h<span class="bar"><i style="width:61%;background:var(--amber)"></i></span><span class="amber">61%</span>  wk<span class="bar"><i style="width:48%;background:#9aa3ad"></i></span>48%      personal  5h<span class="bar"><i style="width:22%;background:#9aa3ad"></i></span>22%';
+
+const row = (dot, title, age, sub, sel) =>
+  `<div class="row${sel ? " sel" : ""}">${sel ? '<span class="teal">1</span> ' : '  '}${dot} ${esc(title)}<span class="age">${age}</span></div><div class="sub">${sub}</div>`;
+document.getElementById("left").innerHTML =
+  '<div class="h">type to filter          by attention</div>' +
+  '<div class="grp"><div class="h">needs you  1</div>' +
+  row('<span class="pink">◆</span>', "Terraform staging split", "2m", '<span class="pink">needs you</span> · work') + '</div>' +
+  '<div class="grp"><div class="h">working  3</div>' +
+  row('<span class="amber">●</span>', "Rate limiter for the public API", fresh ? "0m" : "6m", status, true) +
+  row('<span class="amber">●</span>', "Invoice rounding off by a cent", "4m", '<span class="amber">working</span> · work') +
+  row('<span class="amber">●</span>', "Offline sync for the iOS app", "23m", '<span class="amber">working</span> · work') + '</div>' +
+  '<div class="grp"><div class="h">finished  1</div>' +
+  row('<span class="teal">●</span>', "Search index for the docs site", "9m", '<span class="teal">finished</span> · work') + '</div>' +
+  '<div class="grp"><div class="h">idle  2</div>' +
+  row('<span class="dimc">○</span>', "Move the blog to Astro", "3h", 'idle · personal') +
+  row('<span class="dimc">○</span>', "Neovim LSP config cleanup", "1d", 'idle · personal') + '</div>';
+
+// pane header + context meter
+const pct = clamp(ctx / 400, 0, 1) * 100;
+const col = fresh ? "var(--teal)" : (ctx >= 250 ? "var(--amber)" : "#9aa3ad");
+document.getElementById("phead").innerHTML =
+  `<span class="amber">●</span> Rate limiter for the public API   <span class="dimc">work ·</span> ${fresh && T >= FRESH ? '<span class="amber">working</span>' : (T < END_TURN ? '<span class="amber">working</span>' : '<span class="amber">handing over</span>')} <span class="dimc">·</span> <span style="color:${col}">${ctx}k context</span>` +
+  `<div class="meter"><div class="track"></div><div class="fill" style="width:${pct}%;background:${col}"></div><div class="tick" style="left:62.5%"></div></div>`;
+
+// pane body
+let h = "";
+const L = (s, cls) => { h += `<div class="ln${cls ? " " + cls : ""}">${s}</div>`; };
+if (!fresh) {
+  // The pane scrolls as the brief is written: older output goes off the top.
+  if (!shown(WRITE + 1.2)) {
+    L('<span class="green">●</span> Bash(cargo test -p api ratelimit)');
+    L('<span class="faint">  ⎿</span>  <span class="dimc">test result: ok. 14 passed; 0 failed</span>');
+    L('');
+  }
+  if (!shown(WRITE + 2.4)) {
+    L('<span class="green">●</span> Update(crates/api/src/ratelimit.rs)');
+    L('<span class="faint">  ⎿</span>  <span class="dimc">Updated with 9 additions and 3 removals</span>');
+    L('');
+  }
+  if (T < END_TURN) {
+    L(`<span class="amber">✻</span> <span class="amber">Wiring Retry-After into the 429 path…</span> <span class="dimc">(esc to interrupt · 6m 4s)</span>`);
+  } else {
+    L('<span class="green">●</span> Retry-After is wired into the 429 path; 14 tests pass.');
+    L('<span class="dimc">✻ Worked for 6m 12s</span>');
+  }
+  if (shown(HOOK)) {
+    const ask = `Stop hook feedback: STOP. toomux: this conversation is at ${251}k tokens of context (the limit is 250k), so it continues in a fresh session instead of growing further. Write a complete, standalone handover brief to ${BRIEF} with the Write tool…`;
+    h += `<div class="hook">${esc(typed(ask, HOOK, 260))}</div>`;
+  }
+  if (shown(WRITE)) {
+    L(`<span class="green">●</span> Write(${BRIEF})`);
+    const brief = [
+      ['violet', '# Handover: Rate limiter for the public API'],
+      ['dimc', '## Goal'],
+      ['', 'Per-key token bucket; 429 with Retry-After. Plans set the burst.'],
+      ['dimc', '## Done'],
+      ['', 'Bucket + Redis script, Retry-After header, 14 tests green.'],
+      ['dimc', '## Running now (carries over)'],
+      ['', 'cargo bench -p api ratelimit · job 4f2k'],
+      ['dimc', '## Next'],
+      ['', '1. Burst per plan tier  2. docs/ratelimit.md  3. Load test'],
+    ];
+    let t0 = WRITE + 0.15, b = "";
+    for (const [c, s] of brief) {
+      const part = typed(s, t0, 150);
+      if (!part && T < t0) break;
+      b += `<div class="ln ${c}">${esc(part)}</div>`;
+      t0 += s.length / 150 + 0.05;
+    }
+    h += `<div class="brief">${b}</div>`;
+  }
+  if (shown(WRITTEN)) L('<span class="green">●</span> handover written');
+} else if (T >= FRESH) {
+  const cont = `Continue from a handover. The previous session here (id ${ID}) reached 256k tokens of context and handed over to you. Read ${BRIEF} first: it is its complete brief.`;
+  h += `<div class="ln" style="white-space:normal"><span class="dimc">&gt;</span> ${esc(typed(cont, FRESH, 320))}</div>`;
+  const t1 = FRESH + cont.length / 320 + 0.25;
+  if (shown(t1)) { L(''); L(`<span class="green">●</span> Read(${BRIEF})`); L('<span class="faint">  ⎿</span>  <span class="dimc">Read 41 lines</span>'); }
+  if (shown(t1 + 0.7)) { L(''); L('<span class="green">●</span> ' + esc(typed('Picking up at Next 1: burst per plan tier. The bench job carries on.', t1 + 0.7, 60))); }
+  if (shown(t1 + 2.1)) { L(''); L('<span class="green">●</span> Update(crates/api/src/plans.rs)'); }
+  if (shown(t1 + 2.5)) {
+    L('<span class="faint">  ⎿</span>  <span class="green">+    burst: match tier { Free =&gt; 20, Pro =&gt; 200, Team =&gt; 2_000 },</span>');
+  }
+  if (shown(t1 + 2.9) && T < CAPTION + 3) L(`<span class="amber">✻</span> <span class="amber">Adding per-tier burst…</span> <span class="dimc">(esc to interrupt · 41s)</span>`);
+}
+document.getElementById("pane").innerHTML = h;
+
+// wipe between sessions
+const wipe = document.getElementById("wipe");
+if (T >= WIPE && T < FRESH) { wipe.style.display = "flex"; wipe.textContent = "fresh session · same pane · brief in hand"; }
+
+// caption steps
+const step = (n, on, done, small, big) =>
+  `<div class="step${on ? " on" : done ? " done" : ""}"><span class="n">${n}</span>${small}<span class="big">${big}</span></div>`;
+const s1 = T < HOOK, s2 = T >= HOOK && T < WIPE, s3 = T >= WIPE;
+const final = T >= CAPTION;
+document.getElementById("caption").innerHTML =
+  step(1, s1 && !final, !s1 || final, "context crosses the line", `${T < END_TURN ? ctx : 251}k <span class="dimc">of</span> 250k`) +
+  step(2, s2 && !final, s3 || final, "the session writes its own brief", "nothing is summarised away") +
+  step(3, s3 && !final, final, "a fresh session picks it up", `${fresh ? ctx + "k context" : "fresh context"} · same pane`) +
+  (final ? '' : '');
+if (final) {
+  document.getElementById("caption").innerHTML =
+    `<div class="step on" style="flex:1;text-align:center;font-size:16px;line-height:58px;color:var(--text)">` +
+    `<span class="amber">256k</span> → <span class="teal">${ctx}k</span> context · same pane · same task · the old conversation kept and searchable</div>`;
+}
+</script>
+</body>
+</html>
