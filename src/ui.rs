@@ -2297,7 +2297,14 @@ impl App {
                 }
             }
             Cmd::Jump if s.dormant => {
-                let revived = actions::revive(&self.cfg, &s);
+                // Already open in a pane toomux couldn't see: go there.
+                let revived = match actions::revive(&self.cfg, &s) {
+                    Err(e) => match e.downcast_ref::<crate::running::AlreadyRunning>() {
+                        Some(a) => a.pane.clone().ok_or(e),
+                        None => Err(e),
+                    },
+                    revived => revived,
+                };
                 if revived.is_ok() && s.restore.is_some() {
                     crate::snapshot::forget(std::slice::from_ref(&s.id));
                 }
@@ -5354,6 +5361,8 @@ mod tests {
             env: vec![],
             tty: None,
             pane: None,
+            unregistered: false,
+            twin: None,
         }
     }
 

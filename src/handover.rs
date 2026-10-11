@@ -3407,6 +3407,8 @@ mod tests {
                 session: "t".into(),
                 window_index: "1".into(),
             }),
+            unregistered: false,
+            twin: None,
         }
     }
 
