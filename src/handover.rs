@@ -985,7 +985,14 @@ pub fn start_due(cfg: &Config, sessions: &[Session], now: i64) {
                     .as_ref()
                     .is_some_and(|p| !actions::prompt_empty(&p.id))
         });
-        if !typing {
+        // Claude Code counting down to continue after a usage limit: a
+        // relaunch would cancel that. It goes once Claude has carried on.
+        let own_wait = sessions
+            .iter()
+            .find(|s| s.pid == pid)
+            .and_then(|s| s.pane.as_ref())
+            .is_some_and(|p| crate::limits::claude_continuing(&p.id));
+        if !typing && !own_wait {
             spawn(pid);
         }
     }

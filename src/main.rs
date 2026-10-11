@@ -3,8 +3,8 @@ mod account_cli;
 use toomux::setup::{BEGIN, END};
 use toomux::{
     actions, archive, capture, config, context_policy, handover, hygiene, index, install, jobs,
-    mcp, memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state, tmux,
-    tokens, ui, upkeep, usage, voyage, watch,
+    limits, mcp, memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state,
+    tmux, tokens, ui, upkeep, usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -191,7 +191,13 @@ enum Cmd {
     Mcp,
     /// Start due handovers after each of these many seconds (used by the Stop hook)
     #[command(hide = true)]
-    Tick { after: Vec<u64> },
+    Tick {
+        after: Vec<u64>,
+        /// Instead: wait until this time (ms since the epoch, a usage
+        /// limit's reset) and carry on what the limit stopped
+        #[arg(long, conflicts_with = "after")]
+        at: Option<i64>,
+    },
     /// Hand a session over to a fresh one now (normally automatic)
     Handover { target: String },
     /// Background commands toomux is looking after
@@ -696,7 +702,11 @@ fn main() -> Result<()> {
             _ => Ok(()),
         },
         Some(Cmd::Mcp) => mcp::serve(),
-        Some(Cmd::Tick { after }) => {
+        Some(Cmd::Tick { at: Some(at), .. }) => {
+            limits::wake_at(&cfg, at);
+            Ok(())
+        }
+        Some(Cmd::Tick { after, at: None }) => {
             handover::tick(&cfg, &after);
             Ok(())
         }
@@ -1265,6 +1275,7 @@ fn names(cfg: &Config) -> String {
 fn list(cfg: &Config, json: bool) -> Result<()> {
     let all = registry::load(cfg);
     let now = registry::now_ms();
+    limits::observe(cfg, &all, now);
     if json {
         let v: Vec<_> = all
             .iter()
@@ -1319,6 +1330,7 @@ fn status_line(cfg: &Config) -> String {
     // tick tmux already runs.
     handover::start_due(cfg, &all, now);
     voyage::tick(&all, now);
+    limits::observe(cfg, &all, now);
     index_in_background(now);
     if due_every("upkeep.stamp", 3_600_000, now) {
         in_background(&["upkeep", "--hourly"]);
@@ -1650,6 +1662,11 @@ fn what_acts(cfg: &Config) -> String {
         (cfg.tidy_worktrees, "worktrees: daily, clean, merged, idle git worktrees are removed (never branches or changes)".into(), "tidy_worktrees = false"),
         (cfg.archive_transcripts, "archive: every transcript kept compressed, past Claude Code's 30-day cleanup".into(), "archive_transcripts = false"),
         (cfg.reopen_after_restart, "after a reboot: what was running reopens by itself".into(), "reopen_after_restart = false"),
+        (
+            cfg.limit_resume() != limits::Resume::Off,
+            "after a usage limit resets: sessions it cut off mid-work close Claude's limit dialog and carry on".into(),
+            "resume_after_limit = \"off\"",
+        ),
     ];
     let mut out = format!(
         "\nwhat toomux does by itself (each a line in {}):\n",

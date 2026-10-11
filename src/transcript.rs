@@ -84,21 +84,131 @@ pub struct Meta {
     pub last_prompt: Option<String>,
     /// Most recent pull request the session opened: (repo, number).
     pub pr: Option<(String, u64)>,
-    /// The latest reply, if it was a usage-limit error: (message, when).
-    limit_hit: Option<(String, Option<DateTime<Local>>)>,
+    /// The latest reply, if it was a usage-limit error.
+    limit_hit: Option<LimitHit>,
+}
+
+/// A reply that was a usage-limit error.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LimitHit {
+    /// "weekly limit · resets Oct 3, 5pm".
+    pub text: String,
+    /// When the error was written.
+    pub at: Option<DateTime<Local>>,
+}
+
+/// How long a limit that names no reset ("You've reached your Fable limit",
+/// a spend limit) is taken to last. Short, so a limit nobody can time doesn't
+/// hold handovers and voyages back for days: a later real reply clears it
+/// sooner, and hitting it again starts it over.
+pub const UNTIMED_LIMIT: chrono::Duration = chrono::Duration::hours(5);
+
+impl LimitHit {
+    /// When it lifts, if it says.
+    pub fn reset(&self) -> Option<DateTime<Local>> {
+        reset_time(&self.text, self.at)
+    }
+
+    /// Whether it still holds at `now`.
+    pub fn active_at(&self, now: DateTime<Local>) -> bool {
+        match (self.at, self.reset()) {
+            (_, Some(reset)) => now < reset,
+            (Some(at), None) => now - at < UNTIMED_LIMIT,
+            (None, None) => true,
+        }
+    }
+
+    /// A main-chain assistant entry that is a usage-limit error.
+    pub fn from_entry(v: &Value) -> Option<Self> {
+        if v.get("error").and_then(Value::as_str) != Some("rate_limit") {
+            return None;
+        }
+        let text = text_of(v.pointer("/message/content")).unwrap_or_else(|| "usage limit".into());
+        let text = text
+            .trim()
+            .trim_start_matches("You've hit your ")
+            .to_string();
+        let text = text.split(" (").next().unwrap_or(&text).to_string();
+        let at = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+        Some(LimitHit {
+            text,
+            at: at.map(|t| t.with_timezone(&Local)),
+        })
+    }
+}
+
+/// How the conversation's latest turn ended, if a usage limit ended it:
+/// `Some(true)` when the limit cut it off mid-work (Claude had already
+/// replied or used a tool since the prompt, or an earlier turn was cut off
+/// and every prompt since has only met the limit), `Some(false)` when the
+/// limit was the only answer a prompt got. `None`: the latest reply isn't a
+/// limit error.
+pub fn cut_off_by_limit(path: &Path) -> Option<bool> {
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return None;
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let from = len.saturating_sub(TAIL_BYTES);
+    f.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    f.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    cut_off_in(text.lines().skip(usize::from(from > 0)))
+}
+
+fn cut_off_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<bool> {
+    let mut worked = false;
+    let mut ended_at_limit: Option<bool> = None;
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        match v.get("type").and_then(Value::as_str) {
+            Some("assistant") => match v.get("error") {
+                None | Some(Value::Null) => {
+                    worked = true;
+                    ended_at_limit = None;
+                }
+                Some(_) if LimitHit::from_entry(&v).is_some() => ended_at_limit = Some(worked),
+                Some(_) => {}
+            },
+            Some("user") if v.get("isMeta").and_then(Value::as_bool) != Some(true) => {
+                let content = v.pointer("/message/content");
+                let tool_result = content.and_then(Value::as_array).is_some_and(|a| {
+                    a.iter()
+                        .any(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
+                });
+                if tool_result {
+                    worked = true;
+                } else if text_of(content).is_some() {
+                    // A new prompt: its turn starts fresh, unless the turn
+                    // before it was cut off and never got going again.
+                    worked = ended_at_limit == Some(true);
+                }
+            }
+            _ => {}
+        }
+    }
+    ended_at_limit
 }
 
 impl Meta {
     /// If the conversation's latest reply is a usage-limit error, its message
     /// ("weekly limit · resets Oct 3, 5pm"). A later real reply clears it.
     pub fn limit(&self) -> Option<String> {
-        let (text, at) = self.limit_hit.clone()?;
-        let active = match (at, reset_time(&text, at)) {
-            (_, Some(reset)) => Local::now() < reset,
-            (Some(at), None) => Local::now() - at < chrono::Duration::days(7),
-            (None, None) => true,
-        };
-        active.then_some(text)
+        let hit = self.limit_hit.as_ref()?;
+        hit.active_at(Local::now()).then(|| hit.text.clone())
+    }
+
+    /// The latest reply's usage-limit error, whether or not it has lifted.
+    pub fn limit_hit(&self) -> Option<&LimitHit> {
+        self.limit_hit.as_ref()
     }
 
     fn absorb(&mut self, line: &str) {
@@ -122,21 +232,17 @@ impl Meta {
                 if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
                     return;
                 }
-                self.limit_hit = (v.get("error").and_then(Value::as_str) == Some("rate_limit"))
-                    .then(|| {
-                        let text = text_of(v.pointer("/message/content"))
-                            .unwrap_or_else(|| "usage limit".into());
-                        let text = text
-                            .trim()
-                            .trim_start_matches("You've hit your ")
-                            .to_string();
-                        let text = text.split(" (").next().unwrap_or(&text).to_string();
-                        let at = v
-                            .get("timestamp")
-                            .and_then(Value::as_str)
-                            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-                        (text, at.map(|t| t.with_timezone(&Local)))
-                    });
+                // A limit error is the news until a real reply follows it.
+                // Another kind of error (overloaded, a dropped connection)
+                // says nothing about the limit either way.
+                match v.get("error") {
+                    None | Some(Value::Null) => self.limit_hit = None,
+                    Some(_) => {
+                        if let Some(hit) = LimitHit::from_entry(&v) {
+                            self.limit_hit = Some(hit);
+                        }
+                    }
+                }
             }
             (1, Some("ai-title")) => {
                 self.title = str_at("aiTitle").filter(|t| !t.trim().is_empty())
@@ -295,7 +401,7 @@ fn text_of(content: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::reset_time;
+    use super::{Meta, reset_time};
     use chrono::{Local, TimeZone, Timelike};
 
     #[test]
@@ -314,5 +420,84 @@ mod tests {
         let tomorrow = reset_time("limit · resets 11:30am", Some(hit)).unwrap();
         assert_eq!((tomorrow.hour(), tomorrow.minute()), (11, 30));
         assert!(tomorrow > hit);
+    }
+
+    fn limit_line(text: &str, at: &str) -> String {
+        serde_json::json!({"type": "assistant", "error": "rate_limit", "timestamp": at,
+            "message": {"content": [{"type": "text", "text": text}]}})
+        .to_string()
+    }
+
+    fn reply(error: Option<&str>) -> String {
+        let mut v = serde_json::json!({"type": "assistant", "timestamp": "2026-10-01T10:00:00Z",
+            "message": {"content": [{"type": "text", "text": "done"}]}});
+        if let Some(e) = error {
+            v["error"] = e.into();
+        }
+        v.to_string()
+    }
+
+    fn prompt(text: &str) -> String {
+        serde_json::json!({"type": "user", "message": {"content": text}}).to_string()
+    }
+
+    fn tool_result() -> String {
+        serde_json::json!({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
+            .to_string()
+    }
+
+    #[test]
+    fn a_limit_holds_until_a_real_reply_and_other_errors_dont_clear_it() {
+        let mut m = Meta::default();
+        m.absorb(&limit_line(
+            "You've hit your limit · resets 8pm (Europe/London)",
+            "2026-10-01T09:00:00Z",
+        ));
+        assert_eq!(m.limit_hit().unwrap().text, "limit · resets 8pm");
+        m.absorb(&reply(Some("overloaded")));
+        assert!(m.limit_hit().is_some(), "an unrelated error keeps it");
+        m.absorb(&reply(None));
+        assert!(m.limit_hit().is_none(), "a real reply clears it");
+    }
+
+    #[test]
+    fn a_limit_with_no_reset_lifts_after_hours_not_days() {
+        let mut m = Meta::default();
+        m.absorb(&limit_line(
+            "You've reached your Fable limit",
+            "2026-10-01T09:00:00Z",
+        ));
+        let hit = m.limit_hit().unwrap().clone();
+        assert_eq!(hit.reset(), None);
+        let at = hit.at.unwrap();
+        assert!(hit.active_at(at + chrono::Duration::hours(1)));
+        assert!(!hit.active_at(at + super::UNTIMED_LIMIT));
+    }
+
+    #[test]
+    fn a_turn_cut_off_mid_work_is_told_from_a_prompt_the_limit_refused() {
+        let at = "2026-10-01T09:00:00Z";
+        let lim = limit_line("limit · resets 8pm", at);
+        let run = |lines: &[String]| super::cut_off_in(lines.iter().map(String::as_str));
+        // Worked, then the limit: cut off.
+        assert_eq!(
+            run(&[prompt("fix it"), reply(None), tool_result(), lim.clone()]),
+            Some(true)
+        );
+        // The limit was the prompt's only answer.
+        assert_eq!(run(&[prompt("hi"), lim.clone()]), Some(false));
+        // Poking a cut-off session while limited keeps it cut off.
+        assert_eq!(
+            run(&[
+                prompt("fix it"),
+                tool_result(),
+                lim.clone(),
+                prompt("still there?"),
+                lim.clone()
+            ]),
+            Some(true)
+        );
+        // A real reply since: not at a limit.
+        assert_eq!(run(&[prompt("fix it"), lim, reply(None)]), None);
     }
 }

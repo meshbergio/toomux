@@ -16,6 +16,7 @@ pub mod hygiene;
 pub mod index;
 pub mod install;
 pub mod jobs;
+pub mod limits;
 pub mod live;
 pub mod lock;
 pub mod mcp;

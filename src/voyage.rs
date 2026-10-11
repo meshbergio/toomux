@@ -1088,13 +1088,56 @@ pub fn brief_section(session: &str) -> Option<String> {
     ))
 }
 
-/// From the status tick: a voyage whose session stopped at a usage limit
-/// carries on once the limit lifts.
+/// A voyage that waits out a usage limit and carries on after it: an active
+/// one, or one paused while at the limit (its judge's `claude -p` can't run
+/// at the limit either, so its checks fail and it pauses). A pause for its
+/// budget stays a pause.
+fn held_by_limit(q: &Voyage) -> bool {
+    let paused_at_limit = q.status == Status::Paused
+        && !q.why.as_deref().is_some_and(|w| w.starts_with("budget"))
+        && (q.at_limit
+            || q.why.as_deref().is_some_and(|w| {
+                w.starts_with("couldn't be checked") && w.to_lowercase().contains("limit")
+            }));
+    q.status == Status::Active || paused_at_limit
+}
+
+/// crate::limits found this session's limit lifted (perhaps with nothing
+/// having seen it while it held): if a voyage waits on it, it's marked at the
+/// limit so the next tick carries it on. Whether one does.
+pub fn note_limit(session: &str) -> bool {
+    let Some(mut q) = open_for(session).filter(held_by_limit) else {
+        return false;
+    };
+    if !q.at_limit {
+        q.at_limit = true;
+        save(&q);
+        log(&q, "at limit", "seen after the reset");
+    }
+    true
+}
+
+/// From the status tick and the limit wake-up: a voyage whose session stopped
+/// at a usage limit carries on once the limit lifts.
+///
+/// The contract around `at_limit` ("this voyage waits out a usage limit"):
+/// - stop_hook sets it when a turn ends at a limit, and may pause the voyage
+///   while it's set (a judge that can't run at the limit); a turn that ends
+///   normally clears it;
+/// - this tick sets it on seeing the session limited, and crate::limits
+///   (note_limit) on finding a limit that lifted unseen;
+/// - crate::limits closes Claude Code's limit dialog after the reset, so the
+///   session goes idle; here, once it has sat a minute at an empty prompt,
+///   an active voyage at the limit, or one paused at it (held_by_limit), is
+///   resumed and the session told to carry on. Nothing is typed while Claude
+///   Code counts down to continue by itself.
 pub fn tick(sessions: &[Session], now: i64) {
-    for mut q in open().into_iter().filter(|q| q.status == Status::Active) {
+    for mut q in open().into_iter().filter(held_by_limit) {
         let Some(s) = sessions.iter().find(|s| s.id == q.session() && !s.dormant) else {
             continue;
         };
+        // Paused for the limit before at_limit was kept for pauses.
+        let waiting = q.at_limit || q.status == Status::Paused;
         if s.limit.is_some() {
             if !q.at_limit {
                 q.at_limit = true;
@@ -1103,8 +1146,8 @@ pub fn tick(sessions: &[Session], now: i64) {
             }
             continue;
         }
-        if !q.at_limit
-            || s.state != St::Idle
+        if !waiting
+            || !s.is_idle()
             || now - s.since_ms < RESUME_AFTER_MS
             || crate::handover::requested(&s.id)
         {
@@ -1113,8 +1156,11 @@ pub fn tick(sessions: &[Session], now: i64) {
         let Some(pane) = s.pane.as_ref().map(|p| p.id.clone()) else {
             continue;
         };
-        if !crate::actions::prompt_empty(&pane) {
+        if !crate::actions::prompt_empty(&pane) || crate::limits::claude_continuing(&pane) {
             continue;
+        }
+        if q.status == Status::Paused {
+            resume(&mut q);
         }
         q.at_limit = false;
         save(&q);

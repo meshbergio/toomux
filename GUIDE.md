@@ -213,7 +213,9 @@ toomux's prompt and Stop hooks do the work.
   The brief gets a Voyage section and the fresh session's first prompt carries
   the voyage, so it picks up where the last one left off.
 - **Limits.** A session that stops at its usage limit carries on by itself once
-  the limit lifts and it has sat a minute at an empty prompt.
+  the limit lifts and it has sat a minute at an empty prompt (toomux closes
+  Claude Code's limit dialog first; see [After a limit resets](#after-a-limit-resets)).
+  A voyage paused because its judge couldn't run at the limit carries on too.
 - **Persistence** sets how hard it pushes and how hard done is to reach. Each
   level keeps everything of the one below. `voyage_persistence` in the config
   sets the default (`steady`).
@@ -447,6 +449,38 @@ Where the numbers come from, freshest first:
   from `.credentials.json`, passed to curl on stdin, and never refreshed or
   written.
 - **A session stopped by a limit**, from its transcript.
+
+### After a limit resets
+
+When a limit stops a session, Claude Code asks "What do you want to do?", and
+its first answer (stop and wait) doesn't carry on by itself. So a minute after
+the reset, toomux closes that dialog (Esc, and checks it closed) and, for a
+session that was mid-work, types `[toomux] The usage limit has reset. Carry on
+from where you were cut off.` Each limit is acted on once (a marker per
+session and limit, in `~/.local/state/toomux/limits/`, where `log.jsonl`
+records every step). `resume_after_limit` in the config says which sessions:
+
+| | carries on |
+|---|---|
+| `working` (default) | a turn the limit cut off after Claude had started on it, a voyage, a handover under way |
+| `all` | also a prompt the limit refused before any work began |
+| `off` | only voyages and handovers under way (they were asked for) |
+
+Before the reset nothing is pressed into the dialog, unless
+`auto_continue_at_limit = true`: then toomux picks Claude Code's own "Wait
+here, then continue automatically" when the reset is less than a day away.
+While Claude Code is counting down to continue by itself (its "Continue
+automatically at usage limit" setting), toomux leaves the session alone: no
+keys, no handover, no relaunch. It only steps in if the session still hasn't
+carried on a minute after the reset.
+
+No terminal needs to be attached. Whoever sees the limit first (Claude Code's
+status line command, the tmux status tick, `toomux list`) leaves one detached
+`toomux tick --at <reset>` sleeping until then, per session and reset; it
+naps by the wall clock, so a machine that slept through the reset acts when
+it wakes. A limit that names no reset (a model's own limit, a spend limit)
+counts for five hours, or until a real reply follows it; toomux never types
+into those by itself.
 
 ## States
 
@@ -709,6 +743,7 @@ config to turn off:
 | Worktrees (daily): clean, merged, idle git worktrees removed; never branches or changes | `tidy_worktrees = false` |
 | Archive: every transcript kept compressed, past Claude Code's 30-day cleanup | `archive_transcripts = false` |
 | After a reboot: what was running reopens by itself | `reopen_after_restart = false` |
+| After a usage limit resets: sessions it cut off mid-work close Claude Code's limit dialog and carry on | `resume_after_limit = "off"` |
 | Voyages: a session with a `/voyage` is checked after every turn and sent back until it's done | `/voyage clear` (only runs when you set one) |
 
 Always on: every conversation is indexed into one memory that all sessions search.
