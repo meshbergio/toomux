@@ -47,13 +47,20 @@ The repeatable resource-measurement procedure is in [BENCHMARKS.md](BENCHMARKS.m
 | `alt-s` | between the session and the list |
 | `alt-j` | opened with `alt-s`: close toomux on the chosen session, in tmux itself |
 | `alt-b` | hide or show the list |
+| `alt-n` | a [new session](#new-sessions) in a recent folder |
 | `alt-u` | usage in place of the session |
 | `alt-m` | the [memory graph](#the-memory-graph) in place of the list and session |
+| `alt-a` | accounts |
+| `alt-r` | remote: connect a phone |
+| `alt-?` | every key |
 | `alt-1..9` | a pin |
 | in the list | everything under [Keys](#keys); `enter` opens here, `esc` goes back to the session, `ctrl-c` leaves (sessions keep running) |
 
-Everything else goes to the session, paste included (bracketed when the program
-asks). The wheel scrolls toomux's copy of the history, or goes to the program
+These work wherever the keyboard is. With the keyboard in a session everything
+else goes to the session, paste included (bracketed when the program asks): so
+`ctrl-n` and `?` there are Claude's, and `alt-n` and `alt-?` are toomux's. A
+toomux overlay (the new-session picker, help, a question) takes the keyboard
+until it closes. The wheel scrolls toomux's copy of the history, or goes to the program
 if it takes the mouse; shift-drag selects text in your terminal as usual.
 
 ## Tokens: handover, capping and memory
@@ -206,7 +213,9 @@ toomux's prompt and Stop hooks do the work.
   The brief gets a Voyage section and the fresh session's first prompt carries
   the voyage, so it picks up where the last one left off.
 - **Limits.** A session that stops at its usage limit carries on by itself once
-  the limit lifts and it has sat a minute at an empty prompt.
+  the limit lifts and it has sat a minute at an empty prompt (toomux closes
+  Claude Code's limit dialog first; see [After a limit resets](#after-a-limit-resets)).
+  A voyage paused because its judge couldn't run at the limit carries on too.
 - **Persistence** sets how hard it pushes and how hard done is to reach. Each
   level keeps everything of the one below. `voyage_persistence` in the config
   sets the default (`steady`).
@@ -392,7 +401,7 @@ In toomux (`?` shows these too):
 | `ctrl-x` | close it |
 | `ctrl-r` | rename it (in toomux, its tmux window, and Claude's `/rename`) |
 | `ctrl-p` | pin it to `alt-1..9`; again to unpin |
-| `ctrl-n` | start a new session in a recent folder |
+| `ctrl-n`, `alt-n` | start a new session in a recent folder |
 | `ctrl-s` | clean up sessions idle for days |
 | `ctrl-e` | reopen what was running before a restart |
 | `ctrl-u` | usage: each account's 5-hour and weekly limits (clears a half-typed filter first) |
@@ -410,6 +419,12 @@ Anywhere in tmux:
 
 Every footer hint is clickable, so is each account in the header (its usage),
 and the list scrolls with the mouse wheel.
+
+Messages in the footer fade after a few seconds. Errors also stay under `?`
+(the last one) and in `~/.local/state/toomux/errors.log` (all of them, one line
+each, kept to about 256KB plus the previous `errors.log.1`); `toomux where`
+lists it. A key that can't act says why: `busy: …` while another operation
+runs, or why the folder list has nothing to start in.
 
 ## Usage
 
@@ -434,6 +449,38 @@ Where the numbers come from, freshest first:
   from `.credentials.json`, passed to curl on stdin, and never refreshed or
   written.
 - **A session stopped by a limit**, from its transcript.
+
+### After a limit resets
+
+When a limit stops a session, Claude Code asks "What do you want to do?", and
+its first answer (stop and wait) doesn't carry on by itself. So a minute after
+the reset, toomux closes that dialog (Esc, and checks it closed) and, for a
+session that was mid-work, types `[toomux] The usage limit has reset. Carry on
+from where you were cut off.` Each limit is acted on once (a marker per
+session and limit, in `~/.local/state/toomux/limits/`, where `log.jsonl`
+records every step). `resume_after_limit` in the config says which sessions:
+
+| | carries on |
+|---|---|
+| `working` (default) | a turn the limit cut off after Claude had started on it, a voyage, a handover under way |
+| `all` | also a prompt the limit refused before any work began |
+| `off` | only voyages and handovers under way (they were asked for) |
+
+Before the reset nothing is pressed into the dialog, unless
+`auto_continue_at_limit = true`: then toomux picks Claude Code's own "Wait
+here, then continue automatically" when the reset is less than a day away.
+While Claude Code is counting down to continue by itself (its "Continue
+automatically at usage limit" setting), toomux leaves the session alone: no
+keys, no handover, no relaunch. It only steps in if the session still hasn't
+carried on a minute after the reset.
+
+No terminal needs to be attached. Whoever sees the limit first (Claude Code's
+status line command, the tmux status tick, `toomux list`) leaves one detached
+`toomux tick --at <reset>` sleeping until then, per session and reset; it
+naps by the wall clock, so a machine that slept through the reset acts when
+it wakes. A limit that names no reset (a model's own limit, a spend limit)
+counts for five hours, or until a real reply follows it; toomux never types
+into those by itself.
 
 ## States
 
@@ -574,11 +621,18 @@ doesn't stop at the trust prompt. toomux never grants trust you haven't given.
 
 ## New sessions
 
-`ctrl-n` lists folders by how much and how recently you've used Claude in them
-(or type a path). The account comes from the most specific `[[rules]]` entry, else
+`ctrl-n` in the list, or `alt-n` anywhere in full-screen toomux (including while
+you're typing in a session, where `ctrl-n` belongs to Claude), lists folders by
+how much and how recently you've used Claude in them (or type a path). Pick one
+with `enter`, then the account with `enter` (the suggested one) or its number.
+`toomux new [folder] [--account <name>]` does the same from a shell: the
+current folder by default, then it takes you there (`--detach` only starts it). The account comes from the most specific `[[rules]]` entry, else
 the account sessions there already use, else one that isn't at its limit. Launch
 flags are the ones most of your running sessions use, unless `new_session_args`
-says otherwise.
+says otherwise; what belongs to one conversation alone is never copied (its
+`--name`, `--resume`/`--continue`/`--session-id`, its opening prompt, and the
+handovers folder toomux adds to a successor). Ties go to the longer set of flags,
+then the first in sorted order, and the picker shows the flags it will use.
 
 ## A tmux server per session
 
@@ -590,6 +644,10 @@ a server of your own making (`tmux -L work`, or `-S /some/socket`, carried as
 `%N@/some/socket`) is found by the `TMUX` its process started with. Jumping to a
 session on another server moves your terminal over (`detach-client -E` then
 `attach`); the full-screen view reconnects its control client to that server.
+It only ever attaches to a server that is running: when the session you're
+watching ends, toomux says so with the last line it showed, and with no session
+in tmux at all it attaches to nothing (it never starts a server or a shell
+session of its own).
 
 Its servers start from `~/.local/state/toomux/server.tmux.conf`: your
 `~/.tmux.conf`, rewritten on each start without tmux-resurrect, tmux-continuum and
@@ -620,7 +678,11 @@ offers them. Sessions that vanish while the machine stays up (more than half at
 once, gone for two minutes: a tmux server went down) are offered, not reopened.
 Offered sessions show under "before the restart"; `ctrl-e` reopens them all, enter
 reopens one, `ctrl-x` stops offering one. `toomux reopen <id|name>...` does the
-same from the command line, for these, pins, and anything last recorded running.
+same from the command line, for these, pins, and anything last recorded running;
+given a session id it also opens any conversation an account keeps a transcript
+of (a voyage's, say), in the folder it ran in, on `--account <name>` or the
+account that folder would start on. A conversation still open anywhere is
+never opened twice: it says where it runs instead.
 
 ## Setup
 
@@ -685,6 +747,7 @@ config to turn off:
 | Worktrees (daily): clean, merged, idle git worktrees removed; never branches or changes | `tidy_worktrees = false` |
 | Archive: every transcript kept compressed, past Claude Code's 30-day cleanup | `archive_transcripts = false` |
 | After a reboot: what was running reopens by itself | `reopen_after_restart = false` |
+| After a usage limit resets: sessions it cut off mid-work close Claude Code's limit dialog and carry on | `resume_after_limit = "off"` |
 | Voyages: a session with a `/voyage` is checked after every turn and sent back until it's done | `/voyage clear` (only runs when you set one) |
 
 Always on: every conversation is indexed into one memory that all sessions search.
@@ -720,7 +783,8 @@ toomux jump --pin <n>           a pin, reopening it if needed
 toomux switch <target> [--to <account>] [--wait] [--force]
 toomux switch --limited [--to <account>]
 toomux adopt <target>
-toomux reopen <target>...       conversations that aren't running, each in its own server
+toomux new [folder] [--account <name>] [--detach]   a new session there (default: here), in its own server
+toomux reopen <target>... [--account <name>]   conversations that aren't running, each in its own server
 toomux usage [--json] [--fetch] each account's 5-hour and weekly usage
 toomux statusline               Claude Code status line command (reads its JSON on stdin)
 toomux handover <target>        hand a session over to a fresh one now

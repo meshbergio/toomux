@@ -86,6 +86,21 @@ pub fn descendants(pid: i32) -> Vec<i32> {
     out
 }
 
+/// Every live process id.
+pub fn pids() -> Vec<i32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse().ok())
+        .collect()
+}
+
+/// A process's current folder.
+pub fn cwd(pid: i32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
 /// Every process's current folder.
 pub fn folders_in_use() -> Vec<PathBuf> {
     std::fs::read_dir("/proc")

@@ -262,7 +262,9 @@ pub fn new_server_name(id: Option<&str>) -> String {
 }
 
 /// Start a new server holding one session (`name`) that runs `cmd` in `cwd`.
-/// Returns the qualified pane id.
+/// Returns the qualified pane id. The pane is kept when `cmd` exits
+/// (remain-on-exit), so a launch that fails at once can be read: the caller
+/// clears that once the launch has held.
 pub fn new_server(
     server: &str,
     name: &str,
@@ -287,6 +289,8 @@ pub fn new_server(
         args.extend(["-e", e.as_str()]);
     }
     args.push(cmd);
+    // In the same command list, so tmux sets it before it can see `cmd` exit.
+    args.extend([";", "set-option", "-p", "remain-on-exit", "on"]);
     // Not nested in whichever server we might be inside.
     let mut c = command_on(server);
     if let Some(conf) = server_conf() {
@@ -393,7 +397,7 @@ fn filter_conf(text: &str, from: &std::path::Path, plugins: &std::path::Path) ->
 }
 
 pub const PANES_FORMAT: &str =
-    "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_dead}";
+    "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_dead}\t#{pane_pid}";
 
 thread_local! {
     /// A pane listing of one server that arrived another way (the shell's
@@ -419,8 +423,11 @@ const FRESH_MS: i64 = 10_000;
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Listings(HashMap<String, (i64, String)>);
 
+/// Named for PANES_FORMAT's columns: a toomux from before the pane pid was
+/// listed (still running after an upgrade) keeps its own file, so neither
+/// reads the other's listings as fresh and loses panes or their processes.
 fn listings_path() -> PathBuf {
-    crate::watch::dir().join("panes.json")
+    crate::watch::dir().join("panes-v2.json")
 }
 
 fn load_listings() -> Listings {
@@ -446,24 +453,33 @@ fn list(server: &str) -> String {
 
 /// Live panes on every server, keyed by their tty (`/dev/pts/N`).
 pub fn panes_by_tty() -> HashMap<String, Pane> {
+    pane_rows()
+        .into_iter()
+        .map(|(tty, pane, _)| (tty, pane))
+        .collect()
+}
+
+/// Live panes on every server: tty, pane, and the pid of the process the
+/// pane was started with (when the listing says).
+pub fn pane_rows() -> Vec<(String, Pane, Option<i32>)> {
     let given = GIVEN.with(|g| g.borrow().clone());
     let now = crate::registry::now_ms();
     let mut kept = load_listings();
     let mut fresh = Listings::default();
-    let mut all = HashMap::new();
+    let mut all = Vec::new();
     for server in servers() {
         let listing = match (&given, kept.0.remove(&server)) {
             (Some((s, text)), _) if *s == server => (now, text.clone()),
             (_, Some((at, text))) if now - at < FRESH_MS && at <= now => (at, text),
             _ => (now, list(&server)),
         };
-        all.extend(parse_panes(&server, &listing.1));
+        all.extend(parse_rows(&server, &listing.1));
         fresh.0.insert(server, listing);
     }
     // Servers of someone else's making that a session was found in.
     for (server, (at, text)) in kept.0 {
         if now - at < FRESH_MS && at <= now {
-            all.extend(parse_panes(&server, &text));
+            all.extend(parse_rows(&server, &text));
             fresh.0.insert(server, (at, text));
         }
     }
@@ -491,10 +507,19 @@ pub fn panes_on(server: &str, within_ms: i64) -> HashMap<String, Pane> {
 }
 
 fn parse_panes(server: &str, out: &str) -> HashMap<String, Pane> {
+    parse_rows(server, out)
+        .into_iter()
+        .map(|(tty, pane, _)| (tty, pane))
+        .collect()
+}
+
+/// A listing in `PANES_FORMAT`, less dead panes. One kept by an older toomux
+/// has no pane pid.
+fn parse_rows(server: &str, out: &str) -> Vec<(String, Pane, Option<i32>)> {
     out.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            (f.len() == 5 && f[4] != "1").then(|| {
+            ((f.len() == 5 || f.len() == 6) && f[4] != "1").then(|| {
                 (
                     f[0].to_string(),
                     Pane {
@@ -502,6 +527,7 @@ fn parse_panes(server: &str, out: &str) -> HashMap<String, Pane> {
                         session: f[2].into(),
                         window_index: f[3].into(),
                     },
+                    f.get(5).and_then(|p| p.parse().ok()),
                 )
             })
         })
@@ -624,6 +650,26 @@ mod tests {
             "older than asked for: listed again"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pane_listings_carry_the_pane_pid_and_older_ones_still_parse() {
+        let rows = parse_rows(
+            "toomux-ab",
+            "/dev/pts/3\t%1\tw\t0\t0\t4242\n/dev/pts/4\t%2\tw\t1\t0\n/dev/pts/5\t%3\tw\t2\t1\t9\n",
+        );
+        let got: Vec<(&str, &str, Option<i32>)> = rows
+            .iter()
+            .map(|(t, p, pid)| (t.as_str(), p.id.as_str(), *pid))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("/dev/pts/3", "%1@toomux-ab", Some(4242)),
+                ("/dev/pts/4", "%2@toomux-ab", None),
+            ],
+            "dead panes are left out"
+        );
     }
 
     #[test]

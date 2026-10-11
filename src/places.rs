@@ -4,7 +4,7 @@
 use crate::config::{Config, expand};
 use crate::registry::Session;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 
 #[derive(Clone, Debug)]
@@ -146,27 +146,189 @@ pub fn account_for(cfg: &Config, folder: &str, running: &[Session]) -> (usize, &
 }
 
 /// Launch flags for a new session: the configured ones, else the flags most
-/// of your running sessions were started with.
+/// of your running sessions were started with. Ties go to the longer set of
+/// flags, then to the first in sorted order, so the answer never depends on
+/// hash order.
 pub fn new_args(cfg: &Config, running: &[Session]) -> Vec<String> {
     if let Some(a) = &cfg.new_session_args {
         return a.clone();
     }
-    let mut counts: HashMap<Vec<String>, usize> = HashMap::new();
-    for s in running.iter().filter(|s| !s.dormant) {
-        *counts
-            .entry(crate::actions::carried_args(&s.args))
-            .or_default() += 1;
+    most_common_flags(
+        running
+            .iter()
+            .filter(|s| !s.dormant)
+            .map(|s| s.args.as_slice()),
+    )
+}
+
+fn most_common_flags<'a>(argvs: impl Iterator<Item = &'a [String]>) -> Vec<String> {
+    let mut counts: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+    for argv in argvs {
+        *counts.entry(reusable_args(argv)).or_default() += 1;
     }
     counts
         .into_iter()
-        .max_by_key(|(a, n)| (*n, a.len()))
+        .max_by(|(a, n), (b, m)| {
+            n.cmp(m)
+                .then(a.len().cmp(&b.len()))
+                // Equal counts and lengths: the first sorted one wins.
+                .then(b.cmp(a))
+        })
         .map(|(a, _)| a)
         .unwrap_or_default()
 }
 
+/// A running session's launch flags that make sense for a different, new
+/// conversation: `carried_args` (no conversation selector, no prompt) less
+/// what belongs to that one conversation alone: its name, and the handover
+/// briefs folder toomux gave it.
+pub fn reusable_args(argv: &[String]) -> Vec<String> {
+    let carried = crate::actions::carried_args(argv);
+    let mut out = Vec::new();
+    let mut it = carried.into_iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--name" | "-n" => {
+                it.next();
+            }
+            _ if a.starts_with("--name=") || a.starts_with("-n=") => {}
+            "--add-dir" => {
+                let mut dirs = Vec::new();
+                while let Some(d) = it.next_if(|n| !n.starts_with('-')) {
+                    if !is_handover_dir(&d) {
+                        dirs.push(d);
+                    }
+                }
+                if !dirs.is_empty() {
+                    out.push(a);
+                    out.extend(dirs);
+                }
+            }
+            _ if a.strip_prefix("--add-dir=").is_some_and(is_handover_dir) => {}
+            _ => out.push(a),
+        }
+    }
+    out
+}
+
+/// The folder handover adds to a successor so it can read its brief: toomux's
+/// own, under this or any other state home.
+fn is_handover_dir(dir: &str) -> bool {
+    let dir = dir.trim_end_matches('/');
+    let ours = crate::handover::dir();
+    std::path::Path::new(dir) == ours || expand(dir) == ours || dir.ends_with("/toomux/handovers")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::weight;
+    use super::{most_common_flags, reusable_args, weight};
+
+    fn v(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn handovers() -> String {
+        crate::handover::dir().display().to_string()
+    }
+
+    #[test]
+    fn reusable_args_drop_name_resume_prompt_and_handover_dir() {
+        let h = handovers();
+        let argv = v(&[
+            "claude",
+            "--dangerously-skip-permissions",
+            "--model",
+            "opus",
+            "--add-dir",
+            &h,
+            "--name",
+            "Widgets",
+            "--resume",
+            "0b6c6a1e-1111-2222-3333-444455556666",
+        ]);
+        assert_eq!(
+            reusable_args(&argv),
+            v(&["--dangerously-skip-permissions", "--model", "opus"])
+        );
+        let add_eq = format!("--add-dir={h}");
+        let argv = v(&[
+            "claude",
+            "-n=Fix it",
+            "--name=Other",
+            &add_eq,
+            "-c",
+            "do the thing",
+        ]);
+        assert!(
+            reusable_args(&argv).is_empty(),
+            "{:?}",
+            reusable_args(&argv)
+        );
+        // Another HOME's handovers folder is still toomux's, not yours.
+        let argv = v(&[
+            "claude",
+            "--add-dir",
+            "/home/someone/.local/state/toomux/handovers/",
+        ]);
+        assert!(reusable_args(&argv).is_empty());
+    }
+
+    #[test]
+    fn reusable_args_keep_your_own_add_dirs() {
+        let h = handovers();
+        let argv = v(&[
+            "claude",
+            "--add-dir",
+            "/work/a",
+            &h,
+            "/work/b",
+            "--model",
+            "x",
+        ]);
+        assert_eq!(
+            reusable_args(&argv),
+            v(&["--add-dir", "/work/a", "/work/b", "--model", "x"])
+        );
+    }
+
+    #[test]
+    fn handover_successors_never_name_a_new_session() {
+        let h = handovers();
+        // Every handover successor carries its own --name; none may become
+        // the new session's flags, whatever order the sessions come in.
+        let mut argvs = [
+            v(&["claude", "--add-dir", &h, "--name", "Widgets"]),
+            v(&["claude", "--add-dir", &h, "--name", "A much longer name"]),
+            v(&[
+                "claude",
+                "--add-dir",
+                &h,
+                "--name",
+                "Third",
+                "--resume",
+                "x",
+            ]),
+            v(&["claude", "--model", "opus"]),
+        ];
+        let first = most_common_flags(argvs.iter().map(Vec::as_slice));
+        assert!(first.is_empty(), "{first:?}");
+        argvs.reverse();
+        assert_eq!(most_common_flags(argvs.iter().map(Vec::as_slice)), first);
+    }
+
+    #[test]
+    fn new_session_flags_tie_break_is_deterministic() {
+        let a = v(&["claude", "--model", "opus"]);
+        let b = v(&["claude", "--model", "haiku"]);
+        let forward = most_common_flags([a.as_slice(), b.as_slice()].into_iter());
+        let backward = most_common_flags([b.as_slice(), a.as_slice()].into_iter());
+        assert_eq!(forward, backward);
+        assert_eq!(forward, v(&["--model", "haiku"]));
+        // More sessions outvote longer flags.
+        let c = v(&["claude"]);
+        let picked = most_common_flags([a.as_slice(), c.as_slice(), c.as_slice()].into_iter());
+        assert!(picked.is_empty());
+    }
 
     #[test]
     fn recent_use_outranks_old_volume() {

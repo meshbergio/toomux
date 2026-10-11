@@ -89,8 +89,9 @@ independent session, but the workload becomes one control surface: what is waiti
 you, what is working, what finished, what is idle, and which account it belongs to.
 
 `enter` opens or reopens the selected session. `ctrl-a` moves that conversation to
-another account in the same pane. Type to filter. `esc` clears the filter, backs out of
-secondary views, then closes toomux.
+another account in the same pane. `ctrl-n` (or `alt-n`, even while you are typing in a
+session) starts a new one in a recent folder. Type to filter. `esc` clears the filter,
+backs out of secondary views, then closes toomux. `?` (or `alt-?`) lists every key.
 
 If you would rather stay in your normal tmux layout, `alt-b` puts the same session list
 down the side of the current window.
@@ -166,7 +167,9 @@ it.
 toomux tracks each account's five-hour and weekly windows, reset timing and recent pace.
 `ctrl-u` opens the full usage view. If a conversation is parked on a limit, `ctrl-a`
 can move that same conversation to an account with room; a busy session can queue the
-move until it becomes idle.
+move until it becomes idle. Left where it is, a session the limit cut off mid-work
+carries on by itself once the limit resets, with or without a terminal attached
+(`resume_after_limit`).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/account-capacity-mobile-dark.svg">

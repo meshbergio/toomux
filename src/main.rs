@@ -3,8 +3,8 @@ mod account_cli;
 use toomux::setup::{BEGIN, END};
 use toomux::{
     actions, archive, capture, config, context_policy, handover, hygiene, index, install, jobs,
-    mcp, memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state, tmux,
-    tokens, ui, upkeep, usage, voyage, watch,
+    limits, mcp, memory, paths, provider, queue, registry, remote, scene, setup, snapshot, state,
+    tmux, tokens, ui, upkeep, usage, voyage, watch,
 };
 
 use anyhow::{Context, Result, bail};
@@ -106,11 +106,27 @@ enum Cmd {
     },
     /// Move a session running in a plain terminal into tmux
     Adopt { target: String },
+    /// Start a new session in a folder (default: here), in a tmux server of
+    /// its own, as ctrl-n / alt-n in toomux does
+    New {
+        dir: Option<String>,
+        /// Account name; by default the one toomux picks (a rule, the
+        /// account sessions there use, else one not at its limit)
+        #[arg(long)]
+        account: Option<String>,
+        /// Only start it: print its pane instead of going there
+        #[arg(long)]
+        detach: bool,
+    },
     /// Reopen conversations that aren't running (lost with their tmux
     /// server, from before a restart, or pinned), each in a tmux server of
     /// its own: session-id prefix or name
     Reopen {
         targets: Vec<String>,
+        /// For a conversation toomux has no record of (found by its id in
+        /// the accounts' transcripts): the account to open it on
+        #[arg(long)]
+        account: Option<String>,
         /// Everything from before the restart, once (the status tick runs
         /// this after a reboot)
         #[arg(long)]
@@ -179,7 +195,13 @@ enum Cmd {
     Mcp,
     /// Start due handovers after each of these many seconds (used by the Stop hook)
     #[command(hide = true)]
-    Tick { after: Vec<u64> },
+    Tick {
+        after: Vec<u64>,
+        /// Instead: wait until this time (ms since the epoch, a usage
+        /// limit's reset) and carry on what the limit stopped
+        #[arg(long, conflicts_with = "after")]
+        at: Option<i64>,
+    },
     /// Hand a session over to a fresh one now (normally automatic)
     Handover { target: String },
     /// Background commands toomux is looking after
@@ -288,6 +310,13 @@ enum VoyageCmd {
     },
     /// End a voyage (its id, or its session)
     Clear { target: String },
+    /// Pause a voyage (its id, or its session) until you carry it on
+    Pause { target: String },
+    /// Carry a paused voyage on (its id, or its session)
+    Resume { target: String },
+    /// Move a voyage onto another conversation (a running session's pid,
+    /// session-id prefix or name, or a conversation id)
+    Rebind { target: String, session: String },
     /// Draw a voyage's scene, for a look at it
     #[command(hide = true)]
     Scene {
@@ -535,6 +564,11 @@ fn main() -> Result<()> {
             for s in registry::restorable(&cfg, &live) {
                 match actions::revive(&cfg, &s) {
                     Ok(_) => ok.push(s.id.clone()),
+                    // Still running (its registry file was what went): not
+                    // to be offered again, nor counted as reopened.
+                    Err(e) if e.is::<toomux::running::AlreadyRunning>() => {
+                        snapshot::forget(std::slice::from_ref(&s.id));
+                    }
                     Err(e) => failed.push(format!("{}: {e}", s.title)),
                 }
             }
@@ -553,16 +587,79 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Cmd::Reopen { targets, .. }) => {
+        Some(Cmd::New {
+            dir,
+            account,
+            detach,
+        }) => {
+            let folder = match dir {
+                Some(d) => config::expand(&d),
+                None => std::env::current_dir().context("the current folder")?,
+            };
+            let folder = std::fs::canonicalize(&folder)
+                .ok()
+                .filter(|p| p.is_dir())
+                .with_context(|| format!("{} isn't a folder", folder.display()))?
+                .display()
+                .to_string();
+            if cfg.accounts.is_empty() {
+                bail!("no accounts configured: run toomux init");
+            }
+            let live = registry::load(&cfg);
+            let (acct, why) = match account {
+                Some(name) => (
+                    cfg.account_by_name(&name)
+                        .with_context(|| format!("no account named '{name}' ({})", names(&cfg)))?,
+                    "asked",
+                ),
+                None => toomux::places::account_for(&cfg, &folder, &live),
+            };
+            let args = toomux::places::new_args(&cfg, &live);
+            let pane = actions::start(&cfg, &folder, acct, &args)?;
+            println!(
+                "started in {} on {} ({why}): {pane}",
+                config::tilde(&folder),
+                cfg.accounts[acct].name
+            );
+            if let Some(note) = actions::needs_person(&pane) {
+                println!("  {note}: answer it there");
+            }
+            if !detach && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                actions::jump_pane(&pane)?;
+            }
+            Ok(())
+        }
+        Some(Cmd::Reopen {
+            targets, account, ..
+        }) => {
             let live = registry::load(&cfg);
             let gone = registry::reopenable(&cfg, &live);
+            let account = match account.as_deref() {
+                Some(name) => Some(
+                    cfg.account_by_name(name)
+                        .with_context(|| format!("no account named {name}"))?,
+                ),
+                None => None,
+            };
             let mut failed = 0;
             for t in &targets {
-                let r = registry::find(&gone, t).and_then(|s| {
-                    let pane = actions::revive(&cfg, s)?;
-                    snapshot::forget(std::slice::from_ref(&s.id));
-                    Ok(format!("{} reopened ({pane})", s.title))
-                });
+                // One toomux knows of first; else any conversation by its id.
+                let r = registry::find(&gone, t)
+                    .cloned()
+                    .or_else(|_| registry::conversation(&cfg, t, account, &live))
+                    .and_then(|mut s| {
+                        if account.is_some() {
+                            s.account = account;
+                        }
+                        let pane = actions::revive(&cfg, &s)?;
+                        snapshot::forget(std::slice::from_ref(&s.id));
+                        Ok(match actions::needs_person(&pane) {
+                            Some(note) => {
+                                format!("{} reopened ({pane}) · {note}: answer it there", s.title)
+                            }
+                            None => format!("{} reopened ({pane})", s.title),
+                        })
+                    });
                 match r {
                     Ok(m) => println!("{m}"),
                     Err(e) => {
@@ -645,7 +742,11 @@ fn main() -> Result<()> {
             _ => Ok(()),
         },
         Some(Cmd::Mcp) => mcp::serve(),
-        Some(Cmd::Tick { after }) => {
+        Some(Cmd::Tick { at: Some(at), .. }) => {
+            limits::wake_at(&cfg, at);
+            Ok(())
+        }
+        Some(Cmd::Tick { after, at: None }) => {
             handover::tick(&cfg, &after);
             Ok(())
         }
@@ -720,7 +821,7 @@ fn main() -> Result<()> {
         Some(Cmd::Voyage { what }) => {
             let now = registry::now_ms();
             match what.unwrap_or(VoyageCmd::List) {
-                VoyageCmd::List => print!("{}", voyage::list(now)),
+                VoyageCmd::List => print!("{}", voyage::list(&cfg, now)),
                 VoyageCmd::Show { id } => {
                     use std::io::IsTerminal;
                     let width = std::io::stdout().is_terminal().then(|| {
@@ -731,24 +832,18 @@ fn main() -> Result<()> {
                     print!("{}", voyage::show(&id, now, width)?)
                 }
                 VoyageCmd::Set { target, outcome } => {
-                    // Words as typed; a --check command keeps its spaces.
-                    let words: Vec<String> = outcome
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| {
-                            if i > 0 && outcome[i - 1] == "--check" {
-                                format!("\"{w}\"")
-                            } else {
-                                w.clone()
-                            }
-                        })
-                        .collect();
-                    println!(
-                        "{}",
-                        voyage::set_from_outside(&cfg, &target, &words.join(" "))?
-                    )
+                    // Words as the shell split them: a --check command keeps
+                    // its spaces and its own flags.
+                    println!("{}", voyage::set_from_outside(&cfg, &target, &outcome)?)
                 }
                 VoyageCmd::Clear { target } => println!("{}", voyage::clear(&target)?),
+                VoyageCmd::Pause { target } => println!("{}", voyage::pause_from_outside(&target)?),
+                VoyageCmd::Resume { target } => {
+                    println!("{}", voyage::resume_from_outside(&cfg, &target)?)
+                }
+                VoyageCmd::Rebind { target, session } => {
+                    println!("{}", voyage::rebind_to(&cfg, &target, &session)?)
+                }
                 VoyageCmd::Scene {
                     progress,
                     sea,
@@ -882,7 +977,16 @@ fn jump_pin(cfg: &Config, all: &[registry::Session], n: usize) -> Result<()> {
         .iter()
         .find(|s| s.id == pin.id)
         .context("pin vanished")?;
-    let pane = actions::revive(cfg, s)?;
+    let pane = match actions::revive(cfg, s) {
+        Ok(pane) => pane,
+        // Open already, where toomux's registry couldn't see it: go there.
+        Err(e) => match e.downcast_ref::<toomux::running::AlreadyRunning>() {
+            Some(toomux::running::AlreadyRunning { pane: Some(p), .. }) => {
+                return actions::jump_pane(p);
+            }
+            _ => return Err(e),
+        },
+    };
     actions::notify(&format!("reopening {}", s.title));
     actions::jump_pane(&pane)
 }
@@ -1214,6 +1318,7 @@ fn names(cfg: &Config) -> String {
 fn list(cfg: &Config, json: bool) -> Result<()> {
     let all = registry::load(cfg);
     let now = registry::now_ms();
+    limits::observe(cfg, &all, now);
     if json {
         let v: Vec<_> = all
             .iter()
@@ -1268,6 +1373,7 @@ fn status_line(cfg: &Config) -> String {
     // tick tmux already runs.
     handover::start_due(cfg, &all, now);
     voyage::tick(&all, now);
+    limits::observe(cfg, &all, now);
     index_in_background(now);
     if due_every("upkeep.stamp", 3_600_000, now) {
         in_background(&["upkeep", "--hourly"]);
@@ -1599,6 +1705,11 @@ fn what_acts(cfg: &Config) -> String {
         (cfg.tidy_worktrees, "worktrees: daily, clean, merged, idle git worktrees are removed (never branches or changes)".into(), "tidy_worktrees = false"),
         (cfg.archive_transcripts, "archive: every transcript kept compressed, past Claude Code's 30-day cleanup".into(), "archive_transcripts = false"),
         (cfg.reopen_after_restart, "after a reboot: what was running reopens by itself".into(), "reopen_after_restart = false"),
+        (
+            cfg.limit_resume() != limits::Resume::Off,
+            "after a usage limit resets: sessions it cut off mid-work close Claude's limit dialog and carry on".into(),
+            "resume_after_limit = \"off\"",
+        ),
     ];
     let mut out = format!(
         "\nwhat toomux does by itself (each a line in {}):\n",
@@ -1713,6 +1824,10 @@ fn where_() -> Result<()> {
         "  state    {}  {}  memory, usage, handovers, kept outputs, reports",
         t(&paths::state()),
         human(du(&paths::state()))
+    );
+    println!(
+        "  errors   {}  what went wrong on screen, kept to ~256KB (and .1)",
+        t(&paths::error_log())
     );
     println!(
         "  data     {}  {}  the transcript archive",

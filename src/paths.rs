@@ -27,10 +27,22 @@ pub fn config() -> PathBuf {
 pub fn state() -> PathBuf {
     match one_home() {
         Some(h) => h.join("state"),
-        None => dirs::state_dir()
+        // XDG_STATE_HOME is honoured where it's set, macOS included (which
+        // has no state folder of its own, so dirs ignores it there).
+        None => std::env::var_os("XDG_STATE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(dirs::state_dir)
             .unwrap_or_else(|| crate::config::home().join(".local/state"))
             .join("toomux"),
     }
+}
+
+/// What went wrong in toomux's own screens, one line each (a message on
+/// screen fades in seconds).
+pub fn error_log() -> PathBuf {
+    state().join("errors.log")
 }
 
 /// What is worth backing up: the transcript archive.

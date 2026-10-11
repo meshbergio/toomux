@@ -94,6 +94,11 @@ pub struct Session {
     pub env: Vec<(String, String)>,
     pub tty: Option<String>,
     pub pane: Option<Pane>,
+    /// Running, but Claude's own registry has no record of it: found by its
+    /// process in one of the tmux panes. Its state isn't known.
+    pub unregistered: bool,
+    /// Another live process has the same conversation open (its pid).
+    pub twin: Option<i32>,
 }
 
 impl Session {
@@ -134,6 +139,12 @@ impl Session {
     /// Some("back sat 5pm"), Some("2h")). The time is how long it has been in
     /// this state.
     pub fn state_parts(&self, now: i64) -> (String, Option<String>, Option<String>) {
+        if self.unregistered {
+            return ("running".into(), Some(UNREGISTERED.into()), None);
+        }
+        if let Some(pid) = self.twin {
+            return ("open twice".into(), Some(format!("also pid {pid}")), None);
+        }
         let since = (self.since_ms > 0).then(|| ago(now - self.since_ms));
         if self.restore.is_some() {
             return ("before the restart".into(), None, since);
@@ -144,6 +155,9 @@ impl Session {
         use crate::handover::Phase;
         match &self.handover {
             Some(Phase::Running) => return ("handing over".into(), None, since),
+            Some(Phase::Waiting(note)) => {
+                return ("handing over".into(), Some(note.clone()), since);
+            }
             Some(Phase::Asked { written: false }) => {
                 return (
                     "handing over".into(),
@@ -194,6 +208,12 @@ impl Session {
     }
 
     pub fn status_text(&self, now: i64) -> String {
+        if self.unregistered {
+            return format!("running · {UNREGISTERED}");
+        }
+        if let Some(pid) = self.twin {
+            return format!("open twice · also pid {pid}: close one");
+        }
         if self.restore.is_some() {
             return format!(
                 "was running {} ago, before the restart",
@@ -226,23 +246,33 @@ impl Session {
     }
 
     pub fn transcript(&self, cfg: &Config) -> Option<PathBuf> {
-        let dir: String = self
-            .cwd
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
+        let dir = project_dir_name(&self.cwd);
         let file = format!("{}.jsonl", self.id);
-        let mut roots: Vec<PathBuf> = self
-            .config_dir
-            .iter()
-            .map(|d| crate::config::expand(d))
-            .collect();
+        // The config folder it runs with first (Claude's default when it
+        // runs with none); a placeholder only knows its account.
+        let own = match &self.config_dir {
+            Some(d) => Some(crate::config::expand(d)),
+            None if !self.dormant => Some(crate::config::home().join(".claude")),
+            None => self
+                .account
+                .filter(|a| *a < cfg.accounts.len())
+                .map(|a| cfg.account_dir(a)),
+        };
+        let mut roots: Vec<PathBuf> = own.into_iter().collect();
         roots.extend((0..cfg.accounts.len()).map(|i| cfg.account_dir(i)));
         roots
             .into_iter()
             .map(|r| r.join("projects").join(&dir).join(&file))
             .find(|p| p.is_file())
     }
+}
+
+/// The folder under `projects/` Claude keeps a working folder's
+/// conversations in.
+pub fn project_dir_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// When something comes back, briefly: "back 5pm", "back sat 5pm",
@@ -314,7 +344,11 @@ pub fn alive(pid: i32, start: Option<&str>) -> bool {
 pub fn load(cfg: &Config) -> Vec<Session> {
     let st = crate::state::State::load();
     let background_jobs = crate::jobs::running_sessions();
-    let mut panes = tmux::panes_by_tty();
+    let rows = tmux::pane_rows();
+    let mut panes: std::collections::HashMap<String, Pane> = rows
+        .iter()
+        .map(|(tty, pane, _)| (tty.clone(), pane.clone()))
+        .collect();
     // Servers of other people's making (`tmux -L work`) are only asked when a
     // session is found in one, by the TMUX its process was started with.
     let mut asked: Vec<String> = Vec::new();
@@ -431,6 +465,8 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 env,
                 tty,
                 pane,
+                unregistered: false,
+                twin: None,
             };
             let meta = s
                 .transcript(cfg)
@@ -465,6 +501,8 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             out.push(s);
         }
     }
+    out.extend(unregistered(cfg, &st, &rows, &out));
+    mark_twins(&mut out);
     // What a continued session is on, from the brief it continued from
     // (Claude's own summary of it only says "Handover continuation").
     let ids: Vec<&str> = out.iter().map(|s| s.id.as_str()).collect();
@@ -481,6 +519,114 @@ pub fn load(cfg: &Config) -> Vec<Session> {
         }
     }
     out.sort_by(|a, b| a.state.cmp(&b.state).then(b.since_ms.cmp(&a.since_ms)));
+    out
+}
+
+/// The same conversation open in two processes: both write its transcript.
+/// Say so on each rather than list one and hide the other.
+fn mark_twins(sessions: &mut [Session]) {
+    let held: Vec<(String, i32)> = sessions.iter().map(|s| (s.id.clone(), s.pid)).collect();
+    for s in sessions {
+        s.twin = held
+            .iter()
+            .find(|(id, pid)| *id == s.id && *pid != s.pid)
+            .map(|(_, pid)| *pid);
+    }
+}
+
+const UNREGISTERED: &str = "not in Claude's session registry";
+
+/// Claude processes in tmux panes that Claude's registry has no record of
+/// (the file was lost, or never written), so they're still listed, can be
+/// jumped to and closed, and aren't opened a second time. Only the panes
+/// already listed are looked at: the pane's own process, and in toomux's own
+/// servers (one session each) the processes under it.
+fn unregistered(
+    cfg: &Config,
+    st: &crate::state::State,
+    rows: &[(String, Pane, Option<i32>)],
+    known: &[Session],
+) -> Vec<Session> {
+    let mut out: Vec<Session> = Vec::new();
+    for (tty, pane, pid) in rows {
+        let Some(pid) = *pid else { continue };
+        if known.iter().any(|s| s.tty.as_deref() == Some(tty.as_str())) {
+            continue;
+        }
+        let ours = tmux::server_of(&pane.id).is_some_and(|sv| sv.starts_with(tmux::OWN));
+        let mut candidates = vec![pid];
+        if ours {
+            candidates.extend(crate::platform::descendants(pid));
+        }
+        let Some(h) = candidates
+            .into_iter()
+            .filter(|p| !known.iter().chain(&out).any(|s| s.pid == *p))
+            .find_map(crate::running::holder_at)
+            .filter(|h| !crate::running::has_record(cfg, h.pid))
+        else {
+            continue;
+        };
+        let Some(proc_start) = proc_start(h.pid) else {
+            continue;
+        };
+        let Some(cwd) = crate::platform::cwd(h.pid).map(|c| c.display().to_string()) else {
+            continue;
+        };
+        let environ = crate::platform::environ(h.pid);
+        let config_dir = environ
+            .iter()
+            .find_map(|v| v.strip_prefix("CLAUDE_CONFIG_DIR="))
+            .map(str::to_string);
+        let name = cwd.rsplit('/').next().unwrap_or("session").to_string();
+        let mut s = Session {
+            pid: h.pid,
+            proc_start: Some(proc_start),
+            id: h.id,
+            cwd,
+            title: name.clone(),
+            name,
+            topic: None,
+            pr: None,
+            queued: None,
+            pin: None,
+            dormant: false,
+            restore: None,
+            // Nothing says what it's doing: never treat it as safe to restart.
+            state: State::Working,
+            waiting_for: None,
+            limit: None,
+            handover: None,
+            since_ms: now_ms(),
+            started_ms: 0,
+            account: cfg.account_for(config_dir.as_deref()),
+            config_dir,
+            args: crate::platform::cmdline(h.pid),
+            env: environ
+                .iter()
+                .filter_map(|v| v.split_once('='))
+                .filter(|(k, _)| carry_env(k))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            tty: Some(tty.clone()),
+            pane: Some(pane.clone()),
+            unregistered: true,
+            twin: None,
+        };
+        let meta = s
+            .transcript(cfg)
+            .map(|p| crate::transcript::meta(&p))
+            .unwrap_or_default();
+        if let Some(n) = st.names.get(&s.id) {
+            s.title = n.clone();
+        } else if let Some(t) = meta.custom.clone().or(meta.title.clone()) {
+            s.title = t;
+        } else if let Some(p) = &meta.last_prompt {
+            s.title = prompt_title(p);
+        }
+        s.pr = meta.pr.clone();
+        s.pin = st.slot_of(&s.id);
+        out.push(s);
+    }
     out
 }
 
@@ -543,6 +689,8 @@ pub fn dormant(cfg: &Config, live: &[Session]) -> Vec<Session> {
                 env: vec![],
                 tty: None,
                 pane: None,
+                unregistered: false,
+                twin: None,
             };
             if let Some(t) = s.transcript(cfg) {
                 let modified = std::fs::metadata(&t).and_then(|m| m.modified()).ok();
@@ -618,6 +766,8 @@ fn placeholders(
                 env: e.context_env.clone(),
                 tty: None,
                 pane: None,
+                unregistered: false,
+                twin: None,
             };
             if let Some(t) = s.transcript(cfg) {
                 s.pr = crate::transcript::meta(&t).pr;
@@ -625,6 +775,117 @@ fn placeholders(
             s
         })
         .collect()
+}
+
+/// Any conversation an account's `projects/` holds, by session-id prefix,
+/// as a placeholder to reopen: one that was never pinned or recorded (a
+/// voyage's conversation, say). On `account` if given, else the account
+/// its folder's rules or recent use pick; the folder is the one the
+/// transcript says it ran in.
+pub fn conversation(
+    cfg: &Config,
+    prefix: &str,
+    account: Option<usize>,
+    live: &[Session],
+) -> anyhow::Result<Session> {
+    use anyhow::{Context, bail};
+    if prefix.len() < 4 || !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        bail!("no session matches '{prefix}'");
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for i in 0..cfg.accounts.len() {
+        let projects = cfg.account_dir(i).join("projects");
+        // Accounts that share one projects folder: look once.
+        let real = std::fs::canonicalize(&projects).unwrap_or(projects.clone());
+        if seen.contains(&real) {
+            continue;
+        }
+        seen.push(real);
+        for dir in std::fs::read_dir(&projects).into_iter().flatten().flatten() {
+            for f in std::fs::read_dir(dir.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let name = f.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && name.ends_with(".jsonl") {
+                    found.push(f.path());
+                }
+            }
+        }
+    }
+    let path = match found.as_slice() {
+        [] => bail!("no session matches '{prefix}'"),
+        [one] => one.clone(),
+        _ => bail!(
+            "'{prefix}' matches {} conversations · give more of its id",
+            found.len()
+        ),
+    };
+    let id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .context("its transcript has no name")?;
+    let cwd = transcript_cwd(&path).context("its transcript doesn't say which folder it ran in")?;
+    let account = match account {
+        Some(a) => a,
+        None => crate::places::account_for(cfg, &cwd, live).0,
+    };
+    let meta = crate::transcript::meta(&path);
+    let st = crate::state::State::load();
+    let title = st
+        .names
+        .get(&id)
+        .cloned()
+        .or(meta.custom.clone())
+        .or(meta.title.clone())
+        .unwrap_or_else(|| format!("conversation {}", &id[..8.min(id.len())]));
+    Ok(Session {
+        pid: -10_000,
+        proc_start: None,
+        id,
+        cwd,
+        name: title.clone(),
+        title,
+        topic: None,
+        pr: meta.pr.clone(),
+        queued: None,
+        pin: None,
+        dormant: true,
+        restore: None,
+        state: State::Idle,
+        waiting_for: None,
+        limit: None,
+        handover: None,
+        since_ms: 0,
+        started_ms: 0,
+        account: Some(account),
+        config_dir: None,
+        args: vec!["claude".to_string()],
+        env: vec![],
+        tty: None,
+        pane: None,
+        unregistered: false,
+        twin: None,
+    })
+}
+
+/// The working folder a transcript's entries were written in.
+fn transcript_cwd(path: &std::path::Path) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path).ok()?;
+    std::io::BufReader::new(f)
+        .lines()
+        .take(200)
+        .map_while(Result::ok)
+        .find_map(|l| {
+            serde_json::from_str::<serde_json::Value>(&l)
+                .ok()?
+                .get("cwd")?
+                .as_str()
+                .map(str::to_string)
+        })
 }
 
 /// A last prompt standing in for a title: its first line, cut at a word
@@ -857,6 +1118,173 @@ fn strip_ansi(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::State;
+
+    fn session(pid: i32, id: &str) -> super::Session {
+        super::Session {
+            pid,
+            proc_start: None,
+            id: id.into(),
+            cwd: "/nonexistent".into(),
+            name: "s".into(),
+            title: "s".into(),
+            topic: None,
+            pr: None,
+            queued: None,
+            pin: None,
+            dormant: false,
+            restore: None,
+            state: State::Idle,
+            waiting_for: None,
+            limit: None,
+            handover: None,
+            since_ms: 0,
+            started_ms: 0,
+            account: None,
+            config_dir: None,
+            args: vec![],
+            env: vec![],
+            tty: None,
+            pane: None,
+            unregistered: false,
+            twin: None,
+        }
+    }
+
+    #[test]
+    fn any_conversation_an_account_holds_can_be_found_to_reopen() {
+        let root = std::env::temp_dir().join(format!("toomux-conv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shared = root.join("shared").join("projects").join("-work-app");
+        std::fs::create_dir_all(&shared).unwrap();
+        let line = |cwd: &str| format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n");
+        let id = "abcd0123-0000-4000-8000-000000000001";
+        std::fs::write(shared.join(format!("{id}.jsonl")), line("/work/app")).unwrap();
+        // Two accounts on one projects folder, a third of its own.
+        let mut cfg = crate::config::Config::default();
+        cfg.accounts.clear();
+        for name in ["a", "b", "c"] {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            if name != "c" {
+                std::os::unix::fs::symlink(
+                    root.join("shared").join("projects"),
+                    dir.join("projects"),
+                )
+                .unwrap();
+            }
+            cfg.accounts.push(crate::config::Account {
+                name: name.into(),
+                config_dir: dir.display().to_string(),
+            });
+        }
+        let s = super::conversation(&cfg, "abcd0123", Some(2), &[]).unwrap();
+        assert_eq!(
+            (s.id.as_str(), s.cwd.as_str(), s.account, s.dormant),
+            (id, "/work/app", Some(2), true),
+            "found once though two accounts share it, on the account asked for"
+        );
+        assert!(super::conversation(&cfg, "ffff", None, &[]).is_err());
+        assert!(
+            super::conversation(&cfg, "../x", None, &[]).is_err(),
+            "only ids"
+        );
+        let other = root.join("c").join("projects").join("-work-app");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("abcd0123-0000-4000-8000-000000000002.jsonl"),
+            line("/work/app"),
+        )
+        .unwrap();
+        let e = super::conversation(&cfg, "abcd0123", None, &[]).unwrap_err();
+        assert!(e.to_string().contains("matches 2"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_claude_in_a_pane_without_a_registry_record_is_still_listed() {
+        use std::os::unix::process::CommandExt;
+        // Other tests point HOME (whose .claude/sessions is looked in) elsewhere.
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let id = "0f0f0f0f-1234-4abc-8def-000000000002";
+        let dir = std::env::temp_dir().join(format!("toomux-unreg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut claude = std::process::Command::new("sh")
+            .arg0("claude")
+            .args(["-c", "sleep 30; :", "--resume", id])
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        // Under load the process may not show its command line at once.
+        let t = std::time::Instant::now();
+        while crate::running::holder_at(claude.id() as i32).is_none()
+            && t.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let pane = |n: u32| crate::tmux::Pane {
+            id: format!("%{n}@toomux-test"),
+            session: "t".into(),
+            window_index: "0".into(),
+        };
+        let rows = vec![
+            (
+                "/dev/pts/9001".to_string(),
+                pane(1),
+                Some(claude.id() as i32),
+            ),
+            (
+                "/dev/pts/9002".to_string(),
+                pane(2),
+                Some(other.id() as i32),
+            ),
+            ("/dev/pts/9003".to_string(), pane(3), None),
+        ];
+        let mut cfg = crate::config::Config::default();
+        cfg.accounts.clear();
+        let st = crate::state::State::default();
+        let found = super::unregistered(&cfg, &st, &rows, &[]);
+        assert_eq!(found.len(), 1, "only the claude process: {found:?}");
+        let s = &found[0];
+        assert!(s.unregistered && s.id == id && s.pid == claude.id() as i32);
+        assert_eq!(
+            s.pane.as_ref().map(|p| p.id.as_str()),
+            Some("%1@toomux-test")
+        );
+        assert_eq!(
+            std::path::Path::new(&s.cwd),
+            std::fs::canonicalize(&dir).unwrap()
+        );
+        assert!(
+            !s.can_move(),
+            "its state isn't known: never restarted as idle"
+        );
+        assert_eq!(s.state_parts(0).0, "running");
+
+        // A registry record for that pane's terminal wins.
+        let mut known = session(1, "other");
+        known.tty = Some("/dev/pts/9001".into());
+        assert!(super::unregistered(&cfg, &st, &rows, &[known]).is_empty());
+
+        for c in [&mut claude, &mut other] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_conversation_in_two_processes_is_flagged_on_both() {
+        let mut all = vec![session(10, "a"), session(11, "a"), session(12, "b")];
+        super::mark_twins(&mut all);
+        assert_eq!(all[0].twin, Some(11));
+        assert_eq!(all[1].twin, Some(10));
+        assert_eq!(all[2].twin, None);
+        assert_eq!(all[0].state_parts(0).0, "open twice");
+    }
 
     #[test]
     fn live_background_jobs_outlive_the_foreground_turn() {

@@ -747,6 +747,8 @@ mod tests {
             env: vec![(POLICY_ENV.into(), raw)],
             tty: None,
             pane: None,
+            unregistered: false,
+            twin: None,
         };
         assert!(needs_policy_boundary_for_session(&session, &current));
     }
@@ -780,6 +782,8 @@ mod tests {
             env: vec![],
             tty: None,
             pane: None,
+            unregistered: false,
+            twin: None,
         };
 
         let policy = for_session(&cfg, &session);
