@@ -1947,20 +1947,29 @@ pub fn tick(sessions: &[Session], now: i64) {
         if !crate::actions::prompt_empty(&pane) || crate::limits::claude_continuing(&pane) {
             continue;
         }
-        if q.status == Status::Paused {
-            resume(&mut q);
-        }
-        q.at_limit = false;
-        save(&q);
-        log(&q, "limit lifted", "");
-        let _ = crate::actions::type_prompt(
+        // Typed first: a message that didn't send leaves the voyage waiting,
+        // for the next tick to try again.
+        if let Err(e) = crate::actions::type_prompt(
             &pane,
             &format!(
                 "[toomux voyage {}] The usage limit has lifted: carry on. {}",
                 q.id,
                 brief_line(&q)
             ),
-        );
+        ) {
+            log(
+                &q,
+                "limit lifted",
+                &format!("couldn't tell it to carry on: {e}"),
+            );
+            continue;
+        }
+        if q.status == Status::Paused {
+            resume(&mut q, "the usage limit lifted");
+        }
+        q.at_limit = false;
+        save(&q);
+        log(&q, "limit lifted", "");
     }
 }
 

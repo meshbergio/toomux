@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// How a handover's successor is started (handover.rs writes it): its first
 /// prompt names the conversation it took over from.
-pub(super) const HANDOVER_PROMPT: &str = "Continue from a handover. The previous session here (id ";
+pub(super) const HANDOVER_PROMPT: &str = crate::handover::CONTINUE_PROMPT;
 
 fn plain_id(id: &str) -> bool {
     !id.is_empty()

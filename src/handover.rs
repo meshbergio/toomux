@@ -1008,6 +1008,10 @@ fn brief_since(session: &str, at_ms: i64) -> bool {
             .is_some_and(|d| d.as_millis() as i64 > at_ms)
 }
 
+/// How a handover's fresh session is first prompted, up to the old id;
+/// crate::voyage recognises a successor by it.
+pub const CONTINUE_PROMPT: &str = "Continue from a handover. The previous session here (id ";
+
 /// Every handover start and outcome, one JSON line each, so a failure can be
 /// looked into after its message has left the screen.
 fn log(what: Value) {
@@ -1722,7 +1726,7 @@ fn hand_over(
     let name = st.names.get(&s.id).cloned();
     let chosen_for_you = st.chosen.contains(&s.id);
     let mut fresh = format!(
-        "Continue from a handover. The previous session here (id {id}) reached {k}k tokens of context and handed over \
+        "{CONTINUE_PROMPT}{id}) reached {k}k tokens of context and handed over \
          to you. Read {path} first: it is its complete brief. Anything else from that conversation can be found with the toomux \
          mem_search tool (session {short}).",
         id = s.id,
