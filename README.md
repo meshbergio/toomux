@@ -28,6 +28,7 @@
   <a href="#keep-work-moving">Limits &amp; restarts</a> ·
   <a href="#voyages">Voyages</a> ·
   <a href="#memory-that-survives-the-session">Memory</a> ·
+  <a href="#how-it-works">How it works</a> ·
   <a href="#faq">FAQ</a> ·
   <a href="GUIDE.md">Guide</a>
 </p>
@@ -36,7 +37,7 @@
   <img src="assets/handover.gif" alt="A Claude Code session passes 250k tokens of context. At the end of its turn toomux asks it to write a handover brief; it writes the goal, what is done, what is still running and the next steps. A fresh session starts in the same pane, reads the brief, and carries on with the next step at about 20k tokens of context." width="100%">
 </p>
 
-<p align="center"><sub>A real handover, start to finish: the session writes its own brief, and a fresh one picks the work up in the same pane.</sub></p>
+<p align="center"><sub>How a handover runs: the session writes its own brief, and a fresh one picks the work up in the same pane. Staged from real prompts and briefs.</sub></p>
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/headline-mobile-dark.svg">
@@ -47,7 +48,7 @@
 </picture>
 
 <p align="center"><sub>
-  33,026 real calls just before toomux's first handover (25–29 Sep 2026) against 33,026 with it (30 Sep–1 Oct), same workload, same prices.
+  33,026 real calls just before toomux's first handover (25–29 Sep 2026) against 33,026 with it (30 Sep–1 Oct), same workload, same prices. Per call, not per task.
   <a href="docs/EVIDENCE.md">How it was measured</a> · <a href="#measure-your-own">measure your own</a>
 </sub></p>
 
@@ -66,6 +67,13 @@ Homebrew, npm, upgrades and uninstalling are [below](#install).
 > [!TIP]
 > Already have sessions running in plain terminal tabs? toomux lists them too, and
 > `ctrl-o` brings one into tmux with its conversation intact.
+
+> [!IMPORTANT]
+> **On macOS, turn on Option as Meta.** toomux's global keys are `alt-*` (`alt-s`,
+> `alt-n`, `alt-b`, `alt-m`, `alt-?`, `alt-1..9`), and macOS terminals type symbols
+> with Option instead. Terminal.app: Settings → Profiles → Keyboard → *Use Option as
+> Meta key*. iTerm2: Settings → Profiles → Keys → Left Option key → *Esc+*. Ghostty:
+> `macos-option-as-alt = true`. Inside tmux, `prefix space` also opens toomux.
 
 ## Why this exists
 
@@ -126,10 +134,10 @@ you didn't choose. toomux does the opposite.
    file you can read, at `~/.local/state/toomux/handovers/`.
 3. **A fresh session picks it up in the same pane,** with the brief as its starting
    point. Subagents and background commands carry over. The old conversation is kept
-   whole and searchable; nothing is summarised away.
+   whole and searchable, so nothing is lost even though the brief is a summary.
 
 Thresholds are per model, provider, account or session: a 32k local model can hand
-over far earlier than a 1M Opus session. See [context policies](GUIDE.md#context-policies).
+over far earlier than a 1M Opus session. See [context policies](GUIDE.md#context-policies-different-limits-per-model-or-account).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/evidence/matched-cohort-mobile-dark.svg">
@@ -256,9 +264,9 @@ reread its own changes, look for the skipped test or the TODO.
 ## Memory that survives the session
 
 The answer doesn't have to be in the current conversation. Every conversation,
-handover brief and project memory file is indexed as it happens, and every session
-can search all of it through toomux's MCP tool. A session in one project can find the
-decision another session made in another project last week, and reuse it.
+handover brief and project memory file is indexed as it happens, and sessions search
+it through toomux's MCP tool. A session in one project can find the decision another
+session made in another project last week, and reuse it.
 
 <p align="center">
   <img src="assets/memory.png" alt="A billing-service session searching toomux memory for how atlas-api implemented rate limiting earlier, finding the decision and reusing it" width="100%">
@@ -269,9 +277,48 @@ transcripts are archived compressed and kept past Claude Code's default cleanup,
 complete old turn can still be recovered. `alt-m` shows it all as a graph: which
 session wrote which brief, who continued from it, what each one read.
 
+> [!NOTE]
+> **What a search can see.** Memory is local, one per machine, and has no account
+> boundary. A search looks in the current project and global notes first; when that
+> finds fewer results than asked for, it fills the rest from other projects, marked
+> as such. `where: "all"` searches every project outright. If one account's work
+> (a client's, say) must never surface in another's sessions, don't run both through
+> the same toomux memory. `toomux mem --forget` removes an entry.
+
 <p align="center">
   <img src="assets/graph-chain.png" alt="One body of work continued across 22 sessions and 22 linked handover briefs in the memory graph" width="100%">
 </p>
+
+## How it works
+
+toomux is one Rust binary that sits beside Claude Code, not in front of it.
+
+- **It reads what Claude Code already writes:** its session records, transcripts and
+  usage, to know what every session is doing and how big its context is.
+- **Claude Code hooks** tell it when a turn ends or a tool is about to run, which is
+  where a handover is asked for, and where long command output is capped and kept.
+- **tmux** holds every session, so toomux can show it live, start a fresh one in the
+  same pane, and type into a prompt it has just read back as empty.
+- **One local SQLite file** holds the memory index, served to sessions through an MCP
+  server.
+- **No daemon.** The watching is done by `toomux status`, which tmux already runs
+  every couple of seconds for its status bar, and by the hooks above.
+
+## Status and limitations
+
+toomux is 0.x and used every day, but it is young. Expect config and command details
+to change between minor versions; the [changelog](CHANGELOG.md) says what changed.
+
+- **Linux and macOS, and Windows through WSL 2.** Not native Windows.
+- **tmux 3.2 or later.** The self-contained install brings its own.
+- **Tied to Claude Code's behaviour.** Besides hooks and files, toomux reads a few
+  on-screen strings (the usage-limit dialog, first-run screens). They're checked against
+  Claude Code 2.1.296 and kept in one place, but a wording change in a new Claude Code
+  release can break limit recovery until toomux catches up.
+- **Phone and browser access is coming.** It isn't ready for general use yet.
+
+toomux is an independent project. It is not affiliated with, or endorsed by,
+Anthropic. Claude and Claude Code are trademarks of Anthropic.
 
 ## FAQ
 
@@ -306,9 +353,7 @@ that was restarted, a voyage or handover that was under way.
 Nothing of yours goes anywhere new. toomux has no telemetry and no server of its
 own; it reads and writes local files, and Claude Code talks to Anthropic exactly as it
 always does. The one request toomux makes itself is to ask Anthropic for each
-account's usage limits, with that account's own sign-in, so it can show them. Remote
-access is off unless you set it up, and goes over your own
-[ByteTraverse](#the-same-toomux-remotely) connection.
+account's usage limits, with that account's own sign-in, so it can show them.
 
 </details>
 
@@ -318,8 +363,11 @@ access is off unless you set it up, and goes over your own
 `toomux init --apply` adds tmux key bindings and a status segment (between marked
 lines in `~/.tmux.conf`), three Claude Code hooks, a status line and an MCP server in
 each account's settings, and a `/voyage` command, keeping backups of every file it
-edits. `toomux where` lists every place toomux reads or writes. `toomux uninstall`
-takes it all back; `--purge` also deletes toomux's own state.
+edits. Before it starts a session, it records folder trust in that account's
+`.claude.json` for a folder you picked yourself or already trust on another account,
+so Claude doesn't stop at that question again. `toomux where` lists every place
+toomux reads or writes. `toomux uninstall` takes it all back; `--purge` also deletes
+toomux's own state.
 
 </details>
 
@@ -327,11 +375,11 @@ takes it all back; `--purge` also deletes toomux's own state.
 <summary><strong>I use more than one Claude account. Does it handle that?</strong></summary>
 
 Yes: work and personal, or one per client. `toomux account setup` adds each account
-you've signed into with Claude Code. Every account's limits show side by side,
-history is shared across them, and a conversation can move from one to another
-without losing anything. toomux never creates accounts or shares credentials between
-them; how you use your accounts is between you and
-[Anthropic's terms](https://www.anthropic.com/legal/consumer-terms).
+you've signed into with Claude Code. Every account's limits show side by side, a
+conversation can move from one to another without losing anything, and accounts can
+share one history (`toomux account share`) or stand alone. toomux never creates
+accounts or shares credentials between them; how you use your accounts is between
+you and [Anthropic's terms](https://www.anthropic.com/legal/consumer-terms).
 
 </details>
 
@@ -354,46 +402,6 @@ that its text was sent, and gives up visibly (with a logged reason) rather than
 guessing. It never types over your unsent draft: if a handover is due while you're
 mid-sentence, it waits and tells you so; if it has to go ahead, your draft is saved
 into the brief so the fresh session has it.
-
-</details>
-
-## The same toomux, remotely
-
-Pair a phone, tablet or laptop over [ByteTraverse](https://toomux.com/remote/) and open
-the full toomux TUI in a browser at [toomux.com/remote](https://toomux.com/remote/), or
-in the native Android app. The workstation stays authoritative; each paired device
-gets its own isolated `toomux shell` on the host. It's opt-in, and local use never
-needs it.
-
-<details>
-<summary><strong>How remote access works</strong></summary>
-
-<p align="center">
-  <img src="assets/readme/android-native-qualified.png" alt="The native Android toomux client rendering the same host-side session system over ByteTraverse" width="100%">
-</p>
-
-For each paired device, the host starts an isolated `toomux shell`, captures its cell
-grid, and the client renders it and sends input back. The public site is the
-UI/bootstrap only; it is not a relay for session data. Browser and Android both need
-a ByteTraverse connection to the host, and toomux adds its own per-device
-authentication on top.
-
-```sh
-toomux remote serve
-toomux remote phone   # browser: scan the one-use pairing code at toomux.com/remote
-toomux remote pair    # Android
-```
-
-The exact boundaries: [web remote design](docs/MOBILE-WEB-REMOTE.md) ·
-[Android guide](android/README.md).
-
-<picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/architecture-mobile-dark.svg">
-  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/architecture-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/architecture-light.svg">
-  <img src="assets/readme/architecture-light.svg" alt="toomux product model: one host-side coordination system used locally through the full TUI, sidebar, normal tmux and automation, or remotely through ByteTraverse from a browser or the Android app" width="100%">
-</picture>
 
 </details>
 
@@ -433,13 +441,20 @@ toomux                   # or alt-s from anywhere in tmux
 
 Defaults are meant to be right out of the box: handover, restart recovery, recovery
 after limits, transcript archiving and memory upkeep are all on. Every setting is in
-the [Guide](GUIDE.md#setup).
+the [Guide](GUIDE.md#install-and-first-run).
 
 **Upgrade:** rerun the installer, `brew upgrade toomux`, or
 `npm install -g toomux@latest`.
 **Uninstall:** `toomux uninstall` (`--dry-run` to see what it would remove first,
 `--purge` to also delete toomux's own state and archive; your Claude Code memory is
 never touched).
+
+## Contributing
+
+Bug reports, Claude Code version breakages and ideas are all welcome in
+[issues](https://github.com/meshbergio/toomux/issues). If toomux saves you some
+babysitting, a star helps other people find it. Pull requests: start with
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

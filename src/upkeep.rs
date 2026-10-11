@@ -572,12 +572,12 @@ mod tests {
     #[test]
     fn folder_names_are_claude_codes() {
         assert_eq!(
-            mangle("/home/sam/AI Brain/workspaces"),
-            "-home-sam-AI-Brain-workspaces"
+            mangle("/home/me/AI Brain/workspaces"),
+            "-home-me-AI-Brain-workspaces"
         );
         assert_eq!(
-            mangle("/home/sam/Northwind_Platform_Workspace"),
-            "-home-sam-Northwind-Platform-Workspace"
+            mangle("/home/me/Northwind_Platform_Workspace"),
+            "-home-me-Northwind-Platform-Workspace"
         );
     }
 

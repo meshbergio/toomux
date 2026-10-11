@@ -258,21 +258,35 @@ installed=$("$install_root/current/bin/toomux" --version)
 runtime=$(TERMINFO_DIRS="$install_root/current/share/terminfo:" "$install_root/current/bin/tmux" -V)
 echo "toomux: installed $installed"
 echo "toomux: runtime $runtime"
-echo "toomux: $install_root/current"
+echo "toomux: bundle $install_root/current"
 echo "toomux: launcher $launcher"
 
 case ":$PATH:" in
   *":$bin_dir:"*) command_name=toomux ;;
   *)
     command_name="$launcher"
-    echo "toomux: note: $bin_dir is not on PATH in this shell"
+    case "${SHELL:-}" in
+      */zsh) rc="$HOME/.zshrc" ;;
+      */bash) rc="$HOME/.bashrc" ;;
+      */fish) rc="" ;;
+      *) rc="your shell's startup file" ;;
+    esac
+    echo "toomux: $bin_dir is not on your PATH yet. To add it:"
+    if [ -z "$rc" ]; then
+      echo "  fish_add_path $bin_dir"
+    else
+      echo "  echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc   # then open a new shell"
+    fi
     ;;
 esac
 
 if ! command -v claude >/dev/null 2>&1; then
-  echo "toomux: Claude Code is still required and is not installed by toomux"
+  echo "toomux: toomux runs Claude Code, which isn't installed yet: https://code.claude.com"
 fi
 echo
-echo "next: $command_name init --apply"
-echo "then: $command_name account setup   # optional, for multiple Claude Code accounts"
-echo "rollback later: $command_name rollback"
+echo "Next:"
+echo "  $command_name init --apply      # tmux keys, Claude Code hooks, status line (backed up)"
+echo "  $command_name                   # every session, one screen"
+echo
+echo "Several Claude Code accounts: $command_name account setup"
+echo "Undo this upgrade later:      $command_name rollback"

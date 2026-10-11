@@ -1330,7 +1330,7 @@ mod tests {
         let wrapped = vec![
             "/bin/bash".to_string(),
             "-c".to_string(),
-            "source /home/x/.claude-cingulum/shell-snapshots/snapshot-bash-123.sh 2>/dev/null || true && eval 'sleep 60'".to_string(),
+            "source /home/x/.claude-work/shell-snapshots/snapshot-bash-123.sh 2>/dev/null || true && eval 'sleep 60'".to_string(),
         ];
         assert!(super::native_background_argv(&wrapped));
 

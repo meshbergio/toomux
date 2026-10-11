@@ -2344,11 +2344,11 @@ mod tests {
         let gradle = "cd native-tv && ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug && cd .. && \
                       ./node_modules/.bin/vitest run cloudflare/worker && git diff --check";
         let (outcome, check, tier) = checked(&format!(
-            "finish Midnight to the handover's Definition of Done; don't weaken gates. --persistence relentless --check \"{gradle}\""
+            "finish the app to the handover's Definition of Done; don't weaken gates. --persistence relentless --check \"{gradle}\""
         ));
         assert_eq!(
             outcome,
-            "finish Midnight to the handover's Definition of Done; don't weaken gates."
+            "finish the app to the handover's Definition of Done; don't weaken gates."
         );
         assert_eq!(check.as_deref(), Some(gradle));
         assert_eq!(tier, Some(Persistence::Relentless));

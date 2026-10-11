@@ -635,7 +635,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.context_policy = vec![
             ContextPolicyRule {
-                account: Some("bonnie".into()),
+                account: Some("work".into()),
                 context_window_tokens: Some(1_000_000),
                 handover_turn_end_tokens: Some(200_000),
                 handover_tokens: Some(400_000),
@@ -664,7 +664,7 @@ mod tests {
         let browser = resolve(
             &cfg,
             PolicySubject {
-                account: Some("bonnie".into()),
+                account: Some("work".into()),
                 model: Some("chatgpt-browser".into()),
                 ..Default::default()
             },

@@ -6,17 +6,23 @@ so security reports are welcome.
 
 ## Reporting a vulnerability
 
-Please use GitHub's **Security → Report a vulnerability** flow when it is
-available for this repository. Do not publish credentials, transcripts,
-exploit details or other sensitive material in a public issue.
+Report it privately through GitHub:
+[**Report a vulnerability**](https://github.com/meshbergio/toomux/security/advisories/new)
+(also under the repository's **Security** tab). Only the maintainer sees the
+report. Please don't open a public issue, and don't post credentials,
+transcripts or exploit details anywhere public.
 
-If private vulnerability reporting is unavailable, open a minimal issue asking
-the maintainer for a private reporting channel without including the sensitive
-details.
+Include:
 
-Include the affected toomux version/commit, operating system, reproduction
-steps, expected impact and whether the issue requires local access or a
-malicious repository/session.
+- the toomux version (`toomux --version`) or commit;
+- the Claude Code version (`claude --version`), tmux version and operating
+  system;
+- steps to reproduce and the impact you expect;
+- whether it needs local access, or a malicious repository, session or
+  config.
+
+You'll get an acknowledgement within a week. Fixes are released before the
+details are published, and reporters are credited unless they ask not to be.
 
 ## Security model
 
@@ -52,13 +58,30 @@ through curl's standard input to Anthropic's
 https://api.anthropic.com/api/oauth/usage endpoint. The token is not placed
 on the process command line and toomux does not refresh or rewrite it.
 
-Other network activity is explicit or delegated:
+Other network activity is explicit, opt-in or delegated:
 
-- the installer downloads release artifacts and their SHA-256 checksums from
-  GitHub;
-- Claude Code sessions themselves communicate with the services configured in
-  Claude Code;
-- a user-supplied notify_command may send notices anywhere the user chooses.
+- **Installing:** `curl -fsSL https://toomux.com/install | sh` fetches the
+  install script from toomux.com. The script downloads release artifacts and
+  their SHA-256 checksums from GitHub releases and checks them before
+  installing. npm and Homebrew installs use those registries.
+- **Signing in an account:** when you add an account in toomux, it runs Claude
+  Code's own sign-in (`claude auth login`) and opens the claude.com link that
+  sign-in prints in your browser.
+- **Remote access (opt-in):** `toomux remote serve` runs an HTTP listener for
+  the phone and Android remotes. It refuses to bind anything but loopback or
+  a private-mesh address in 10.30.0.0/16, accepts peers only from that range,
+  and requires a per-device bearer token on every request. Device tokens are
+  stored hashed and can be revoked. Pairing codes are one-use and expire after
+  10 minutes (Android) or 15 minutes (browser). The pairing link points at toomux.com/remote/, but its secret
+  is carried in the URL fragment, which browsers never send to the server.
+- **Local model provider (optional):** if a local provider's key file exists,
+  toomux's status tick tells that provider which sessions are live, about
+  every 30 seconds. It does this by posting to a broker on 127.0.0.1 (port
+  34561 by default). `toomux provider` checks the provider's readiness on
+  127.0.0.1:34560. Without the key file, nothing is sent.
+- **Claude Code sessions** talk to the services configured in Claude Code.
+- **Notices:** a user-supplied notify_command may send notices anywhere the
+  user chooses.
 
 toomux has no telemetry service and does not upload its memory database or
 transcript archive to a toomux-operated server.
@@ -82,6 +105,11 @@ the original Claude Code transcript. Protect and back it up accordingly.
 
 ## Supported versions
 
-Security fixes are made on the current master branch and included in the next
-release. Reports against older versions should be checked against the current
-release when practical.
+| Version | Security fixes |
+| --- | --- |
+| Latest release | Yes |
+| master | Yes, ahead of the next release |
+| Older releases | No: please upgrade by rerunning the installer |
+
+Fixes land on master and ship in the next release. Check reports against an
+older version against the latest release first.

@@ -6,37 +6,83 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include credentials or private transcript content. Security vulnerabilities belong in the private security-reporting flow described in SECURITY.md.
+        Thanks for reporting. Don't paste credentials or private transcript content; trim logs to the lines that matter.
+        Security vulnerabilities go through the private flow in [SECURITY.md](https://github.com/meshbergio/toomux/security/policy), not here.
   - type: input
     id: version
     attributes:
-      label: toomux version / commit
-      placeholder: "toomux 0.1.0 or git SHA"
+      label: toomux version
+      description: Output of `toomux --version`, or the commit if you built it yourself.
+      placeholder: "toomux 0.4.4"
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`.
+      placeholder: "2.1.296 (Claude Code)"
+    validations:
+      required: true
+  - type: input
+    id: tmux
+    attributes:
+      label: tmux version
+      description: Output of `tmux -V`.
+      placeholder: "tmux 3.5a"
     validations:
       required: true
   - type: input
     id: platform
     attributes:
-      label: Platform
-      placeholder: "Linux distribution, macOS version, or WSL 2"
+      label: Operating system
+      placeholder: "Arch Linux, macOS 15.4, Ubuntu 24.04 on WSL 2"
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      placeholder: "Ghostty, iTerm2, Alacritty, Windows Terminal"
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed toomux
+      options:
+        - install script (toomux.com/install)
+        - Homebrew
+        - npm
+        - built from source
+        - other
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
-      label: Reproduction
-      description: Minimal steps that reproduce the problem.
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the problem.
+      placeholder: |
+        1. Start toomux in tmux
+        2. Press alt-n and pick a new folder
+        3. ...
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: What you expected
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
+      label: What happened instead
+      description: Include any message toomux showed.
     validations:
       required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From `errors.log`, `handovers/log.jsonl` or `limits/log.jsonl` in the state folder that `toomux where` shows. Trim to what matters.
+      render: text

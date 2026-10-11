@@ -1,129 +1,15 @@
 # toomux for Android
 
-Native Android toomux, reached through ByteTraverse.
-
-The main screen is not a mobile reinterpretation of toomux. The host starts an
-isolated `toomux shell` for each paired device, captures its ANSI cell grid, and
-the Android app renders that grid natively. Input goes back into the same shell.
-The result is the desktop product by construction: the same session ordering,
-state colours, account meters, grouping, filters, help, right-click session
-menu, live Claude pane, usage view and `alt-m` memory graph.
-
-Touch maps onto that grammar rather than replacing it:
-
-- tap = terminal mouse click;
-- the desktop footer remains visually unchanged, but its printed commands are
-  touch targets: for example `alt-m memory`, `alt-u usage`, `alt-s sessions`,
-  `alt-b list`, `enter focus`, `o browser` and `esc close` invoke those exact
-  toomux commands;
-- long-press a session = the real toomux right-click menu;
-- double-tap = toomux's real desktop double-click (for example, open a
-  session from the list);
-- tap the rendered `keys → …` footer = open the Android soft keyboard;
-- pinch = change terminal cell size and therefore the host TUI geometry;
-- long-press the toomux header = the real `?` help overlay in the normal shell;
-- in the TUI memory graph, tapping its printed `o browser` command (or using the
-  header gesture) opens the immersive GUI memory explorer full-screen.
-
-The GUI explorer is toomux's existing self-contained memory page, loaded into a
-locked-down WebView with file/content access disabled and all HTTP(S)
-subrequests blocked. The ordinary TUI remains a native Canvas renderer.
-
-The app is deliberately split from the VPN. ByteTraverse owns the encrypted
-device-to-host path and its Android `VpnService`; toomux owns the authenticated
-application protocol on top. No ByteTraverse Rust/JNI code is linked into the
-toomux APK.
-
-## Network and authority
-
-The default topology is:
-
-```text
-Android tablet                      workstation
-10.30.0.3                           10.30.0.1
-┌──────────────┐                    ┌──────────────────────┐
-│ toomux app   │ -- HTTP :7462 --> │ toomux remote serve │
-└──────┬───────┘                    └──────────┬───────────┘
-       │                                       │
-       └──── encrypted ByteTraverse path ──────┘
-```
-
-The HTTP hop is cleartext *inside* the encrypted ByteTraverse overlay. The
-server refuses wildcard, LAN and public binds; production binds must be
-loopback or `10.30.0.0/16`, and a mesh listener rejects peers outside the same
-range. The Android client independently refuses endpoints outside
-`10.30.0.0/16` (loopback is accepted only for local/ADB development).
-
-Network reachability is not authentication. Pairing creates a separate
-256-bit per-device bearer token:
-
-1. `toomux remote pair` creates an unbiased eight-digit one-time code, valid
-   for ten minutes. Only its SHA-256 digest is stored on the host.
-2. The app exchanges the code over the ByteTraverse path.
-3. The host stores only the new bearer token's SHA-256 digest.
-4. Android encrypts the bearer token at rest with a non-exportable AES-GCM key
-   in Android Keystore.
-5. **Forget device** revokes the host grant when reachable and removes the
-   local key/token. `toomux remote revoke <device-id>` and
-   `toomux remote revoke all` are the host-side fallback.
-
-The mobile API is intentionally a toomux protocol, not a general remote shell.
-Its primary surface is an authenticated TUI frame/input pair backed by a
-per-device tmux server. Text is sent literally, keys are validated, terminal
-mouse events are bounded to the negotiated grid, and revoking the device kills
-its display shell. The API also exposes the self-contained memory page.
-
-## Run the host
-
-The ByteTraverse peer must already give the Android device a route to
-`10.30.0.1`.
-
-```sh
-# foreground, good for first setup
-toomux remote serve
-
-# in another terminal, when the app asks to pair
-toomux remote pair
-```
-
-The app defaults to `http://10.30.0.1:7462`. Enter the one-time code and pair.
-
-For development only, loopback plus `adb reverse` can replace the ByteTraverse
-route while the UI is being worked on. That does not count as a transport
-qualification; production use is the `10.30.0.1:7462` path.
-
-On Linux, once the path has been tested, an opt-in user service can keep the
-endpoint available without changing the ordinary toomux install:
-
-```ini
-# ~/.config/systemd/user/toomux-remote.service
-[Unit]
-Description=toomux Android endpoint over ByteTraverse
-After=network-online.target
-
-[Service]
-ExecStart=%h/.local/bin/toomux remote serve
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-```
-
-Then:
-
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now toomux-remote.service
-```
-
-Use the actual `toomux` path in `ExecStart` if it is not
-`~/.local/bin/toomux`.
+The Android client for toomux's remote access, which is not available yet.
+The app renders a paired host's toomux TUI natively and sends touch and
+keyboard input back to it. It needs a network transport that isn't public
+yet, so there is no supported way to use it today. This folder is here so the
+code is built and tested alongside the rest of toomux.
 
 ## Build
 
 The app has no third-party runtime dependencies. It needs Android API 34 and a
-JDK capable of targeting Java 17.
+JDK that can target Java 17.
 
 ```sh
 cd android
@@ -131,37 +17,16 @@ printf 'sdk.dir=%s\n' "$HOME/Android/Sdk" > local.properties
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-The debug APK is:
+The debug APK is written to
+`android/app/build/outputs/apk/debug/app-debug.apk`.
 
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-For a connected development device:
-
-```sh
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n io.github.meshbergio.toomux/.MainActivity
-```
-
-For a signed release build, keep the release key outside the repository and set
-the four `TOOMUX_ANDROID_*` signing variables. From the repository root:
+For a signed release build, keep the release key outside the repository, set
+the four `TOOMUX_ANDROID_*` signing variables, and run from the repository
+root:
 
 ```sh
 scripts/package-android-release.sh dist
 ```
 
-That reruns the Android unit/lint gates, builds the release variant, verifies
-the Android signature, and writes `dist/toomux-android.apk` plus its SHA-256
-file. The tagged GitHub release carries that persistently signed APK.
-
-For initial UI testing before the ByteTraverse peer is up, run the host on
-loopback and use ADB reverse:
-
-```sh
-toomux remote serve --bind 127.0.0.1:7462
-adb reverse tcp:7462 tcp:7462
-```
-
-Set the app endpoint to `http://127.0.0.1:7462`. This is a development path
-only; normal use goes through ByteTraverse at `10.30.0.1:7462`.
+That reruns the unit and lint checks, builds the release variant, verifies its
+signature, and writes `dist/toomux-android.apk` with its SHA-256 file.

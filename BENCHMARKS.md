@@ -1,28 +1,36 @@
-# Performance measurements
+# Benchmarks
 
-Performance numbers in the README and guide are observations from real toomux
-use, not synthetic claims. This file makes the low-level resource measurement
-repeatable so regressions can be compared on the same machine.
+toomux publishes two kinds of numbers, measured in different ways.
 
-Run:
+## Token use and cost
+
+The README's headline comparison (33,026 Claude Code calls before toomux and
+33,026 with it) is a measurement of one person's real workload, not a
+synthetic benchmark. [docs/EVIDENCE.md](docs/EVIDENCE.md) has the full
+results, how the two periods were chosen, what the comparison does and
+doesn't show, and a script that recomputes both sides from Claude Code's own
+transcripts. To measure your own workload, follow "Measure your own" on that
+page.
+
+## toomux's own footprint
+
+`scripts/bench-resource.sh` measures what the toomux TUI itself costs to run,
+so regressions can be compared on the same machine:
 
     scripts/bench-resource.sh
 
-The script builds the locked release profile, launches an isolated toomux TUI
-inside its own tmux server with a temporary TOOMUX_HOME, samples resident
-memory and process CPU for ten seconds, and reports the release binary size.
-It leaves the user's normal tmux servers and toomux state untouched.
+It builds the locked release profile, starts the TUI in a tmux server of its
+own, samples resident memory and process CPU once a second for ten seconds,
+and reports the release binary's size. The script kills its tmux server when
+it finishes. It points `TOOMUX_HOME` at a temporary folder, so toomux's own
+configuration and state are left alone; the TUI still sees the Claude Code
+sessions running on the machine.
 
-Record the following with any published result:
+No reference results are published yet. When you publish one, record:
 
-- toomux commit;
-- OS and kernel/macOS version;
+- the toomux commit;
+- OS and kernel or macOS version;
 - CPU architecture;
 - tmux and Rust versions;
-- terminal dimensions;
-- whether sessions were present in the benchmark fixture.
-
-The script's empty-fixture result is a baseline, not a substitute for the
-README's multi-session measurements. For a session-loaded comparison, run the
-same sampling method against a normal toomux instance and state the number of
-visible/discovered tmux servers and sessions.
+- terminal size;
+- how many tmux servers and Claude sessions toomux could see.
