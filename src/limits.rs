@@ -284,7 +284,10 @@ fn log(session: &str, hit: &LimitHit, what: &str) {
 
 /// Markers and wake-ups no pass will look at again.
 fn prune(now: i64) {
-    for e in std::fs::read_dir(dir()).into_iter().flatten().flatten() {
+    let entries = [dir(), wake_dir()]
+        .into_iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten());
+    for e in entries {
         let name = e.file_name().to_string_lossy().into_owned();
         if !["done-", "chose-", "wake-", "pass-"]
             .iter()
@@ -306,14 +309,26 @@ fn prune(now: i64) {
 
 // ---- waking up for a reset ----------------------------------------------------
 
+/// Where waiting wake-ups are noted: the runtime folder, cleared at boot
+/// along with the sleepers themselves, so a reboot before the reset leaves
+/// nothing claiming a wake-up that will never come.
+fn wake_dir() -> PathBuf {
+    crate::paths::runtime().join("limits")
+}
+
 /// A one-shot `toomux tick --at` for this session and time, unless one is
 /// already waiting. True if this call claimed it.
 fn wake(session: &str, at_ms: i64) -> bool {
-    if !claim(&format!("wake-{session}-{}", at_ms / 1000)) {
-        return false;
+    let _ = std::fs::create_dir_all(wake_dir());
+    let claimed = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(wake_dir().join(format!("wake-{session}-{}", at_ms / 1000)))
+        .is_ok();
+    if claimed {
+        spawn_tick(at_ms);
     }
-    spawn_tick(at_ms);
-    true
+    claimed
 }
 
 /// A pass now, at most once every two minutes per limit event.

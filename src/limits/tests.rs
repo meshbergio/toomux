@@ -61,28 +61,38 @@ fn resume_after_limit_reads_its_three_settings() {
     assert_eq!(Resume::default(), Resume::Working);
 }
 
-/// A state folder of the test's own.
-struct Home(PathBuf);
+/// State and runtime folders of the test's own.
+struct Home(PathBuf, Option<std::ffi::OsString>);
 
 impl Home {
     fn new(tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("toomux-lim-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        unsafe { std::env::set_var("TOOMUX_HOME", &dir) };
-        Home(dir)
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe {
+            std::env::set_var("TOOMUX_HOME", &dir);
+            std::env::set_var("XDG_RUNTIME_DIR", dir.join("run"));
+        }
+        Home(dir, runtime)
     }
 }
 
 impl Drop for Home {
     fn drop(&mut self) {
-        unsafe { std::env::remove_var("TOOMUX_HOME") };
+        unsafe {
+            std::env::remove_var("TOOMUX_HOME");
+            match &self.1 {
+                Some(r) => std::env::set_var("XDG_RUNTIME_DIR", r),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
 #[test]
-fn one_wake_up_waits_per_session_and_reset() {
+fn one_wake_up_waits_per_session_and_reset_until_a_reboot() {
     let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let _home = Home::new("wake");
     let at = registry::now_ms() + 3_600_000;
@@ -90,6 +100,9 @@ fn one_wake_up_waits_per_session_and_reset() {
     assert!(!wake("s1", at), "later sightings find it waiting");
     assert!(wake("s2", at), "another session has its own");
     assert!(wake("s1", at + 7 * 86_400_000), "and a later limit its own");
+    // A reboot takes the sleepers, and their claims with them.
+    std::fs::remove_dir_all(crate::paths::runtime()).unwrap();
+    assert!(wake("s1", at), "after a reboot it's scheduled again");
 }
 
 #[test]
