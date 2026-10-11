@@ -418,6 +418,12 @@ Anywhere in tmux:
 Every footer hint is clickable, so is each account in the header (its usage),
 and the list scrolls with the mouse wheel.
 
+Messages in the footer fade after a few seconds. Errors also stay under `?`
+(the last one) and in `~/.local/state/toomux/errors.log` (all of them, one line
+each, kept to about 256KB plus the previous `errors.log.1`); `toomux where`
+lists it. A key that can't act says why: `busy: …` while another operation
+runs, or why the folder list has nothing to start in.
+
 ## Usage
 
 The header carries a hairline meter per account and window

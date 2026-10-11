@@ -1766,6 +1766,10 @@ fn where_() -> Result<()> {
         human(du(&paths::state()))
     );
     println!(
+        "  errors   {}  what went wrong on screen, kept to ~256KB (and .1)",
+        t(&paths::error_log())
+    );
+    println!(
         "  data     {}  {}  the transcript archive",
         t(&paths::data()),
         human(du(&paths::data()))

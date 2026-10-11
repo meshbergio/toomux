@@ -200,7 +200,7 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
             app.working_on = None;
             match done {
                 Ok(m) => app.say(m, app.pal.finished),
-                Err(e) => app.say(e, app.pal.attention),
+                Err(e) => app.fail(e),
             }
             operation_finished = true;
         }
@@ -818,7 +818,10 @@ impl App {
             self.draw_new_head(f, head);
         }
         let phone_remote = std::env::var_os("TOOMUX_REMOTE_ANDROID").is_some() && full.width <= 52;
-        let show_list = !accounts && self.shell_ref().show_list && self.memory.is_none();
+        // The new-session picker draws in the list's place: alt-b never hides it.
+        let show_list = !accounts
+            && (self.shell_ref().show_list || matches!(self.mode, Mode::New(_)))
+            && self.memory.is_none();
         let phone_single_pane = phone_remote && show_list;
         let list_w = if show_list {
             if phone_single_pane {

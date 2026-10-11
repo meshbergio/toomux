@@ -528,6 +528,9 @@ pub struct App {
     mode: Mode,
     flash: Option<(String, Color, Instant)>,
     working_on: Option<String>,
+    /// The last thing that went wrong, and when (ms): flashes fade, this
+    /// stays under ?.
+    last_error: Option<(String, i64)>,
     preview: Option<Preview>,
     scroll: u16,
     list_hits: Vec<(Rect, i32)>,
@@ -613,6 +616,7 @@ impl App {
             mode: Mode::Normal,
             flash: None,
             working_on: None,
+            last_error: None,
             preview: None,
             scroll: 0,
             list_hits: Vec::new(),
@@ -669,7 +673,7 @@ impl App {
                 self.working_on = None;
                 match done {
                     Ok(m) => self.say(m, self.pal.finished),
-                    Err(e) => self.say(e, self.pal.attention),
+                    Err(e) => self.fail(e),
                 }
                 reload = true;
             }
@@ -811,13 +815,10 @@ impl App {
                     .and_then(|name| self.cfg.account_by_name(name))
                 {
                     self.mode = Mode::Accounts(AccountsView::new(&self.cfg, index));
-                    self.say(
-                        format!(
-                            "{} was created, but its setup needs attention: {e}",
-                            self.cfg.accounts[index].name
-                        ),
-                        self.pal.attention,
-                    );
+                    self.fail(format!(
+                        "{} was created, but its setup needs attention: {e}",
+                        self.cfg.accounts[index].name
+                    ));
                 } else {
                     if let Mode::Accounts(view) = &mut self.mode
                         && let Some(flow) = &mut view.flow
@@ -825,7 +826,7 @@ impl App {
                         flow.step = AddStep::Sharing;
                         flow.hint = Some(e.clone());
                     }
-                    self.say(e, self.pal.attention);
+                    self.fail(e);
                 }
             }
             AccountDone::Changed { sel, result } => {
@@ -837,7 +838,7 @@ impl App {
                             self.say(notes.join(" · "), self.pal.finished);
                         }
                     }
-                    Err(e) => self.say(e, self.pal.attention),
+                    Err(e) => self.fail(e),
                 }
             }
             AccountDone::LoginBrowser { name, result } => match result {
@@ -845,10 +846,7 @@ impl App {
                     format!("browser opened · finish signing in to {name}"),
                     self.pal.working,
                 ),
-                Err(e) => self.say(
-                    format!("couldn't open {name} login browser · {e}"),
-                    self.pal.attention,
-                ),
+                Err(e) => self.fail(format!("couldn't open {name} login browser · {e}")),
             },
         }
     }
@@ -886,10 +884,7 @@ impl App {
                     Some("Login closed before sign-in finished. Press Enter to try again.".into());
             }
         }
-        self.say(
-            format!("login closed · {name} is still not signed in"),
-            self.pal.attention,
-        );
+        self.fail(format!("login closed · {name} is still not signed in"));
     }
 
     /// Everything a reload can change on screen, hashed.
@@ -942,8 +937,11 @@ impl App {
         self.flash = Some((msg, color, Instant::now()));
     }
 
-    /// Something went wrong: say so in the attention colour.
+    /// Something went wrong: say so in the attention colour, keep it for ?
+    /// (a flash is gone in seconds), and add it to the error log.
     fn fail(&mut self, msg: String) {
+        log_error(&msg);
+        self.last_error = Some((msg.clone(), now_ms()));
         self.say(msg, self.pal.attention);
     }
 
@@ -1621,7 +1619,7 @@ impl App {
                     self.open_account_login_browser(pane, name);
                 }
             }
-            Err(e) => self.say(e.to_string(), self.pal.attention),
+            Err(e) => self.fail(e.to_string()),
         }
     }
 
@@ -1976,7 +1974,12 @@ impl App {
             }
             _ => {}
         }
-        if self.working_on.is_some() && !matches!(cmd, Cmd::Quit | Cmd::Group) {
+        if let Some(job) = &self.working_on
+            && !matches!(cmd, Cmd::Quit | Cmd::Group)
+        {
+            // One operation at a time: say what's in the way, not nothing.
+            let msg = format!("busy: {job} · try again when it's done");
+            self.say(msg, self.pal.working_word);
             return;
         }
         if matches!(cmd, Cmd::New) {
@@ -1987,6 +1990,7 @@ impl App {
                 sh.focus_live = false;
             }
             self.usage_view = None;
+            self.flash = None;
             let places = crate::places::frecent(&self.cfg, now_ms());
             self.mode = Mode::New(NewFlow {
                 places,
@@ -2007,7 +2011,7 @@ impl App {
                     "Exact square QR opened in your browser. Scan it from toomux.com/remote/.\n\nThe code expires in 15 minutes and can be used once."
                         .into(),
                 ),
-                Err(e) => self.say(format!("remote: {e}"), self.pal.attention),
+                Err(e) => self.fail(format!("remote: {e}")),
             }
             self.dirty = true;
             return;
@@ -2147,13 +2151,24 @@ impl App {
             match (cmd, flow.folder.clone()) {
                 (Cmd::No, Some(_)) => flow.folder = None,
                 (Cmd::No, None) => self.mode = Mode::Normal,
-                (Cmd::Yes, None) => {
-                    if let Some(place) = flow.shown().get(flow.sel) {
+                (Cmd::Yes, None) => match flow.shown().get(flow.sel) {
+                    Some(place) => {
                         let (acct, why) =
                             crate::places::account_for(&self.cfg, &place.path, &self.sessions);
                         flow.folder = Some((place.path.clone(), acct, why));
                     }
-                }
+                    None => {
+                        let q = flow.query.trim().to_string();
+                        let msg = if q.starts_with('/') || q.starts_with('~') {
+                            format!("{q} isn't a folder")
+                        } else if q.is_empty() {
+                            "no folders in your history yet · type a path (/… or ~/…)".into()
+                        } else {
+                            format!("no recent folder matches \"{q}\" · type a path (/… or ~/…)")
+                        };
+                        self.say(msg, self.pal.working_word);
+                    }
+                },
                 (Cmd::Yes, Some((folder, acct, _))) => {
                     let args = std::mem::take(&mut flow.args);
                     self.start_in(folder, acct, args)
@@ -2218,10 +2233,7 @@ impl App {
                         self.pal.finished,
                     );
                 } else {
-                    self.say(
-                        format!("reopened {} · {}", ok.len(), failed.join(" · ")),
-                        self.pal.attention,
-                    );
+                    self.fail(format!("reopened {} · {}", ok.len(), failed.join(" · ")));
                 }
                 self.reload();
             }
@@ -2247,9 +2259,7 @@ impl App {
                 if s.pin.is_some() {
                     match State::update(|st| st.unpin(&s.id)) {
                         Ok(_) => self.say(format!("unpinned {}", s.title), self.pal.dim),
-                        Err(e) => {
-                            self.say(format!("couldn't update pins: {e}"), self.pal.attention)
-                        }
+                        Err(e) => self.fail(format!("couldn't update pins: {e}")),
                     }
                 } else {
                     match State::update(|st| st.pin(s.pin_record(&self.cfg))) {
@@ -2265,9 +2275,7 @@ impl App {
                             "all nine pins are taken · ctrl-p on one to free it".into(),
                             self.pal.dim,
                         ),
-                        Err(e) => {
-                            self.say(format!("couldn't update pins: {e}"), self.pal.attention)
-                        }
+                        Err(e) => self.fail(format!("couldn't update pins: {e}")),
                     }
                 }
                 self.reload();
@@ -2290,10 +2298,7 @@ impl App {
                         self.attach_pane = Some(pane);
                         self.quit = true;
                     }
-                    Err(e) => self.say(
-                        format!("couldn't reopen {}: {e}", s.title),
-                        self.pal.attention,
-                    ),
+                    Err(e) => self.fail(format!("couldn't reopen {}: {e}", s.title)),
                 }
             }
             Cmd::Jump => {
@@ -2324,7 +2329,7 @@ impl App {
                     self.shell.as_ref().and_then(|sh| sh.origin.as_deref()),
                 ) {
                     Ok(()) => self.quit = true,
-                    Err(e) => self.say(e.to_string(), self.pal.attention),
+                    Err(e) => self.fail(e.to_string()),
                 },
             },
             Cmd::Account if s.queued.is_some() => {
@@ -2396,7 +2401,7 @@ impl App {
                 };
                 match actions::rename(&self.cfg, &s, &buf, false) {
                     Ok(m) => self.say(m, self.pal.dim),
-                    Err(e) => self.say(e.to_string(), self.pal.attention),
+                    Err(e) => self.fail(e.to_string()),
                 }
                 self.reload();
             }
@@ -2418,7 +2423,7 @@ impl App {
                 self.attach_pane = Some(pane);
                 self.quit = true;
             }
-            Err(e) => self.say(format!("couldn't start a session: {e}"), self.pal.attention),
+            Err(e) => self.fail(format!("couldn't start a session: {e}")),
         }
     }
 
@@ -2444,7 +2449,7 @@ impl App {
         match r {
             Ok(()) if !self.sidebar => self.quit = true,
             Ok(()) => {}
-            Err(e) => self.say(e.to_string(), self.pal.attention),
+            Err(e) => self.fail(e.to_string()),
         }
     }
 
@@ -2602,7 +2607,7 @@ impl App {
                     format!("{} will move to {to} when it goes idle", s.title),
                     self.pal.dim,
                 ),
-                Err(e) => self.say(e.to_string(), self.pal.attention),
+                Err(e) => self.fail(e.to_string()),
             }
             return;
         }
@@ -3101,6 +3106,29 @@ impl App {
                     Span::styled(what.to_string(), Style::new().fg(p.dim)),
                 ]));
             }
+            lines.push(Line::raw(""));
+        }
+        // What last went wrong stays here after its message has faded.
+        if let Some((msg, at)) = &self.last_error {
+            lines.push(Line::from(Span::styled(
+                match ago(now_ms() - at).as_str() {
+                    "now" => "last error · just now".to_string(),
+                    a => format!("last error · {a} ago"),
+                },
+                Style::new().fg(p.muted),
+            )));
+            for chunk in wrap_spans(&[(msg.clone(), Style::new().fg(p.attention))], 62, 62) {
+                let mut l = vec![Span::raw("  ")];
+                l.extend(chunk);
+                lines.push(Line::from(l));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  all of them: {}",
+                    tilde(&crate::paths::error_log().display().to_string())
+                ),
+                Style::new().fg(p.dim),
+            )));
             lines.push(Line::raw(""));
         }
         lines.pop();
@@ -4910,7 +4938,7 @@ impl App {
         let w = width as usize;
         if let Some((msg, color, at)) = &self.flash {
             let age = at.elapsed().as_secs_f32();
-            if age < 5.8 && matches!(self.mode, Mode::Normal) {
+            if age < 5.8 && matches!(self.mode, Mode::Normal | Mode::New(_)) {
                 // Settles into the band over its last moments instead of vanishing.
                 let color = mix(
                     *color,
@@ -5228,6 +5256,47 @@ fn load_all(cfg: &Config) -> Vec<Session> {
     let restorable = registry::restorable(cfg, &all);
     all.extend(restorable);
     all
+}
+
+/// The error log stays about this size: past it, it starts over and the
+/// previous one is kept beside it as `errors.log.1`.
+const ERROR_LOG_MAX: u64 = 256 * 1024;
+
+#[cfg(not(test))]
+fn log_error(msg: &str) {
+    log_error_to(&crate::paths::error_log(), msg);
+}
+
+/// Tests never write to your state folder.
+#[cfg(test)]
+fn log_error(_msg: &str) {}
+
+/// One line per error, appended. Logging never gets in the way: any
+/// failure here is ignored, and a symlink in the log's place isn't followed.
+fn log_error_to(path: &std::path::Path, msg: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() >= ERROR_LOG_MAX) {
+        let mut old = path.as_os_str().to_owned();
+        old.push(".1");
+        let _ = std::fs::rename(path, old);
+    }
+    let line = format!(
+        "{} {}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        msg.split_whitespace().collect::<Vec<_>>().join(" ")
+    );
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
 }
 
 fn watch(cfg: &Config, tx: Sender<()>) -> Option<notify::RecommendedWatcher> {
@@ -6045,6 +6114,87 @@ mod tests {
             };
             assert_eq!(flow.args, settled);
         }
+    }
+
+    #[test]
+    fn a_busy_toomux_says_so_instead_of_ignoring_keys() {
+        let mut app = App::with(cfg(), sample());
+        app.working_on = Some("moving Oli & Studio".into());
+        app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Normal));
+        let said = app.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default();
+        assert!(said.contains("busy: moving Oli & Studio"), "{said}");
+    }
+
+    #[test]
+    fn enter_on_an_empty_folder_list_explains_itself() {
+        let mut app = App::with(cfg(), sample());
+        app.exec(Cmd::New);
+        let Mode::New(flow) = &mut app.mode else {
+            panic!("picker");
+        };
+        flow.places.clear();
+        flow.query = "/no/such/folder/for/toomux".into();
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&app.mode, Mode::New(f) if f.folder.is_none()));
+        let out = render(&mut app, 120, 20);
+        assert!(
+            out.lines()
+                .last()
+                .unwrap()
+                .contains("/no/such/folder/for/toomux isn't a folder"),
+            "{out}"
+        );
+        if let Mode::New(flow) = &mut app.mode {
+            flow.query = "zzz".into();
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let said = app.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default();
+        assert!(said.contains("no recent folder matches \"zzz\""), "{said}");
+    }
+
+    #[test]
+    fn the_last_error_outlives_its_flash_in_help() {
+        let mut app = App::with(cfg(), sample());
+        app.fail("couldn't start a session: the disk is on fire".into());
+        // Long after the flash has faded.
+        app.flash = None;
+        app.exec(Cmd::Help);
+        let out = render(&mut app, 120, 50);
+        assert!(out.contains("last error"), "{out}");
+        assert!(out.contains("the disk is on fire"), "{out}");
+        assert!(out.contains("errors.log"), "{out}");
+    }
+
+    #[test]
+    fn error_log_appends_one_line_each_and_stays_bounded() {
+        let dir = std::env::temp_dir().join(format!("toomux-errlog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log = dir.join("errors.log");
+        log_error_to(&log, "first\nsecond line");
+        log_error_to(&log, "again");
+        let text = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].ends_with(" first second line"), "{text}");
+        // Past the bound it starts over, keeping the previous log beside it.
+        std::fs::write(&log, vec![b'x'; ERROR_LOG_MAX as usize]).unwrap();
+        log_error_to(&log, "fresh");
+        assert!(std::fs::metadata(&log).unwrap().len() < 100);
+        let old = dir.join("errors.log.1");
+        assert_eq!(
+            std::fs::metadata(&old).unwrap().len(),
+            ERROR_LOG_MAX,
+            "the previous log is kept"
+        );
+        // A symlink in the log's place is never written through.
+        let target = dir.join("elsewhere");
+        std::fs::write(&target, "untouched").unwrap();
+        std::fs::remove_file(&log).unwrap();
+        std::os::unix::fs::symlink(&target, &log).unwrap();
+        log_error_to(&log, "nope");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
