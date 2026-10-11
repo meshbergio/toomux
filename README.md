@@ -2,495 +2,456 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo/svg/toomux-logo-reversed.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/brand/logo/svg/toomux-logo-primary.svg">
-    <img src="assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="360">
+    <img src="assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="340">
   </picture>
 </p>
 
+<h3 align="center">Claude Code, minus the babysitting.</h3>
+
 <p align="center">
-  <strong>Claude Code, minus the babysitting.</strong><br>
-  Run many Claude Code sessions as one system: keep them moving, hand work over before context degrades,
-  remember what they learned, and see what needs you from one place.
+  Every Claude Code session you run, on one screen in tmux.<br>
+  Long conversations hand over to a fresh session <em>before</em> context gets slow and expensive,<br>
+  and nothing stops just because you looked away.
 </p>
 
 <p align="center">
-  <a href="#install">Install</a> · <a href="GUIDE.md">Guide</a> · <a href="SECURITY.md">Security</a> · <a href="CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/meshbergio/toomux/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/meshbergio/toomux/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/meshbergio/toomux/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/meshbergio/toomux?color=4fd1b5&label=release"></a>
+  <img alt="One Rust binary" src="https://img.shields.io/badge/one%20binary-Rust%201.88%2B-e8a33d">
+  <img alt="Linux, macOS, WSL 2" src="https://img.shields.io/badge/linux%20%C2%B7%20macOS%20%C2%B7%20WSL%202-supported-7c8590">
+  <a href="#license"><img alt="MIT or Apache 2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-7c8590"></a>
 </p>
 
 <p align="center">
-  <img src="assets/hero.png" alt="toomux full screen showing many Claude Code sessions across accounts, grouped by attention state, with the selected session live beside the list" width="100%">
+  <a href="#quick-start"><b>Quick start</b></a> ·
+  <a href="#handover-instead-of-compaction">Handover</a> ·
+  <a href="#keep-work-moving">Limits &amp; restarts</a> ·
+  <a href="#voyages">Voyages</a> ·
+  <a href="#memory-that-survives-the-session">Memory</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="GUIDE.md">Guide</a>
 </p>
 
-<p align="center"><sub>Every session. Every account. What is working, what is waiting, and what needs you.</sub></p>
+<p align="center">
+  <img src="assets/handover.gif" alt="A Claude Code session passes 250k tokens of context. At the end of its turn toomux asks it to write a handover brief; it writes the goal, what is done, what is still running and the next steps. A fresh session starts in the same pane, reads the brief, and carries on with the next step at about 20k tokens of context." width="100%">
+</p>
 
-I run about ten Claude Code sessions across two Max 20x accounts. One is coding, one is
-waiting for me, one has hit a usage limit, and another is dragging a huge context behind
-it.
-
-That last one burns money fast. Past a point, extra context is mostly baggage: every
-turn costs more, while the model has more old material to sift through.
-
-Across a matched 33,026-call comparison: **$131.59 to $60.09 per 1,000 calls**,
-**309,783 to 147,188 tokens per call**, and **27.84% to 0.154% of calls above 400k**.
-
-tmux kept the terminals alive. It did not coordinate the work. toomux does.
-
-Everything in toomux came from running this way for real.
+<p align="center"><sub>A real handover, start to finish: the session writes its own brief, and a fresh one picks the work up in the same pane.</sub></p>
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/proof-mobile-dark.svg">
-  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/proof-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/proof-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/proof-light.svg">
-  <img src="assets/readme/proof-light.svg" alt="A 205-day real-use snapshot across two Max 20x accounts: 196.0 billion tokens and 141.7 thousand dollars at API list prices" width="100%">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/headline-mobile-dark.svg">
+  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/headline-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/headline-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/readme/headline-light.svg">
+  <img src="assets/readme/headline-light.svg" alt="Measured on a matched 33,026-call workload: cost per 1,000 calls down 54% ($131.59 to $60.09), context per call down 52% (309,783 to 147,188 tokens), calls above 400k tokens down from 27.84% to 0.15%, output tokens per dollar up 82%" width="100%">
 </picture>
 
 <p align="center"><sub>
-Real-use snapshot, not a synthetic benchmark. Usage profiles:
-<a href="https://ccgather.com/@meshbergio">CCGather</a> ·
-<a href="https://www.viberank.app/profile/meshbergio">VibeRank</a>
+  33,026 real calls just before toomux's first handover (25–29 Sep 2026) against 33,026 with it (30 Sep–1 Oct), same workload, same prices.
+  <a href="docs/EVIDENCE.md">How it was measured</a> · <a href="#measure-your-own">measure your own</a>
 </sub></p>
 
-## What toomux does
-
-**See the whole workload.** Sessions from every account are sorted by what needs
-attention, with the selected Claude Code session live beside the list.
-
-**Keep context sharp.** Long-running work hands over to a fresh session at a deliberate
-boundary instead of depending on opaque compaction.
-
-**Keep work moving.** Account limits, background work, restarts and handovers stop being
-separate continuity problems.
-
-**Know when “done” is actually done.** Voyages can keep working toward an outcome, run a
-check, and send the session back for proof before accepting the result.
-
-**Remember across sessions.** Conversations, handover briefs and project memory become
-one searchable history instead of knowledge trapped in the current chat.
-
-**Use the same system remotely.** Pair through ByteTraverse, then open the full toomux
-TUI at [toomux.com/remote](https://toomux.com/remote/) from any modern browser on any
-device, or use the native Android client. Both connect back to the same host-side system.
-
-toomux does not replace Claude Code. It coordinates the Claude Code sessions you
-already run.
-
-### Try it
+## Quick start
 
 ```sh
-curl -fsSL https://toomux.com/install | sh
+curl -fsSL https://toomux.com/install | sh   # one binary, its own tmux; checksums verified
+toomux init --apply                          # tmux keys, Claude Code hooks, status line (backed up)
+toomux                                       # every session, one screen
 ```
 
-macOS · Linux · WSL 2 · [complete installation](#install)
+That's it. Start Claude Code sessions as you always have, or press `alt-n` in toomux.
+Handover, restart recovery and recovery after usage limits are on by default.
+Homebrew, npm, upgrades and uninstalling are [below](#install).
+
+> [!TIP]
+> Already have sessions running in plain terminal tabs? toomux lists them too, and
+> `ctrl-o` brings one into tmux with its conversation intact.
+
+## Why this exists
+
+I run about ten Claude Code sessions at once. At any moment one is coding, one is
+waiting for me, one has hit a usage limit, one finished an hour ago and I never
+noticed, and one is dragging 600k tokens of context behind it.
+
+That last one is the expensive one. Every call re-reads the whole conversation:
+at 800k tokens that's $0.16 a call from cache, and $6.40 if the cache has gone cold
+and the conversation has to be written back into a 1-hour cache (Opus 5.5 list
+prices). On a Max plan you pay in limits instead. And the model gets worse at
+using what's in front of it as context grows;
+[Anthropic say so themselves](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+
+tmux kept the terminals alive. It didn't coordinate the work. toomux does, and
+everything in it came from running this way for real, every day.
 
 ## Every session, one screen
 
-`alt-s` opens toomux from anywhere in tmux. Each Claude Code conversation remains an
-independent session, but the workload becomes one control surface: what is waiting on
-you, what is working, what finished, what is idle, and which account it belongs to.
-
-`enter` opens or reopens the selected session. `ctrl-a` moves that conversation to
-another account in the same pane. `ctrl-n` (or `alt-n`, even while you are typing in a
-session) starts a new one in a recent folder. Type to filter. `esc` clears the filter,
-backs out of secondary views, then closes toomux. `?` (or `alt-?`) lists every key.
-
-If you would rather stay in your normal tmux layout, `alt-b` puts the same session list
-down the side of the current window.
+`toomux` (or `alt-s` from anywhere in tmux) shows every Claude Code session on the
+machine, grouped by what needs you: waiting on you, working, running in the
+background, just finished, idle. The selected session runs live beside the list, so
+you can type into it without leaving.
 
 <p align="center">
-  <img src="assets/sidebar.png" alt="The toomux session list running as a sidebar beside an ordinary tmux window, with account usage and attention state still visible" width="100%">
+  <img src="assets/hero.png" alt="toomux full screen: sessions grouped by attention state (needs you, working, background, finished, idle) on the left, the selected Claude Code session live on the right, and each account's 5-hour and weekly usage across the top" width="100%">
 </p>
 
-The point is not a new terminal workflow. It is one layer above the tmux workflow you
-already have.
+| Key | Does |
+|---|---|
+| `enter` | open the session live (reopens it if it had exited) |
+| `alt-n` · `ctrl-n` | start a new session in a recent folder (`alt-n` works even while you type in a session) |
+| `ctrl-a` | move the conversation to another account, same pane |
+| `ctrl-o` | bring a session from a plain terminal tab into tmux |
+| `ctrl-p` · `alt-1..9` | pin a session, then jump to it from anywhere |
+| `ctrl-u` | each account's 5-hour and weekly usage |
+| `tab` | group by attention, account or project |
+| `alt-b` | the same list as a sidebar in your normal tmux layout |
+| `alt-?` | every key |
+
+Every session toomux starts or reopens gets a tmux server of its own, so one
+crashing never takes the others with it. toomux sits above Claude Code; it doesn't replace it, wrap it or
+proxy its traffic.
+
+<p align="center">
+  <img src="assets/sidebar.png" alt="The toomux session list as a sidebar beside an ordinary tmux window" width="100%">
+</p>
 
 ## Handover instead of compaction
 
-Every call re-reads the whole conversation. At 800k tokens that's $0.16 a call,
-or $6.40 if the cache has gone cold. On a Max plan it eats your limits instead.
-And the model gets worse at using what's in front of it as the context grows.
-[Anthropic say so
-themselves](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+Compaction squeezes a long conversation into a summary you never see, at a moment
+you didn't choose. toomux does the opposite.
 
-toomux treats that as a continuity problem rather than a reason to keep stretching one
-conversation. The built-in fallback makes a main session eligible to hand over at a
-natural turn boundary after **250k tokens**, with **400k tokens** as the hard limit.
-Each managed session can override that with its own context policy, so a 32k local
-model can hand over far earlier than a 1M session without changing either one globally.
+1. **At a natural break.** Once a session passes **250k tokens**, toomux waits for
+   the end of a turn. Nothing is cut off mid-edit. **400k** is the hard limit.
+2. **The session writes its own brief.** Goal, decisions and why, what's done, what's
+   running, what was tried and failed, exact paths and commands, next steps. It's a
+   file you can read, at `~/.local/state/toomux/handovers/`.
+3. **A fresh session picks it up in the same pane,** with the brief as its starting
+   point. Subagents and background commands carry over. The old conversation is kept
+   whole and searchable; nothing is summarised away.
 
-The original transcript is not replaced. At the resolved policy's natural break, the
-outgoing session writes an explicit handover brief, updates durable memory, and the
-successor receives that brief as its starting context in the same pane. The old
-conversation remains intact and searchable.
-
-The useful question is whether that actually changes the workload, not whether the
-mechanism sounds tidy.
+Thresholds are per model, provider, account or session: a 32k local model can hand
+over far earlier than a 1M Opus session. See [context policies](GUIDE.md#context-policies).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/evidence/matched-cohort-mobile-dark.svg">
   <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/evidence/matched-cohort-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/evidence/matched-cohort-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/evidence/matched-cohort-light.svg">
-  <img src="assets/evidence/matched-cohort-light.svg" alt="Matched comparison of exactly 33,026 Claude calls before and with toomux" width="100%">
+  <img src="assets/evidence/matched-cohort-light.svg" alt="Matched comparison of exactly 33,026 Claude calls before and with toomux: context per call down 52.5%, normalized cost per 1,000 calls down 54.3%, calls above 400k down from 27.84% to 0.154%, output tokens per dollar up 81.8%" width="100%">
 </picture>
 
 > [!NOTE]
-> **Matched, not scaled.** Exactly 33,026 calls on each side, including main
-> sessions and every subagent. Both periods are repriced at the same Opus 5.5
-> list rates so model-mix changes do not get credit for the difference. These
-> are measurements from my workload, not a controlled benchmark of every
-> Claude Code user.
-
-Across that matched cohort, context per call fell from **309,783 to 147,188** and
-normalized cost per 1,000 calls from **$131.59 to $60.09**. Calls above 400k fell from
-**9,194 / 27.84%** to **51 / 0.154%**. Output tokens per normalized dollar rose from
-**6,763 to 12,295**.
+> **Matched, not scaled.** Exactly 33,026 calls on each side, main sessions and every
+> subagent, both repriced at the same Opus 5.5 list rates so a change of model gets no
+> credit. One person's real workload, not a controlled benchmark of every Claude Code
+> user. [The full method and its limits](docs/EVIDENCE.md).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/evidence/context-mechanism-mobile-dark.svg">
   <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/evidence/context-mechanism-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/evidence/context-mechanism-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/evidence/context-mechanism-light.svg">
-  <img src="assets/evidence/context-mechanism-light.svg" alt="The matched cohort shows fresh input nearly flat while cache reads and rewrite-heavy cache traffic fall sharply with toomux" width="100%">
+  <img src="assets/evidence/context-mechanism-light.svg" alt="Where the difference came from: fresh input stayed nearly flat while cache reads fell 51.8% and cache rewrites after expiry fell 77 to 91%" width="100%">
 </picture>
 
-That does not prove handover is the only cause. It does show the change where the
-mechanism predicts it should appear: less old context carried from call to call, with
-fresh input nearly flat.
+Fresh input barely moved; old context did. That's where the mechanism says the change
+should show up, and it's where it did.
+
+<details>
+<summary><strong>The workload behind these numbers</strong></summary>
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/proof-mobile-dark.svg">
+  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/proof-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/proof-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/readme/proof-light.svg">
+  <img src="assets/readme/proof-light.svg" alt="205 days of real use: 196.0 billion tokens, a $141.7 thousand API list-price equivalent" width="100%">
+</picture>
+
+205 days of daily use: everything toomux does was built against this workload first.
+The list-price figure is a translation into API prices, not an invoice. Public usage
+profiles: [CCGather](https://ccgather.com/@meshbergio) ·
+[VibeRank](https://www.viberank.app/profile/meshbergio).
+
+</details>
+
+### Measure your own
+
+```sh
+toomux tokens --since 7d
+```
+
+Where your tokens went, from your own transcripts: fresh input, cache reads, cache
+writes and *why* they happened (a cold start, a cache that expired while you were
+away, normal growth), by session and subagent, priced at list rates. What toomux
+estimates it avoided is reported separately and never added in.
+
+<details>
+<summary><strong>See a full token report</strong></summary>
+
+<p align="center">
+  <img src="assets/tokens.png" alt="The toomux seven-day token report: observed list-price usage, estimated avoided usage, model and subagent breakdowns, cache-write reasons and old command-output composition" width="100%">
+</p>
+
+</details>
 
 ## Keep work moving
 
-Context continuity is only useful if the work itself survives the things that interrupt
-it.
+The unit of work should outlive the terminal, the conversation and the account that
+happened to start it.
 
-### Account capacity
-
-toomux tracks each account's five-hour and weekly windows, reset timing and recent pace.
-`ctrl-u` opens the full usage view. If a conversation is parked on a limit, `ctrl-a`
-can move that same conversation to an account with room; a busy session can queue the
-move until it becomes idle. Left where it is, a session the limit cut off mid-work
-carries on by itself once the limit resets, with or without a terminal attached
-(`resume_after_limit`).
+**Usage limits.** toomux tracks each account's 5-hour and weekly windows, reset times
+and pace. When a limit cuts a session off mid-work, it carries on by itself once the
+limit resets, even overnight with no terminal attached. It closes Claude Code's limit
+dialog for you and leaves Claude's own "continue automatically" countdown alone.
+Or, if you have more than one account, `ctrl-a` moves the same conversation to
+another one in the same pane.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/account-capacity-mobile-dark.svg">
   <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/account-capacity-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/account-capacity-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/account-capacity-light.svg">
-  <img src="assets/readme/account-capacity-light.svg" alt="How toomux treats account capacity: five-hour and weekly windows, reset time and pace feed the decision to keep a conversation on its account or move it without changing the conversation or pane" width="100%">
+  <img src="assets/readme/account-capacity-light.svg" alt="How toomux treats account capacity: five-hour and weekly windows, reset time and pace inform whether a conversation stays on its account or moves, without changing the conversation or pane" width="100%">
 </picture>
 
-### Background continuity
+**Restarts.** After a reboot, the sessions that were running reopen by themselves,
+each in its own tmux server. A conversation that is still running somewhere is never
+opened a second time; toomux says where it is instead.
 
-Captured background commands can be carried across a handover instead of forcing the
-successor to wait for them. The session list distinguishes working, background, finished
-and idle states, and notices surface sessions that need you. After a reboot, sessions
-that were running reopen automatically by default, each in its own tmux server.
-
-The unit of work should survive the terminal, conversation and account that happened to
-start it.
+**Background work.** Background shells and subagents count as work in progress:
+the list shows them, and a handover carries them over instead of waiting.
 
 ## Voyages
 
-Sometimes I do not want to manage the next turn. I want to describe the outcome and
-come back when it is actually true.
+Sometimes you don't want to manage the next turn. You want to describe the outcome
+and come back when it's actually true.
 
 ```text
 /voyage the auth tests pass --check "cargo test auth" --budget 40
 ```
 
-After each turn, toomux evaluates whether the stated outcome has been met. If not, the
-session is sent back with what is still missing. A voyage carries across handovers and
-can continue after a usage limit lifts. `--check` gives the outcome a concrete command
-that must pass.
+After each turn a separate judge asks whether the outcome is met, and if not, sends
+the session back with what's still missing. `--check` makes "done" a command that has
+to pass. A voyage follows its conversation across handovers, waits out usage limits,
+and doesn't count waiting on background work as stalling.
 
 <p align="center">
   <img src="assets/voyage.gif" alt="A voyage progressing through work, waiting at a usage limit, running a proof lap and landing only after the outcome is accepted" width="100%">
 </p>
 
-Persistence controls how hard “done” is to reach:
-
-**light** · **steady** · **hard** · **relentless**
-
-`steady` is the default. `hard` adds one proof lap. `relentless` adds two proof laps
-and then a skeptical review of the diff since the voyage began. The full stopping and
-retry rules are in the [Voyages guide](GUIDE.md#voyages).
-
-### Proof laps
-
-A proof lap deliberately distrusts a successful-looking result. Once the judge says the
-outcome is met, the session is sent back to re-run the evidence and inspect its own
-changes. If that reveals a skipped test, stub, TODO or other contradiction, the voyage
-returns to work instead of accepting the earlier claim. A lap is not a second summary;
-it is another execution turn with a narrower job: try to falsify “done.”
+How hard "done" is to reach is up to you: **light** · **steady** (default) · **hard**
+adds a proof lap · **relentless** adds two and a skeptical review of the whole diff.
+A proof lap sends the session back to try to *falsify* "done": re-run the evidence,
+reread its own changes, look for the skipped test or the TODO.
 
 <details>
-<summary><strong>See a proof lap catch a false “done”</strong></summary>
+<summary><strong>See a proof lap catch a false "done"</strong></summary>
 
 <p align="center">
-  <img src="assets/proof-lap.png" alt="A relentless voyage proof lap finding a TODO and ignored test after the session had claimed the parser work was complete, then returning to fix the missed case" width="100%">
+  <img src="assets/proof-lap.png" alt="A relentless voyage proof lap finding a TODO and an ignored test after the session had claimed the parser work was complete, then going back to fix the missed case" width="100%">
 </p>
 
 </details>
 
 ## Memory that survives the session
 
-The answer does not have to be in the current conversation.
-
-A session in one project can search what another session learned in another project,
-find the earlier decision, and reuse it without making you reconstruct the history.
-
-<p align="center">
-  <img src="assets/memory.png" alt="A billing-service session searching toomux memory for how atlas-api previously implemented rate limiting, finding the earlier decision and reusing it" width="100%">
-</p>
-
-toomux indexes conversations as they happen alongside handover briefs and each project's
-Claude Code memory files. A handover asks the outgoing session to update durable project
-memory before it leaves. Quiet transcript files are archived compressed and kept past
-Claude Code's default cleanup period, so a complete old turn can still be recovered when
-needed.
-
-### See how the work connects
-
-What feels like one body of work can span many sessions. The memory graph makes that
-lineage explicit: the session that wrote a brief, the one that continued from it, the
-turns and kept outputs around them, and the memory each session found or read.
+The answer doesn't have to be in the current conversation. Every conversation,
+handover brief and project memory file is indexed as it happens, and every session
+can search all of it through toomux's MCP tool. A session in one project can find the
+decision another session made in another project last week, and reuse it.
 
 <p align="center">
-  <img src="assets/graph-chain.png" alt="A handover lineage in the memory graph showing one body of work continued across 22 sessions and 22 linked handover briefs" width="100%">
+  <img src="assets/memory.png" alt="A billing-service session searching toomux memory for how atlas-api implemented rate limiting earlier, finding the decision and reusing it" width="100%">
 </p>
+
+Before leaving, a handing-over session updates the project's durable memory. Old
+transcripts are archived compressed and kept past Claude Code's default cleanup, so a
+complete old turn can still be recovered. `alt-m` shows it all as a graph: which
+session wrote which brief, who continued from it, what each one read.
+
+<p align="center">
+  <img src="assets/graph-chain.png" alt="One body of work continued across 22 sessions and 22 linked handover briefs in the memory graph" width="100%">
+</p>
+
+## FAQ
 
 <details>
-<summary><strong>See the graph inside the TUI</strong></summary>
+<summary><strong>How is this different from just using tmux?</strong></summary>
 
-<p align="center">
-  <img src="assets/graph.png" alt="The toomux TUI memory graph focused on one session, with its project, turns, kept outputs, handover briefs and recalled memory gathered around it" width="100%">
-</p>
+tmux keeps terminals alive. It doesn't know a pane is a Claude Code conversation,
+that it's at 300k tokens, waiting on you, or stopped by a usage limit that reset an
+hour ago. toomux reads Claude Code's own session records and transcripts to know
+that, and acts on it. You keep your tmux setup; toomux adds one layer above it.
+
+</details>
+
+<details>
+<summary><strong>Claude Code already compacts and can continue after a limit. Why toomux?</strong></summary>
+
+Compaction summarises the conversation, in place, when it's nearly full; you don't
+choose what's kept. A toomux handover happens far earlier, at a turn boundary, from a
+brief the session writes itself, and the full original stays searchable. The
+[evidence](docs/EVIDENCE.md) is about exactly that difference.
+
+Claude Code's own "continue automatically" only lasts while that one session stays
+open and waits. toomux doesn't interfere with it, and it covers the cases it doesn't:
+a session that chose to stop at the limit, a reset that comes overnight, a session
+that was restarted, a voyage or handover that was under way.
+
+</details>
+
+<details>
+<summary><strong>Does anything leave my machine?</strong></summary>
+
+Nothing of yours goes anywhere new. toomux has no telemetry and no server of its
+own; it reads and writes local files, and Claude Code talks to Anthropic exactly as it
+always does. The one request toomux makes itself is to ask Anthropic for each
+account's usage limits, with that account's own sign-in, so it can show them. Remote
+access is off unless you set it up, and goes over your own
+[ByteTraverse](#the-same-toomux-remotely) connection.
+
+</details>
+
+<details>
+<summary><strong>What does it change on my machine?</strong></summary>
+
+`toomux init --apply` adds tmux key bindings and a status segment (between marked
+lines in `~/.tmux.conf`), three Claude Code hooks, a status line and an MCP server in
+each account's settings, and a `/voyage` command, keeping backups of every file it
+edits. `toomux where` lists every place toomux reads or writes. `toomux uninstall`
+takes it all back; `--purge` also deletes toomux's own state.
+
+</details>
+
+<details>
+<summary><strong>I use more than one Claude account. Does it handle that?</strong></summary>
+
+Yes: work and personal, or one per client. `toomux account setup` adds each account
+you've signed into with Claude Code. Every account's limits show side by side,
+history is shared across them, and a conversation can move from one to another
+without losing anything. toomux never creates accounts or shares credentials between
+them; how you use your accounts is between you and
+[Anthropic's terms](https://www.anthropic.com/legal/consumer-terms).
+
+</details>
+
+<details>
+<summary><strong>Which Claude Code versions does it work with?</strong></summary>
+
+It's tested against current Claude Code releases (2.1.x) on Linux and macOS, and on
+Windows through WSL 2. toomux relies on Claude Code's hooks, session records and
+transcripts, and on a handful of on-screen strings (the usage-limit dialog, first-run
+screens) that are kept together in the source, so a Claude Code wording change is a
+small, obvious fix.
+
+</details>
+
+<details>
+<summary><strong>Is it safe to let it type into my sessions?</strong></summary>
+
+toomux only types into a prompt it has just read back as empty, checks afterwards
+that its text was sent, and gives up visibly (with a logged reason) rather than
+guessing. It never types over your unsent draft: if a handover is due while you're
+mid-sentence, it waits and tells you so; if it has to go ahead, your draft is saved
+into the brief so the fresh session has it.
 
 </details>
 
 ## The same toomux, remotely
 
-Remote access is another window onto the host-side toomux, not another dashboard. The
-workstation stays authoritative and each paired remote client gets an isolated
-`toomux shell` backed by the same sessions, accounts, memory, handovers and voyages.
-
-### Browser · any device
-
-Open [toomux.com/remote](https://toomux.com/remote/) from any phone, tablet, laptop or
-other device with a modern browser. After ByteTraverse pairing, it renders the full
-toomux TUI and sends input back to the host. The public site is the UI/bootstrap; it is
-not a relay for private session data.
-
-### Native Android
-
-The Android app is the dedicated native route to that same host-side shell, with the same
-session state and keyboard model rendered as an Android view.
-
-<p align="center"><sub>DESKTOP · THE HOST-SIDE TOOMUX</sub></p>
-
-<p align="center">
-  <img src="assets/hero.png" alt="The real desktop toomux TUI on the host, showing the shared session system" width="100%">
-</p>
-
-<p align="center"><sub>same host shell · ByteTraverse</sub></p>
-
-<p align="center">
-  <img src="assets/readme/android-native-qualified.png" alt="The real native Android toomux client rendering the same host-side session system over ByteTraverse" width="100%">
-</p>
-
-For each paired device, the host starts an isolated `toomux shell`, captures its ANSI
-cell grid, and the Android app renders that grid natively and sends input back. The
-ordinary app surface is a native Android view; the self-contained browser memory graph
-is the only WebView surface.
-
-Remote access is opt-in. Both browser remote access and native Android require a
-ByteTraverse connection to the host; toomux adds separate per-device application
-authentication on top. The browser path uses a purpose-bound ByteTraverse WebRTC
-capability and the Android path uses the ByteTraverse mesh endpoint. The exact browser
-boundary is documented in the [web remote design](docs/MOBILE-WEB-REMOTE.md), and the
-native boundary in the [Android guide](android/README.md).
-
-## Where the tokens went
-
-`toomux tokens` is an accounting report, not one blended “savings” number. It separates
-what the Claude sessions actually used from estimates of context that toomux avoided
-carrying forward.
-
-<picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/token-accounting-mobile-dark.svg">
-  <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/token-accounting-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/token-accounting-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/token-accounting-light.svg">
-  <img src="assets/readme/token-accounting-light.svg" alt="Token accounting split into observed usage and estimated avoided context, with separate attribution for handover, output trimming, cache behavior and subagent activity" width="100%">
-</picture>
-
-Observed token and cache traffic can be priced at API list rates. Counterfactual
-“avoided” context is necessarily an estimate. The seven-day report captured below
-contains about **$200 of observed list-price usage** and **$125 of estimated avoided
-usage**; those two categories are deliberately not presented as the same kind of
-measurement.
+Pair a phone, tablet or laptop over [ByteTraverse](https://toomux.com/remote/) and open
+the full toomux TUI in a browser at [toomux.com/remote](https://toomux.com/remote/), or
+in the native Android app. The workstation stays authoritative; each paired device
+gets its own isolated `toomux shell` on the host. It's opt-in, and local use never
+needs it.
 
 <details>
-<summary><strong>See the complete token report</strong></summary>
+<summary><strong>How remote access works</strong></summary>
 
 <p align="center">
-  <img src="assets/tokens.png" alt="The complete toomux seven-day token report, including observed list-price usage, estimated avoided usage, model and subagent breakdowns, cache-write reasons and old command-output composition" width="100%">
+  <img src="assets/readme/android-native-qualified.png" alt="The native Android toomux client rendering the same host-side session system over ByteTraverse" width="100%">
 </p>
 
-</details>
+For each paired device, the host starts an isolated `toomux shell`, captures its cell
+grid, and the client renders it and sends input back. The public site is the
+UI/bootstrap only; it is not a relay for session data. Browser and Android both need
+a ByteTraverse connection to the host, and toomux adds its own per-device
+authentication on top.
 
-## How it fits together
+```sh
+toomux remote serve
+toomux remote phone   # browser: scan the one-use pairing code at toomux.com/remote
+toomux remote pair    # Android
+```
 
-The product is easier to trust when the boundaries are visible.
+The exact boundaries: [web remote design](docs/MOBILE-WEB-REMOTE.md) ·
+[Android guide](android/README.md).
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="assets/readme/architecture-mobile-dark.svg">
   <source media="(max-width: 600px) and (prefers-color-scheme: light)" srcset="assets/readme/architecture-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/architecture-light.svg">
-  <img src="assets/readme/architecture-light.svg" alt="toomux product model: one host-side coordination system used locally through the full TUI, sidebar, normal tmux and automation, or remotely through ByteTraverse from any browser at toomux.com/remote or the native Android app" width="100%">
+  <img src="assets/readme/architecture-light.svg" alt="toomux product model: one host-side coordination system used locally through the full TUI, sidebar, normal tmux and automation, or remotely through ByteTraverse from a browser or the Android app" width="100%">
 </picture>
 
-**Claude Code stays Claude Code.** toomux coordinates sessions around it; local session
-coordination does not proxy Claude Code model traffic through a separate AI service.
-
-**Sessions stay isolated.** Every session that toomux starts, reopens or adopts runs in
-its own tmux server, so one server failing does not take the others with it.
-
-**Remote access is optional.** Local use does not require ByteTraverse or a remote
-listener. When enabled, ByteTraverse is the shared transport boundary for both remote
-channels: the browser TUI at `toomux.com/remote` and the native Android client.
-
-**Memory is inspectable.** Handover briefs, archived transcripts, project memory and the
-memory graph are files and records you can inspect, search and rebuild rather than
-invisible model state.
+</details>
 
 ## Install
 
-### Self-contained installer
-
-Linux, macOS, or Windows through WSL 2:
+**Self-contained** (Linux, macOS, Windows through WSL 2), the canonical install:
 
 ```sh
 curl -fsSL https://toomux.com/install | sh
 ```
 
-This is the canonical install. It verifies the published bundle checksum and the hashes
-inside its manifest, then installs an immutable version under `~/.local/lib/toomux`
-with its own tested tmux runtime and terminfo database. If you already have tmux, it
-leaves it alone. If you do not, it exposes the bundled tmux in `~/.local/bin`.
+It verifies the bundle's checksum and every hash in its manifest, then installs an
+immutable version under `~/.local/lib/toomux` with its own tested tmux and terminfo.
+If you already have tmux it's left alone. Upgrades install beside the old version and
+switch atomically; `toomux rollback` goes back. It doesn't install Claude Code, touch
+your shell config or enable remote access.
 
-Upgrades install a new version beside the old one and atomically switch `current`.
-The previous verified bundle stays available through `toomux rollback`. The installer
-does not install Claude Code, configure your shell, or enable ByteTraverse.
-
-### Homebrew
-
-macOS:
+**Homebrew** (macOS), which also installs tmux:
 
 ```sh
 brew install meshbergio/tap/toomux
 ```
 
-Homebrew installs tmux too and manages both through Homebrew.
-
-### npm
-
-Linux, macOS, or from Windows with a WSL 2 distribution:
+**npm** (Linux, macOS, or Windows with WSL 2), which needs tmux 3.2+ already installed:
 
 ```sh
 npm install -g toomux
 ```
 
-The npm package installs the matching toomux binary. On Windows, the launcher delegates
-into WSL 2. npm does not install tmux.
-
-### Requirements
-
-Claude Code. The self-contained installer includes tmux. Homebrew installs tmux as a
-dependency. npm and source installs need tmux 3.2 or later already available.
-
-### First run
+Then:
 
 ```sh
-toomux init --apply
+toomux init --apply      # tmux keys, Claude Code hooks, status line, MCP server
+toomux account setup     # only if you use more than one Claude account
+toomux                   # or alt-s from anywhere in tmux
 ```
 
-That installs the toomux tmux bindings and status segment, configures the Claude Code
-status line and hooks it needs, and registers the toomux MCP server. It keeps backups of
-files it edits.
+Defaults are meant to be right out of the box: handover, restart recovery, recovery
+after limits, transcript archiving and memory upkeep are all on. Every setting is in
+the [Guide](GUIDE.md#setup).
 
-If you use more than one Claude Code account:
-
-```sh
-toomux account setup
-```
-
-Then press `alt-s` anywhere in tmux.
-
-### Configuration
-
-Defaults are intentionally useful out of the box, including handover, transcript
-archiving, restart recovery and memory upkeep. `toomux init` writes the config;
-`toomux where` shows every config/state/archive location. The complete setting
-reference is in the [Guide](GUIDE.md#setup).
-
-### Browser remote
-
-Any phone, tablet, laptop or other device with a modern browser can use the full remote
-TUI. Both sides need ByteTraverse connectivity. On the host:
-
-```sh
-toomux remote serve
-toomux remote phone
-```
-
-Then open [toomux.com/remote](https://toomux.com/remote/) on the remote device and scan
-the one-use pairing code. Browser transport and application authority are separate; the
-full security model is in [docs/MOBILE-WEB-REMOTE.md](docs/MOBILE-WEB-REMOTE.md).
-
-### Android
-
-The signed Android APK is attached to tagged releases. Android uses the same
-ByteTraverse-backed remote service; then run:
-
-```sh
-toomux remote serve
-toomux remote pair
-```
-
-The app defaults to `http://10.30.0.1:7462`. Setup, revocation and the exact security
-boundary are in [android/README.md](android/README.md).
-
-### Upgrade
-
-Homebrew:
-
-```sh
-brew upgrade toomux
-```
-
-npm:
-
-```sh
-npm install -g toomux@latest
-```
-
-Self-contained install: rerun the installer command above. The old bundle becomes the rollback target.
-
-### Uninstall
-
-```sh
-toomux uninstall
-```
-
-`toomux uninstall --dry-run` shows what would be removed first. A self-contained install also removes its owned runtime and managed tmux launcher, and restores a pre-bundle toomux launcher if one was migrated. `--purge` also deletes toomux's own config, state and transcript archive; your Claude Code memory folders are not touched.
+**Upgrade:** rerun the installer, `brew upgrade toomux`, or
+`npm install -g toomux@latest`.
+**Uninstall:** `toomux uninstall` (`--dry-run` to see what it would remove first,
+`--purge` to also delete toomux's own state and archive; your Claude Code memory is
+never touched).
 
 ---
 
-**Documentation**<br>
-[Guide](GUIDE.md) · [Security](SECURITY.md) · [Benchmarks](BENCHMARKS.md) ·
-[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+<p align="center">
+  <a href="GUIDE.md">Guide</a> ·
+  <a href="docs/EVIDENCE.md">Evidence</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="BENCHMARKS.md">Benchmarks</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-MIT or Apache 2.0, your pick:
-[MIT](LICENSE-MIT) · [Apache 2.0](LICENSE-APACHE).
+<p align="center" id="license">
+  <sub>MIT or Apache 2.0, your pick: <a href="LICENSE-MIT">MIT</a> · <a href="LICENSE-APACHE">Apache 2.0</a>.</sub>
+</p>
