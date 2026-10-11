@@ -33,6 +33,12 @@ pub fn state() -> PathBuf {
     }
 }
 
+/// What went wrong in toomux's own screens, one line each (a message on
+/// screen fades in seconds).
+pub fn error_log() -> PathBuf {
+    state().join("errors.log")
+}
+
 /// What is worth backing up: the transcript archive.
 pub fn data() -> PathBuf {
     match one_home() {

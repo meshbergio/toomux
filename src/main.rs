@@ -106,6 +106,18 @@ enum Cmd {
     },
     /// Move a session running in a plain terminal into tmux
     Adopt { target: String },
+    /// Start a new session in a folder (default: here), in a tmux server of
+    /// its own, as ctrl-n / alt-n in toomux does
+    New {
+        dir: Option<String>,
+        /// Account name; by default the one toomux picks (a rule, the
+        /// account sessions there use, else one not at its limit)
+        #[arg(long)]
+        account: Option<String>,
+        /// Only start it: print its pane instead of going there
+        #[arg(long)]
+        detach: bool,
+    },
     /// Reopen conversations that aren't running (lost with their tmux
     /// server, from before a restart, or pinned), each in a tmux server of
     /// its own: session-id prefix or name
@@ -550,6 +562,45 @@ fn main() -> Result<()> {
                 }
                 println!("{msg}");
                 watch::announce_text(&cfg, &msg, "restart", "", "");
+            }
+            Ok(())
+        }
+        Some(Cmd::New {
+            dir,
+            account,
+            detach,
+        }) => {
+            let folder = match dir {
+                Some(d) => config::expand(&d),
+                None => std::env::current_dir().context("the current folder")?,
+            };
+            let folder = std::fs::canonicalize(&folder)
+                .ok()
+                .filter(|p| p.is_dir())
+                .with_context(|| format!("{} isn't a folder", folder.display()))?
+                .display()
+                .to_string();
+            if cfg.accounts.is_empty() {
+                bail!("no accounts configured: run toomux init");
+            }
+            let live = registry::load(&cfg);
+            let (acct, why) = match account {
+                Some(name) => (
+                    cfg.account_by_name(&name)
+                        .with_context(|| format!("no account named '{name}' ({})", names(&cfg)))?,
+                    "asked",
+                ),
+                None => toomux::places::account_for(&cfg, &folder, &live),
+            };
+            let args = toomux::places::new_args(&cfg, &live);
+            let pane = actions::start(&cfg, &folder, acct, &args)?;
+            println!(
+                "started in {} on {} ({why}): {pane}",
+                config::tilde(&folder),
+                cfg.accounts[acct].name
+            );
+            if !detach && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                actions::jump_pane(&pane)?;
             }
             Ok(())
         }
@@ -1713,6 +1764,10 @@ fn where_() -> Result<()> {
         "  state    {}  {}  memory, usage, handovers, kept outputs, reports",
         t(&paths::state()),
         human(du(&paths::state()))
+    );
+    println!(
+        "  errors   {}  what went wrong on screen, kept to ~256KB (and .1)",
+        t(&paths::error_log())
     );
     println!(
         "  data     {}  {}  the transcript archive",

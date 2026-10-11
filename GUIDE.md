@@ -47,13 +47,20 @@ The repeatable resource-measurement procedure is in [BENCHMARKS.md](BENCHMARKS.m
 | `alt-s` | between the session and the list |
 | `alt-j` | opened with `alt-s`: close toomux on the chosen session, in tmux itself |
 | `alt-b` | hide or show the list |
+| `alt-n` | a [new session](#new-sessions) in a recent folder |
 | `alt-u` | usage in place of the session |
 | `alt-m` | the [memory graph](#the-memory-graph) in place of the list and session |
+| `alt-a` | accounts |
+| `alt-r` | remote: connect a phone |
+| `alt-?` | every key |
 | `alt-1..9` | a pin |
 | in the list | everything under [Keys](#keys); `enter` opens here, `esc` goes back to the session, `ctrl-c` leaves (sessions keep running) |
 
-Everything else goes to the session, paste included (bracketed when the program
-asks). The wheel scrolls toomux's copy of the history, or goes to the program
+These work wherever the keyboard is. With the keyboard in a session everything
+else goes to the session, paste included (bracketed when the program asks): so
+`ctrl-n` and `?` there are Claude's, and `alt-n` and `alt-?` are toomux's. A
+toomux overlay (the new-session picker, help, a question) takes the keyboard
+until it closes. The wheel scrolls toomux's copy of the history, or goes to the program
 if it takes the mouse; shift-drag selects text in your terminal as usual.
 
 ## Tokens: handover, capping and memory
@@ -392,7 +399,7 @@ In toomux (`?` shows these too):
 | `ctrl-x` | close it |
 | `ctrl-r` | rename it (in toomux, its tmux window, and Claude's `/rename`) |
 | `ctrl-p` | pin it to `alt-1..9`; again to unpin |
-| `ctrl-n` | start a new session in a recent folder |
+| `ctrl-n`, `alt-n` | start a new session in a recent folder |
 | `ctrl-s` | clean up sessions idle for days |
 | `ctrl-e` | reopen what was running before a restart |
 | `ctrl-u` | usage: each account's 5-hour and weekly limits (clears a half-typed filter first) |
@@ -410,6 +417,12 @@ Anywhere in tmux:
 
 Every footer hint is clickable, so is each account in the header (its usage),
 and the list scrolls with the mouse wheel.
+
+Messages in the footer fade after a few seconds. Errors also stay under `?`
+(the last one) and in `~/.local/state/toomux/errors.log` (all of them, one line
+each, kept to about 256KB plus the previous `errors.log.1`); `toomux where`
+lists it. A key that can't act says why: `busy: …` while another operation
+runs, or why the folder list has nothing to start in.
 
 ## Usage
 
@@ -574,11 +587,18 @@ doesn't stop at the trust prompt. toomux never grants trust you haven't given.
 
 ## New sessions
 
-`ctrl-n` lists folders by how much and how recently you've used Claude in them
-(or type a path). The account comes from the most specific `[[rules]]` entry, else
+`ctrl-n` in the list, or `alt-n` anywhere in full-screen toomux (including while
+you're typing in a session, where `ctrl-n` belongs to Claude), lists folders by
+how much and how recently you've used Claude in them (or type a path). Pick one
+with `enter`, then the account with `enter` (the suggested one) or its number.
+`toomux new [folder] [--account <name>]` does the same from a shell: the
+current folder by default, then it takes you there (`--detach` only starts it). The account comes from the most specific `[[rules]]` entry, else
 the account sessions there already use, else one that isn't at its limit. Launch
 flags are the ones most of your running sessions use, unless `new_session_args`
-says otherwise.
+says otherwise; what belongs to one conversation alone is never copied (its
+`--name`, `--resume`/`--continue`/`--session-id`, its opening prompt, and the
+handovers folder toomux adds to a successor). Ties go to the longer set of flags,
+then the first in sorted order, and the picker shows the flags it will use.
 
 ## A tmux server per session
 
@@ -590,6 +610,10 @@ a server of your own making (`tmux -L work`, or `-S /some/socket`, carried as
 `%N@/some/socket`) is found by the `TMUX` its process started with. Jumping to a
 session on another server moves your terminal over (`detach-client -E` then
 `attach`); the full-screen view reconnects its control client to that server.
+It only ever attaches to a server that is running: when the session you're
+watching ends, toomux says so with the last line it showed, and with no session
+in tmux at all it attaches to nothing (it never starts a server or a shell
+session of its own).
 
 Its servers start from `~/.local/state/toomux/server.tmux.conf`: your
 `~/.tmux.conf`, rewritten on each start without tmux-resurrect, tmux-continuum and
@@ -720,6 +744,7 @@ toomux jump --pin <n>           a pin, reopening it if needed
 toomux switch <target> [--to <account>] [--wait] [--force]
 toomux switch --limited [--to <account>]
 toomux adopt <target>
+toomux new [folder] [--account <name>] [--detach]   a new session there (default: here), in its own server
 toomux reopen <target>...       conversations that aren't running, each in its own server
 toomux usage [--json] [--fetch] each account's 5-hour and weekly usage
 toomux statusline               Claude Code status line command (reads its JSON on stdin)

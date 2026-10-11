@@ -34,9 +34,10 @@ pub struct Control {
 }
 
 impl Control {
-    /// Attach in control mode to `server`: to its most recent session, or,
-    /// on the default server only, a new one. Every event goes to `tx`,
-    /// wrapped by `wrap`.
+    /// Attach in control mode to `server`'s most recent session. A server
+    /// that isn't running is an error: following never creates a server or
+    /// session (that would be a stray shell nobody asked for). Every event
+    /// goes to `tx`, wrapped by `wrap`.
     pub fn start<M: Send + 'static>(
         server: &str,
         tx: Sender<M>,
@@ -49,13 +50,11 @@ impl Control {
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
-        let args: &[&str] = match (has_server, server) {
-            (true, _) => &["-C", "attach"],
-            (false, "default") => &["-C", "new-session", "-s", "main"],
-            (false, _) => anyhow::bail!("tmux server {server} isn't running"),
-        };
+        if !has_server {
+            anyhow::bail!("its tmux server ({server}) isn't running");
+        }
         let mut child = crate::tmux::command_on(server)
-            .args(args)
+            .args(["-C", "attach"])
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
             .stdin(Stdio::piped())
@@ -209,6 +208,86 @@ mod tests {
         assert_eq!(unescape(br"a\015\012b\134c"), b"a\r\nb\\c");
         assert_eq!(unescape(br"\033[31m"), b"\x1b[31m");
         assert_eq!(unescape(br"trailing\01"), br"trailing\01");
+    }
+
+    fn private_socket(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("toomux-ctl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn following_a_server_that_isnt_running_never_creates_one() {
+        let sock = private_socket("gone");
+        let (tx, _rx) = std::sync::mpsc::channel::<Event>();
+        let r = Control::start(sock.to_str().unwrap(), tx, |e| e);
+        assert!(r.is_err());
+        assert!(!sock.exists(), "a server was made just to attach to");
+    }
+
+    #[test]
+    fn no_default_server_means_no_stray_main_session() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = private_socket("tmpdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = std::env::var_os("TMUX_TMPDIR");
+        // SAFETY: serialised by TEST_ENV.
+        unsafe { std::env::set_var("TMUX_TMPDIR", &dir) };
+        // tmux's own socket folder, as it would be: tmux could make a server
+        // there.
+        let sockets = crate::tmux::socket_dir();
+        std::fs::create_dir_all(&sockets).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let default = sockets.join("default");
+        let (tx, _rx) = std::sync::mpsc::channel::<Event>();
+        let r = Control::start("default", tx, |e| e);
+        match old {
+            Some(v) => unsafe { std::env::set_var("TMUX_TMPDIR", v) },
+            None => unsafe { std::env::remove_var("TMUX_TMPDIR") },
+        }
+        let private = std::fs::canonicalize(&dir).unwrap();
+        let made = default.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(default.starts_with(&private), "{default:?}");
+        assert!(r.is_err());
+        assert!(!made, "a default server was started");
+    }
+
+    #[test]
+    fn attaching_adds_no_session_to_a_running_server() {
+        let sock = private_socket("live");
+        let server = sock.to_str().unwrap().to_string();
+        let tmux = |args: &[&str]| {
+            crate::tmux::command_on(&server)
+                .args(["-f", "/dev/null"])
+                .args(args)
+                .env_remove("TMUX")
+                .stderr(Stdio::null())
+                .output()
+        };
+        let started = tmux(&["new-session", "-d", "-s", "only", "sleep 60"]);
+        if !started.is_ok_and(|o| o.status.success()) {
+            eprintln!("skipped: tmux can't start a private server here");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Event>();
+        let mut c = Control::start(&server, tx, |e| e).unwrap();
+        let seq = c.one("list-sessions -F '#{session_name}'");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut names = None;
+        while names.is_none() && std::time::Instant::now() < deadline {
+            if let Ok(Event::Reply { seq: s, lines, .. }) =
+                rx.recv_timeout(std::time::Duration::from_millis(200))
+                && s == seq
+            {
+                names = Some(lines);
+            }
+        }
+        drop(c);
+        let _ = tmux(&["kill-server"]);
+        let _ = std::fs::remove_file(&sock);
+        assert_eq!(names, Some(vec!["only".to_string()]));
     }
 
     #[test]
