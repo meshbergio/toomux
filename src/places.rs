@@ -242,7 +242,7 @@ mod tests {
             "--add-dir",
             &h,
             "--name",
-            "Tradeeze",
+            "Widgets",
             "--resume",
             "0b6c6a1e-1111-2222-3333-444455556666",
         ]);
@@ -297,7 +297,7 @@ mod tests {
         // Every handover successor carries its own --name; none may become
         // the new session's flags, whatever order the sessions come in.
         let mut argvs = [
-            v(&["claude", "--add-dir", &h, "--name", "Tradeeze"]),
+            v(&["claude", "--add-dir", &h, "--name", "Widgets"]),
             v(&["claude", "--add-dir", &h, "--name", "A much longer name"]),
             v(&[
                 "claude",

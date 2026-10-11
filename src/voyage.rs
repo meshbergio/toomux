@@ -3112,16 +3112,16 @@ mod tests {
         let (_env, root) = state("compat");
         std::fs::create_dir_all(dir()).unwrap();
         std::fs::write(
-            dir().join("fa8fc3f3.json"),
-            r#"{"id": "fa8fc3f3", "outcome": "finish it", "check": "make", "budget_usd": null,
-                "cwd": "/tmp", "sessions": ["b1038135"], "started_ms": 1791127071291, "status": "paused",
+            dir().join("5e7a11ed.json"),
+            r#"{"id": "5e7a11ed", "outcome": "finish it", "check": "make", "budget_usd": null,
+                "cwd": "/tmp", "sessions": ["0dd5e55a"], "started_ms": 1791127071291, "status": "paused",
                 "why": "8 checks in a row with no headway, stuck at about 30%", "ended_ms": null, "turns": 0,
                 "idle": 0, "failures": 0, "last": null, "judge_usd": 0.0, "spent_usd": 0.0, "at_limit": false,
                 "progress": null, "persistence": "relentless", "base": null, "laps": 0, "pushed": 0, "best": 0,
                 "flat": 0}"#,
         )
         .unwrap();
-        let q = open_for("b1038135").expect("it loads");
+        let q = open_for("0dd5e55a").expect("it loads");
         assert_eq!(
             (
                 q.paused_for(),
