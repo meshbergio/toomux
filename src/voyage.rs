@@ -2005,8 +2005,10 @@ pub fn orphan(cfg: &Config, q: &Voyage, live: &[Session]) -> Option<(&'static st
     Some((
         "orphaned",
         format!(
-            "its conversation {} isn't running and didn't continue anywhere (resuming it carries the voyage on): \
-             `toomux voyage rebind {} <session>` moves it, `toomux voyage clear {}` ends it",
+            "its conversation {} isn't running and didn't continue anywhere: \
+             `toomux reopen {}` carries the voyage on there, `toomux voyage rebind {} <session>` moves it, \
+             `toomux voyage clear {}` ends it",
+            short_id(q.session()),
             short_id(q.session()),
             q.id,
             q.id

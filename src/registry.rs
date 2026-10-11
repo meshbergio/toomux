@@ -777,6 +777,117 @@ fn placeholders(
         .collect()
 }
 
+/// Any conversation an account's `projects/` holds, by session-id prefix,
+/// as a placeholder to reopen: one that was never pinned or recorded (a
+/// voyage's conversation, say). On `account` if given, else the account
+/// its folder's rules or recent use pick; the folder is the one the
+/// transcript says it ran in.
+pub fn conversation(
+    cfg: &Config,
+    prefix: &str,
+    account: Option<usize>,
+    live: &[Session],
+) -> anyhow::Result<Session> {
+    use anyhow::{Context, bail};
+    if prefix.len() < 4 || !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        bail!("no session matches '{prefix}'");
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for i in 0..cfg.accounts.len() {
+        let projects = cfg.account_dir(i).join("projects");
+        // Accounts that share one projects folder: look once.
+        let real = std::fs::canonicalize(&projects).unwrap_or(projects.clone());
+        if seen.contains(&real) {
+            continue;
+        }
+        seen.push(real);
+        for dir in std::fs::read_dir(&projects).into_iter().flatten().flatten() {
+            for f in std::fs::read_dir(dir.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let name = f.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && name.ends_with(".jsonl") {
+                    found.push(f.path());
+                }
+            }
+        }
+    }
+    let path = match found.as_slice() {
+        [] => bail!("no session matches '{prefix}'"),
+        [one] => one.clone(),
+        _ => bail!(
+            "'{prefix}' matches {} conversations · give more of its id",
+            found.len()
+        ),
+    };
+    let id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .context("its transcript has no name")?;
+    let cwd = transcript_cwd(&path).context("its transcript doesn't say which folder it ran in")?;
+    let account = match account {
+        Some(a) => a,
+        None => crate::places::account_for(cfg, &cwd, live).0,
+    };
+    let meta = crate::transcript::meta(&path);
+    let st = crate::state::State::load();
+    let title = st
+        .names
+        .get(&id)
+        .cloned()
+        .or(meta.custom.clone())
+        .or(meta.title.clone())
+        .unwrap_or_else(|| format!("conversation {}", &id[..8.min(id.len())]));
+    Ok(Session {
+        pid: -10_000,
+        proc_start: None,
+        id,
+        cwd,
+        name: title.clone(),
+        title,
+        topic: None,
+        pr: meta.pr.clone(),
+        queued: None,
+        pin: None,
+        dormant: true,
+        restore: None,
+        state: State::Idle,
+        waiting_for: None,
+        limit: None,
+        handover: None,
+        since_ms: 0,
+        started_ms: 0,
+        account: Some(account),
+        config_dir: None,
+        args: vec!["claude".to_string()],
+        env: vec![],
+        tty: None,
+        pane: None,
+        unregistered: false,
+        twin: None,
+    })
+}
+
+/// The working folder a transcript's entries were written in.
+fn transcript_cwd(path: &std::path::Path) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path).ok()?;
+    std::io::BufReader::new(f)
+        .lines()
+        .take(200)
+        .map_while(Result::ok)
+        .find_map(|l| {
+            serde_json::from_str::<serde_json::Value>(&l)
+                .ok()?
+                .get("cwd")?
+                .as_str()
+                .map(str::to_string)
+        })
+}
+
 /// A last prompt standing in for a title: its first line, cut at a word
 /// boundary. It's a hint for sessions Claude hasn't titled yet, not a label
 /// anyone needs to read in full (the preview shows the whole prompt).
@@ -1037,6 +1148,56 @@ mod tests {
             unregistered: false,
             twin: None,
         }
+    }
+
+    #[test]
+    fn any_conversation_an_account_holds_can_be_found_to_reopen() {
+        let root = std::env::temp_dir().join(format!("toomux-conv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shared = root.join("shared").join("projects").join("-work-app");
+        std::fs::create_dir_all(&shared).unwrap();
+        let line = |cwd: &str| format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n");
+        let id = "abcd0123-0000-4000-8000-000000000001";
+        std::fs::write(shared.join(format!("{id}.jsonl")), line("/work/app")).unwrap();
+        // Two accounts on one projects folder, a third of its own.
+        let mut cfg = crate::config::Config::default();
+        cfg.accounts.clear();
+        for name in ["a", "b", "c"] {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            if name != "c" {
+                std::os::unix::fs::symlink(
+                    root.join("shared").join("projects"),
+                    dir.join("projects"),
+                )
+                .unwrap();
+            }
+            cfg.accounts.push(crate::config::Account {
+                name: name.into(),
+                config_dir: dir.display().to_string(),
+            });
+        }
+        let s = super::conversation(&cfg, "abcd0123", Some(2), &[]).unwrap();
+        assert_eq!(
+            (s.id.as_str(), s.cwd.as_str(), s.account, s.dormant),
+            (id, "/work/app", Some(2), true),
+            "found once though two accounts share it, on the account asked for"
+        );
+        assert!(super::conversation(&cfg, "ffff", None, &[]).is_err());
+        assert!(
+            super::conversation(&cfg, "../x", None, &[]).is_err(),
+            "only ids"
+        );
+        let other = root.join("c").join("projects").join("-work-app");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("abcd0123-0000-4000-8000-000000000002.jsonl"),
+            line("/work/app"),
+        )
+        .unwrap();
+        let e = super::conversation(&cfg, "abcd0123", None, &[]).unwrap_err();
+        assert!(e.to_string().contains("matches 2"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

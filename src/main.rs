@@ -123,6 +123,10 @@ enum Cmd {
     /// its own: session-id prefix or name
     Reopen {
         targets: Vec<String>,
+        /// For a conversation toomux has no record of (found by its id in
+        /// the accounts' transcripts): the account to open it on
+        #[arg(long)]
+        account: Option<String>,
         /// Everything from before the restart, once (the status tick runs
         /// this after a reboot)
         #[arg(long)]
@@ -622,16 +626,32 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Cmd::Reopen { targets, .. }) => {
+        Some(Cmd::Reopen {
+            targets, account, ..
+        }) => {
             let live = registry::load(&cfg);
             let gone = registry::reopenable(&cfg, &live);
+            let account = match account.as_deref() {
+                Some(name) => Some(
+                    cfg.account_by_name(name)
+                        .with_context(|| format!("no account named {name}"))?,
+                ),
+                None => None,
+            };
             let mut failed = 0;
             for t in &targets {
-                let r = registry::find(&gone, t).and_then(|s| {
-                    let pane = actions::revive(&cfg, s)?;
-                    snapshot::forget(std::slice::from_ref(&s.id));
-                    Ok(format!("{} reopened ({pane})", s.title))
-                });
+                // One toomux knows of first; else any conversation by its id.
+                let r = registry::find(&gone, t)
+                    .cloned()
+                    .or_else(|_| registry::conversation(&cfg, t, account, &live))
+                    .and_then(|mut s| {
+                        if account.is_some() {
+                            s.account = account;
+                        }
+                        let pane = actions::revive(&cfg, &s)?;
+                        snapshot::forget(std::slice::from_ref(&s.id));
+                        Ok(format!("{} reopened ({pane})", s.title))
+                    });
                 match r {
                     Ok(m) => println!("{m}"),
                     Err(e) => {

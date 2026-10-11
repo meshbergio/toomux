@@ -678,7 +678,11 @@ offers them. Sessions that vanish while the machine stays up (more than half at
 once, gone for two minutes: a tmux server went down) are offered, not reopened.
 Offered sessions show under "before the restart"; `ctrl-e` reopens them all, enter
 reopens one, `ctrl-x` stops offering one. `toomux reopen <id|name>...` does the
-same from the command line, for these, pins, and anything last recorded running.
+same from the command line, for these, pins, and anything last recorded running;
+given a session id it also opens any conversation an account keeps a transcript
+of (a voyage's, say), in the folder it ran in, on `--account <name>` or the
+account that folder would start on. A conversation still open anywhere is
+never opened twice: it says where it runs instead.
 
 ## Setup
 
@@ -780,7 +784,7 @@ toomux switch <target> [--to <account>] [--wait] [--force]
 toomux switch --limited [--to <account>]
 toomux adopt <target>
 toomux new [folder] [--account <name>] [--detach]   a new session there (default: here), in its own server
-toomux reopen <target>...       conversations that aren't running, each in its own server
+toomux reopen <target>... [--account <name>]   conversations that aren't running, each in its own server
 toomux usage [--json] [--fetch] each account's 5-hour and weekly usage
 toomux statusline               Claude Code status line command (reads its JSON on stdin)
 toomux handover <target>        hand a session over to a fresh one now
