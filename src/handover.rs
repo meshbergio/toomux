@@ -2486,6 +2486,9 @@ mod tests {
     /// A config whose one account's registry lists `sessions` as live,
     /// interactive sessions of this process.
     fn cfg_with(limit: u64, root: &Path, sessions: &[&str]) -> Config {
+        // Run from inside a toomux session, the policy it launched with
+        // would override the limits under test.
+        unsafe { std::env::remove_var(crate::context_policy::POLICY_ENV) };
         let mut c = cfg(limit);
         let acct = root.join("acct");
         std::fs::create_dir_all(acct.join("sessions")).unwrap();

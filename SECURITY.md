@@ -26,6 +26,12 @@ toomux is a local developer tool, not a sandbox or a privilege boundary.
 - Commands started by Claude Code keep those same user permissions.
 - A configured notify_command is deliberately arbitrary shell code.
 - Account sharing deliberately creates symlinks between Claude config folders.
+- Before it starts Claude, toomux records folder trust in that account's
+  .claude.json when you picked the folder yourself (`alt-n`, `toomux new`) or
+  when another of your accounts already trusts it. It also copies the
+  "onboarding done" flag and theme from another of your accounts, so a launch
+  doesn't stop at Claude's first-run screens. It never trusts a folder for a
+  session you didn't start yourself unless you've trusted it before.
 - Operations such as account deletion, uninstall purge and worktree cleanup
   are destructive only when explicitly requested or enabled, and are guarded
   against broad/protected paths.
