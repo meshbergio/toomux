@@ -250,6 +250,8 @@ impl Rig {
             config_dir: Some(acct.display().to_string()),
             args: Vec::new(),
             env: Vec::new(),
+            unregistered: false,
+            twin: None,
             tty: None,
             pane: Some(crate::tmux::Pane {
                 id: self.pane.clone(),

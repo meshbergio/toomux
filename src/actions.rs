@@ -799,7 +799,7 @@ pub fn revive(cfg: &Config, s: &Session) -> Result<String> {
 /// How long a new session must stay up to count as started. Claude exits
 /// within a second or two when it can't open what it was asked to (no such
 /// conversation on this account, a bad flag).
-const START_WAIT: Duration = Duration::from_millis(1000);
+const STAY_UP_WAIT: Duration = Duration::from_millis(1000);
 const RESUME_WAIT: Duration = Duration::from_millis(2500);
 
 /// Every session gets a tmux server of its own, so one server going down
@@ -927,7 +927,7 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
         .find(|p| !p.is_empty())
         .unwrap_or("claude")
         .to_string();
-    in_own_server(None, &name, folder, &Launch { env, cmd }, START_WAIT)
+    in_own_server(None, &name, folder, &Launch { env, cmd }, STAY_UP_WAIT)
 }
 
 /// Start Claude Code's first-class account sign-in flow in its own pane.
@@ -966,7 +966,7 @@ pub fn start_auth_login(cfg: &Config, folder: &str, account: usize) -> Result<St
             .find(|p| !p.is_empty())
             .unwrap_or("claude")
     );
-    in_own_server(None, &name, folder, &Launch { env, cmd }, START_WAIT)
+    in_own_server(None, &name, folder, &Launch { env, cmd }, STAY_UP_WAIT)
 }
 
 const CLAUDE_AUTH_URL_PREFIX: &str = "https://claude.com/cai/oauth/authorize?";
@@ -2164,6 +2164,8 @@ mod tests {
             config_dir: None,
             args: vec!["claude".into()],
             env: vec![],
+            unregistered: false,
+            twin: None,
             tty: None,
             pane: Some(crate::tmux::Pane {
                 id: pane.to_string(),
