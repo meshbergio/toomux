@@ -279,11 +279,11 @@ session wrote which brief, who continued from it, what each one read.
 
 > [!NOTE]
 > **What a search can see.** Memory is local, one per machine, and has no account
-> boundary. A search looks in the current project and global notes first; when that
-> finds fewer results than asked for, it fills the rest from other projects, marked
-> as such. `where: "all"` searches every project outright. If one account's work
-> (a client's, say) must never surface in another's sessions, don't run both through
-> the same toomux memory. `toomux mem --forget` removes an entry.
+> boundary. A search looks in the current project and global notes only; other
+> projects come in only when a session asks for `where: "all"`, or names a session or
+> an entry by id. If one account's work (a client's, say) must never be reachable
+> from another's sessions, don't run both through the same toomux memory.
+> `toomux mem --forget` removes an entry.
 
 <p align="center">
   <img src="assets/graph-chain.png" alt="One body of work continued across 22 sessions and 22 linked handover briefs in the memory graph" width="100%">
