@@ -319,6 +319,9 @@ struct NewFlow {
     sel: usize,
     /// Set once a folder is chosen: (folder, suggested account, why).
     folder: Option<(String, usize, &'static str)>,
+    /// The launch flags, settled once when the picker opens: what the
+    /// preview shows is what starts, and it doesn't shift under you.
+    args: Vec<String>,
 }
 
 impl NewFlow {
@@ -1975,6 +1978,7 @@ impl App {
                 query: String::new(),
                 sel: 0,
                 folder: None,
+                args: crate::places::new_args(&self.cfg, &self.sessions),
             });
             return;
         }
@@ -2135,8 +2139,14 @@ impl App {
                         flow.folder = Some((place.path.clone(), acct, why));
                     }
                 }
-                (Cmd::Yes, Some((folder, acct, _))) => self.start_in(folder, acct),
-                (Cmd::Pick(n), Some((folder, _, _))) => self.start_in(folder, n),
+                (Cmd::Yes, Some((folder, acct, _))) => {
+                    let args = std::mem::take(&mut flow.args);
+                    self.start_in(folder, acct, args)
+                }
+                (Cmd::Pick(n), Some((folder, _, _))) => {
+                    let args = std::mem::take(&mut flow.args);
+                    self.start_in(folder, n, args)
+                }
                 _ => {}
             }
             return;
@@ -2385,9 +2395,8 @@ impl App {
         }
     }
 
-    fn start_in(&mut self, folder: String, account: usize) {
+    fn start_in(&mut self, folder: String, account: usize, args: Vec<String>) {
         self.mode = Mode::Normal;
-        let args = crate::places::new_args(&self.cfg, &self.sessions);
         match actions::start(&self.cfg, &folder, account, &args) {
             Ok(pane) if tmux::inside() || self.shell.is_some() => self.go(&pane),
             Ok(pane) => {
@@ -2917,7 +2926,7 @@ impl App {
             lines.push(Line::from(chunk));
         }
         let (acct, why) = crate::places::account_for(&self.cfg, &pl.path, &self.sessions);
-        let args = crate::places::new_args(&self.cfg, &self.sessions);
+        let args = &flow.args;
         lines.push(Line::from(vec![
             Span::styled(
                 format!("starts on {}", self.cfg.accounts[acct].name),

@@ -578,7 +578,10 @@ doesn't stop at the trust prompt. toomux never grants trust you haven't given.
 (or type a path). The account comes from the most specific `[[rules]]` entry, else
 the account sessions there already use, else one that isn't at its limit. Launch
 flags are the ones most of your running sessions use, unless `new_session_args`
-says otherwise.
+says otherwise; what belongs to one conversation alone is never copied (its
+`--name`, `--resume`/`--continue`/`--session-id`, its opening prompt, and the
+handovers folder toomux adds to a successor). Ties go to the longer set of flags,
+then the first in sorted order, and the picker shows the flags it will use.
 
 ## A tmux server per session
 
