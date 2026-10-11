@@ -82,11 +82,31 @@ const STOP_OPTIONS: &[&str] = &["stop and wait for limit to reset", "stop"];
 const WAIT_OPTION: &str = "wait here, then continue automatically";
 /// Shown instead once Claude Code's own auto-continue is armed.
 const DONT_CONTINUE_OPTION: &str = "don't continue automatically";
-/// Claude Code's countdown and its reset notice: "Continuing automatically at
-/// 8pm · esc to cancel", "Usage limit reached · continuing automatically ...",
-/// "Usage limit reset · continuing automatically".
+/// Claude Code's countdown and its notices while it waits to continue by
+/// itself (2.1.296): "Continuing automatically at 8pm · esc to cancel",
+/// "Continuing shortly · esc to cancel", "Usage limit reached [again] ·
+/// continuing automatically …", "Claude Code will continue automatically at
+/// 8pm. Keep this session open …", and "Usage limit available again ·
+/// continuing now" once it has. Not "Usage limit has reset · press enter to
+/// continue": that's its wait gone stale, and nothing continues by itself.
 const CONTINUING: &str = "continuing automatically";
-const CONTINUING_NOTICES: &[&str] = &["usage limit reached", "usage limit reset"];
+const CONTINUING_STARTS: &[&str] = &[CONTINUING, "continuing shortly"];
+const CONTINUING_NOTICES: &[&str] = &["usage limit reached", "usage limit available again"];
+const CONTINUING_NOTICE_TAILS: &[&str] = &[CONTINUING, "continuing now"];
+const WILL_CONTINUE: &str = "will continue automatically";
+const STALE: &str = "press enter to continue";
+
+/// The prompt Claude Code submits for itself when it carries a task on
+/// after a usage limit ("Your claude.ai usage limit has reset. Continue the
+/// task …", or "… usage is available again before the usage-limit reset").
+const OWN_RESUME_PROMPT: &str = "your claude.ai usage ";
+
+/// Whether a prompt is Claude Code carrying its own task on after a usage
+/// limit, not something the person typed.
+pub fn claude_resume_prompt(prompt: &str) -> bool {
+    let p = plain(prompt);
+    p.starts_with(OWN_RESUME_PROMPT) && p.contains("continue the task")
+}
 
 /// What a session's pane shows, as far as limits go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,8 +144,11 @@ pub fn screen_in(text: &str) -> Screen {
     let end = all.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
     let lines = &all[end.saturating_sub(BOTTOM_LINES)..end];
     if lines.iter().any(|l| {
-        l.starts_with(CONTINUING)
-            || (CONTINUING_NOTICES.iter().any(|n| l.starts_with(n)) && l.contains(CONTINUING))
+        !l.contains(STALE)
+            && (CONTINUING_STARTS.iter().any(|c| l.starts_with(c))
+                || l.contains(WILL_CONTINUE)
+                || (CONTINUING_NOTICES.iter().any(|n| l.starts_with(n))
+                    && CONTINUING_NOTICE_TAILS.iter().any(|t| l.contains(t))))
     }) {
         return Screen::Continuing;
     }

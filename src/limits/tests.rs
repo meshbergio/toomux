@@ -32,10 +32,25 @@ fn claude_codes_own_countdown_is_recognised_so_it_is_left_alone() {
     for s in [
         "❯ \n  Continuing automatically at 8pm · esc to cancel\n",
         "  Usage limit reached · continuing automatically at 8pm · esc to cancel\n",
-        "  Usage limit reset · continuing automatically\n",
+        "  Usage limit reached again · continuing automatically at 8pm · esc to cancel\n",
+        "  Usage limit reached · limit resets 8pm\n  Continuing shortly · esc to cancel\n",
+        "  Claude Code will continue automatically at 8pm. Keep this session open; it may still pause for permission prompts. Press esc to cancel the wait.\n",
+        "  Usage limit available again · continuing now\n",
         " What do you want to do?\n ❯ 1. Stop and wait for limit to reset\n   2. Don\u{2019}t continue automatically\n",
     ] {
         assert_eq!(screen_in(s), Screen::Continuing, "{s}");
+    }
+}
+
+#[test]
+fn claude_codes_stale_wait_is_not_left_alone() {
+    // Its wait went stale (a relaunch, say): it won't continue by itself.
+    for s in [
+        "❯ \n  Your usage limit has reset · Press enter to continue\n",
+        "❯ \n  Usage limit has reset · press enter to continue\n",
+        "❯ \n  Automatic continue was turned off · this task will not resume on its own\n",
+    ] {
+        assert_eq!(screen_in(s), Screen::Other, "{s}");
     }
 }
 
@@ -439,4 +454,18 @@ fn a_voyage_paused_at_the_limit_carries_on_after_the_reset() {
         "{}",
         rig.keys()
     );
+}
+
+#[test]
+fn claude_codes_own_resume_prompt_is_not_the_person_typing() {
+    assert!(claude_resume_prompt(
+        "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+    ));
+    assert!(claude_resume_prompt(
+        "Your claude.ai usage is available again before the usage-limit reset. Continue the task you were working on."
+    ));
+    assert!(!claude_resume_prompt(
+        "your claude.ai usage looks high, why?"
+    ));
+    assert!(!claude_resume_prompt("continue the task"));
 }

@@ -1172,6 +1172,7 @@ pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
         if crate::index::user_authored_prompt(prompt).is_some()
             && !prompt.starts_with('/')
             && !prompt.starts_with("[toomux")
+            && !crate::limits::claude_resume_prompt(prompt)
             && reason != Some(PauseReason::Budget)
         {
             resume(&mut q, "");
