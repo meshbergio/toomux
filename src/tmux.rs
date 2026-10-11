@@ -423,8 +423,11 @@ const FRESH_MS: i64 = 10_000;
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Listings(HashMap<String, (i64, String)>);
 
+/// Named for PANES_FORMAT's columns: a toomux from before the pane pid was
+/// listed (still running after an upgrade) keeps its own file, so neither
+/// reads the other's listings as fresh and loses panes or their processes.
 fn listings_path() -> PathBuf {
-    crate::watch::dir().join("panes.json")
+    crate::watch::dir().join("panes-v2.json")
 }
 
 fn load_listings() -> Listings {
