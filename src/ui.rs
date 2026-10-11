@@ -1933,6 +1933,15 @@ impl App {
                 return;
             }
         }
+        // The shell's "esc back", clicked: back to the live session, as esc.
+        if matches!(cmd, Cmd::No)
+            && matches!(self.mode, Mode::Normal)
+            && let Some(sh) = self.shell.as_mut()
+            && sh.has_live()
+        {
+            sh.focus_live = true;
+            return;
+        }
         match cmd {
             Cmd::MenuPick(n) => {
                 let Mode::Menu(m) = std::mem::replace(&mut self.mode, Mode::Normal) else {
@@ -4972,10 +4981,10 @@ impl App {
                     ("esc".into(), "close".into(), Cmd::No),
                 ],
             ),
-            Mode::Menu(_) => (
+            Mode::Menu(m) => (
                 None,
                 vec![
-                    ("enter".into(), "choose".into(), Cmd::No),
+                    ("enter".into(), "choose".into(), Cmd::MenuPick(m.sel)),
                     ("esc".into(), "close".into(), Cmd::No),
                 ],
             ),
@@ -5156,7 +5165,8 @@ impl App {
                     h.push(("^e".into(), "reopen all from before", Cmd::RestoreAll, 1));
                 }
                 let _ = pinned;
-                if shell {
+                // esc goes back to a live session; with none, it does nothing.
+                if self.shell.as_ref().is_some_and(|sh| sh.has_live()) {
                     h.push(("esc".into(), "back", Cmd::No, 0));
                 }
                 h.push(("?".into(), "keys", Cmd::Help, 1));
@@ -6114,6 +6124,20 @@ mod tests {
             };
             assert_eq!(flow.args, settled);
         }
+    }
+
+    #[test]
+    fn menu_footer_enter_chooses_rather_than_closes() {
+        let mut app = App::with(cfg(), sample());
+        app.mode = Mode::Menu(Menu {
+            pid: app.sessions[0].pid,
+            at: (0, 0),
+            sel: 1,
+            items: vec![("jump".into(), Cmd::Jump), ("pin".into(), Cmd::Pin)],
+        });
+        let (_, hits) = app.foot(120);
+        assert!(matches!(hits.first(), Some((_, _, Cmd::MenuPick(1)))));
+        assert!(matches!(hits.get(1), Some((_, _, Cmd::No))));
     }
 
     #[test]
