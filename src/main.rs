@@ -306,6 +306,13 @@ enum VoyageCmd {
     },
     /// End a voyage (its id, or its session)
     Clear { target: String },
+    /// Pause a voyage (its id, or its session) until you carry it on
+    Pause { target: String },
+    /// Carry a paused voyage on (its id, or its session)
+    Resume { target: String },
+    /// Move a voyage onto another conversation (a running session's pid,
+    /// session-id prefix or name, or a conversation id)
+    Rebind { target: String, session: String },
     /// Draw a voyage's scene, for a look at it
     #[command(hide = true)]
     Scene {
@@ -781,7 +788,7 @@ fn main() -> Result<()> {
         Some(Cmd::Voyage { what }) => {
             let now = registry::now_ms();
             match what.unwrap_or(VoyageCmd::List) {
-                VoyageCmd::List => print!("{}", voyage::list(now)),
+                VoyageCmd::List => print!("{}", voyage::list(&cfg, now)),
                 VoyageCmd::Show { id } => {
                     use std::io::IsTerminal;
                     let width = std::io::stdout().is_terminal().then(|| {
@@ -792,24 +799,18 @@ fn main() -> Result<()> {
                     print!("{}", voyage::show(&id, now, width)?)
                 }
                 VoyageCmd::Set { target, outcome } => {
-                    // Words as typed; a --check command keeps its spaces.
-                    let words: Vec<String> = outcome
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| {
-                            if i > 0 && outcome[i - 1] == "--check" {
-                                format!("\"{w}\"")
-                            } else {
-                                w.clone()
-                            }
-                        })
-                        .collect();
-                    println!(
-                        "{}",
-                        voyage::set_from_outside(&cfg, &target, &words.join(" "))?
-                    )
+                    // Words as the shell split them: a --check command keeps
+                    // its spaces and its own flags.
+                    println!("{}", voyage::set_from_outside(&cfg, &target, &outcome)?)
                 }
                 VoyageCmd::Clear { target } => println!("{}", voyage::clear(&target)?),
+                VoyageCmd::Pause { target } => println!("{}", voyage::pause_from_outside(&target)?),
+                VoyageCmd::Resume { target } => {
+                    println!("{}", voyage::resume_from_outside(&cfg, &target)?)
+                }
+                VoyageCmd::Rebind { target, session } => {
+                    println!("{}", voyage::rebind_to(&cfg, &target, &session)?)
+                }
                 VoyageCmd::Scene {
                     progress,
                     sea,

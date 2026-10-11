@@ -1,6 +1,6 @@
 //! Turn evidence, judge/reviewer calls and proof checks for a voyage.
 
-use super::{CHECK_TIMEOUT, JUDGE_ENV, JUDGE_TIMEOUT, Verdict, Voyage, short};
+use super::{JUDGE_ENV, Verdict, Voyage, short};
 use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -42,17 +42,39 @@ fn tail_entries(transcript: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// A user entry that starts a turn: your prompt, or a Stop hook sending the
-/// session back (not a tool result).
+/// Text Claude Code adds to the conversation mid-turn, as a user entry, that
+/// nobody sent: reminders and the like.
+fn mid_turn_text(t: &str) -> bool {
+    let t = t.trim_start();
+    t.is_empty() || t.starts_with("<system-reminder>") || t.starts_with("Caveat:")
+}
+
+/// A user entry that starts a turn: your prompt, a background task's report,
+/// or a Stop hook sending the session back. Not a tool result, and not what
+/// Claude Code slips in mid-turn as a user entry: a skill's body or other
+/// `isMeta` entry, a system reminder.
 fn starts_turn(v: &Value) -> bool {
     if v.get("type").and_then(Value::as_str) != Some("user") {
         return false;
     }
+    let meta = v.get("isMeta").and_then(Value::as_bool) == Some(true);
     match v.pointer("/message/content") {
-        Some(Value::String(_)) => true,
-        Some(Value::Array(a)) => a
-            .iter()
-            .all(|b| b.get("type").and_then(Value::as_str) != Some("tool_result")),
+        // The Stop hook's feedback is isMeta too, and does start a turn.
+        Some(Value::String(s)) if meta => s.starts_with("Stop hook feedback"),
+        Some(Value::String(s)) => !mid_turn_text(s),
+        Some(Value::Array(_)) if meta => false,
+        Some(Value::Array(a)) => {
+            a.iter()
+                .all(|b| b.get("type").and_then(Value::as_str) != Some("tool_result"))
+                && a.iter()
+                    .any(|b| match b.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            !mid_turn_text(b.get("text").and_then(Value::as_str).unwrap_or(""))
+                        }
+                        Some("image" | "document") => true,
+                        _ => false,
+                    })
+        }
         _ => false,
     }
 }
@@ -177,7 +199,12 @@ of JSON and nothing else: {\"verdict\": \"met\" | \"not_yet\" | \"impossible\" |
 evidence shows the outcome is reached. not_yet: it isn't yet; the reason says in a sentence or two what is missing or what to \
 do next. impossible: it can't be reached at all (it contradicts itself, or needs something the agent can never have). \
 needs_you: the agent has stopped at a decision, access or information only the user can give; the reason says what, in a \
-sentence. Write reasons plainly, to the agent.";
+sentence. Write reasons plainly, to the agent. Two more fields: \"milestones\": a list of short phrases, each a part of the \
+outcome this evidence shows done (only what the evidence itself shows; empty if nothing new). \"other_work\": for needs_you, \
+true if there is still work toward the outcome the agent could do without the user's answer, false if it is blocked entirely \
+on the user. You may also be told what earlier checks confirmed and what earlier conversations' handover briefs say: the \
+conversation you see is only the latest part of a longer one, so don't call something missing just because it was done \
+before this part; judge what's left.";
 
 pub(super) fn parse_verdict(text: &str) -> Result<(Verdict, String)> {
     let (a, b) = (text.find('{'), text.rfind('}'));
@@ -226,13 +253,56 @@ pub(super) fn parse_progress(text: &str) -> Option<u8> {
     Some(n.clamp(0.0, 100.0).round() as u8)
 }
 
+/// The extra fields of the judge's answer: the milestones it saw shown done,
+/// and whether there's work that doesn't wait on the user.
+pub(super) fn parse_extras(text: &str) -> (Vec<String>, bool) {
+    let v: Option<Value> = text
+        .find('{')
+        .zip(text.rfind('}'))
+        .and_then(|(a, b)| text.get(a..=b))
+        .and_then(|j| serde_json::from_str(j).ok());
+    let Some(v) = v else {
+        return (Vec::new(), false);
+    };
+    let milestones = v
+        .get("milestones")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .take(10)
+                .collect()
+        })
+        .unwrap_or_default();
+    let other = v.get("other_work").is_some_and(|o| {
+        o.as_bool()
+            .unwrap_or_else(|| o.as_str().is_some_and(|s| s.eq_ignore_ascii_case("true")))
+    });
+    (milestones, other)
+}
+
+/// What the judge said of a turn.
+pub(super) struct Said {
+    pub verdict: Verdict,
+    pub reason: String,
+    pub progress: Option<u8>,
+    pub usd: f64,
+    pub milestones: Vec<String>,
+    pub other_work: bool,
+}
+
 /// A small model's verdict on the turn, with its estimate of how much is
-/// done and what it cost.
+/// done, what it saw done, and what it cost. `verified` is what earlier
+/// checks and conversations settled, for the judge to build on.
 pub(super) fn judge(
     cfg: &Config,
     q: &Voyage,
+    verified: &str,
     evidence: &str,
-) -> Result<(Verdict, String, Option<u8>, f64)> {
+    limit: Duration,
+) -> Result<Said> {
     let mut ask = format!("The outcome:\n{}\n", q.outcome);
     if let Some(c) = &q.check {
         ask.push_str(&format!(
@@ -258,6 +328,9 @@ pub(super) fn judge(
             q.laps, rules.proof_laps
         ));
     }
+    if !verified.is_empty() {
+        ask.push_str(&format!("\n{verified}\n"));
+    }
     ask.push_str(&format!("\nThe end of the conversation:\n{evidence}\n"));
     let (text, usd) = ask_model(
         cfg,
@@ -265,9 +338,18 @@ pub(super) fn judge(
         q.persistence.model(cfg),
         &format!("{JUDGE}{}", rules.judge_rules),
         &ask,
+        limit,
     )?;
     let (verdict, reason) = parse_verdict(&text)?;
-    Ok((verdict, reason, parse_progress(&text), usd))
+    let (milestones, other_work) = parse_extras(&text);
+    Ok(Said {
+        verdict,
+        reason,
+        progress: parse_progress(&text),
+        usd,
+        milestones,
+        other_work,
+    })
 }
 
 const REVIEW: &str = "You are a sceptical reviewer. A coding agent says it has reached an outcome, and a judge agreed. Your \
@@ -279,13 +361,18 @@ you find nothing that matters; otherwise not_yet, and the reason says plainly, t
 
 /// Relentless: a second model reads every change since the voyage began,
 /// looking for why it isn't done. (passed, reason, cost)
-pub(super) fn review(cfg: &Config, q: &Voyage, evidence: &str) -> Result<(bool, String, f64)> {
+pub(super) fn review(
+    cfg: &Config,
+    q: &Voyage,
+    evidence: &str,
+    limit: Duration,
+) -> Result<(bool, String, f64)> {
     let mut ask = format!(
         "The outcome:\n{}\n\nThe end of the conversation:\n{evidence}\n\n",
         q.outcome
     );
     ask.push_str(&changes(&q.cwd, q.base.as_deref()));
-    let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), REVIEW, &ask)?;
+    let (text, usd) = ask_model(cfg, q, q.persistence.model(cfg), REVIEW, &ask, limit)?;
     let (verdict, reason) = parse_verdict(&text)?;
     Ok((verdict == Verdict::Met, reason, usd))
 }
@@ -332,13 +419,15 @@ fn changes(cwd: &str, base: Option<&str>) -> String {
     )
 }
 
-/// One `claude -p` answer from a model with no tools: its text and cost.
+/// One `claude -p` answer from a model with no tools, within `limit`: its
+/// text and cost.
 fn ask_model(
     cfg: &Config,
     q: &Voyage,
     model: &str,
     system: &str,
     ask: &str,
+    limit: Duration,
 ) -> Result<(String, f64)> {
     let mut cmd = std::process::Command::new(crate::config::expand(&cfg.claude_bin));
     cmd.args([
@@ -367,7 +456,9 @@ fn ask_model(
     .stdin(std::process::Stdio::piped())
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::null());
-    let (out, _) = run_with_timeout(cmd, Some(ask.as_bytes()), JUDGE_TIMEOUT)?;
+    let Some((out, _)) = run_with_timeout(cmd, Some(ask.as_bytes()), limit)? else {
+        bail!("it took longer than {} seconds", limit.as_secs());
+    };
     let v: Value = serde_json::from_str(out.trim()).context("the judge's run gave no result")?;
     if v.get("is_error").and_then(Value::as_bool) == Some(true) {
         bail!(
@@ -393,6 +484,18 @@ fn ask_model(
     ))
 }
 
+/// Whether the judge's run was refused for a usage limit ("You've hit your
+/// limit · resets 5pm"), not a failure of the check itself.
+pub(super) fn limit_error(e: &str) -> bool {
+    let e = e.to_lowercase();
+    e.contains("limit")
+        && (e.contains("hit your")
+            || e.contains("resets")
+            || e.contains("usage limit")
+            || e.contains("rate limit")
+            || e.contains("rate_limit"))
+}
+
 fn ordinal(n: usize) -> String {
     let suffix = match (n % 10, n % 100) {
         (1, x) if x != 11 => "st",
@@ -403,12 +506,13 @@ fn ordinal(n: usize) -> String {
     format!("{n}{suffix}")
 }
 
-/// Run a command to its end or the timeout: stdout, and whether it exited 0.
+/// Run a command to its end or the limit: stdout, and whether it exited 0.
+/// None when it ran out of time (it's killed, its process group with it).
 fn run_with_timeout(
     mut cmd: std::process::Command,
     input: Option<&[u8]>,
     limit: Duration,
-) -> Result<(String, bool)> {
+) -> Result<Option<(String, bool)>> {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
     let mut child = cmd.spawn().context("couldn't start it")?;
@@ -430,21 +534,39 @@ fn run_with_timeout(
     loop {
         if let Some(status) = child.try_wait()? {
             let out = reader.join().unwrap_or_default();
-            return Ok((out, status.success()));
+            return Ok(Some((out, status.success())));
         }
         if start.elapsed() > limit {
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);
             }
             let _ = child.wait();
-            bail!("it took longer than {} seconds", limit.as_secs());
+            return Ok(None);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
-/// The voyage's own check: Ok when it exits 0, else the end of its output.
-pub(super) fn run_check(check: &str, cwd: &str) -> std::result::Result<(), String> {
+/// Why a voyage's check didn't pass.
+#[derive(Debug)]
+pub(super) enum CheckFail {
+    /// It exited non-zero (the end of its output), or couldn't start.
+    Failed(String),
+    /// It was still running when its time ran out.
+    TimedOut(Duration),
+}
+
+impl std::fmt::Display for CheckFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckFail::Failed(s) => f.write_str(s),
+            CheckFail::TimedOut(d) => write!(f, "it took longer than {} seconds", d.as_secs()),
+        }
+    }
+}
+
+/// The voyage's own check, within `limit`: Ok when it exits 0.
+pub(super) fn run_check(check: &str, cwd: &str, limit: Duration) -> Result<(), CheckFail> {
     let mut cmd = std::process::Command::new("sh");
     cmd.args(["-c", &format!("{check} 2>&1")])
         .current_dir(cwd)
@@ -452,21 +574,131 @@ pub(super) fn run_check(check: &str, cwd: &str) -> std::result::Result<(), Strin
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    match run_with_timeout(cmd, None, CHECK_TIMEOUT) {
-        Ok((_, true)) => Ok(()),
-        Ok((out, false)) => {
+    match run_with_timeout(cmd, None, limit) {
+        Ok(Some((_, true))) => Ok(()),
+        Ok(Some((out, false))) => {
             let tail: Vec<&str> = out
                 .lines()
                 .rev()
                 .filter(|l| !l.trim().is_empty())
                 .take(12)
                 .collect();
-            Err(clip(
+            Err(CheckFail::Failed(clip(
                 &tail.into_iter().rev().collect::<Vec<_>>().join("\n"),
                 0,
                 1200,
-            ))
+            )))
         }
-        Err(e) => Err(e.to_string()),
+        Ok(None) => Err(CheckFail::TimedOut(limit)),
+        Err(e) => Err(CheckFail::Failed(e.to_string())),
     }
+}
+
+// ---- background work -----------------------------------------------------------
+
+/// How long a background task with no report back still counts as running:
+/// past this, it's taken as a server left up or a report that was lost.
+const BASH_WAIT_MS: i64 = 2 * 3_600_000;
+const AGENT_WAIT_MS: i64 = 6 * 3_600_000;
+
+/// Background tasks the session started and that haven't reported back:
+/// background commands (`backgroundTaskId`), background agents (`agentId`
+/// of an async launch) and monitors (`taskId`, until they expire), less
+/// those a `<task-notification>` reported finished or a stop tool stopped.
+pub(super) fn background_tasks(transcript: &Path, now_ms: i64) -> usize {
+    const TAIL: u64 = 1024 * 1024;
+    let Ok(mut f) = std::fs::File::open(transcript) else {
+        return 0;
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let from = len.saturating_sub(TAIL);
+    let mut bytes = Vec::new();
+    if f.seek(SeekFrom::Start(from)).is_err() || f.read_to_end(&mut bytes).is_err() {
+        return 0;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    // Task id -> until when it counts as running.
+    let mut running: std::collections::HashMap<String, i64> = Default::default();
+    let mut done: std::collections::HashSet<String> = Default::default();
+    for l in text.lines().skip(usize::from(from > 0)) {
+        if l.contains("<task-notification>") {
+            // One report per notification; a monitor's events say running.
+            for n in l.split("<task-notification>").skip(1) {
+                let field = |k: &str| {
+                    n.split(&format!("<{k}>"))
+                        .nth(1)
+                        .and_then(|r| r.split(&format!("</{k}>")).next())
+                        .map(str::trim)
+                };
+                if let Some(id) = field("task-id")
+                    && field("status").is_some_and(|s| s != "running")
+                {
+                    done.insert(id.to_string());
+                }
+            }
+            continue;
+        }
+        let launch = ["backgroundTaskId", "async_launched", "\"taskId\""]
+            .iter()
+            .any(|k| l.contains(k));
+        let stop = ["\"TaskStop\"", "\"KillShell\"", "\"KillBash\""]
+            .iter()
+            .any(|k| l.contains(k));
+        if !launch && !stop {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let at = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map_or(now_ms, |t| t.timestamp_millis());
+        if let Some(r) = v.get("toolUseResult") {
+            let s = |k: &str| r.get(k).and_then(Value::as_str).map(str::to_string);
+            if let Some(id) = s("backgroundTaskId") {
+                running.insert(id, at + BASH_WAIT_MS);
+            } else if let Some(id) = s("agentId").filter(|_| {
+                r.get("isAsync").and_then(Value::as_bool) == Some(true)
+                    || s("status").as_deref() == Some("async_launched")
+            }) {
+                running.insert(id, at + AGENT_WAIT_MS);
+            } else if let Some(id) = s("taskId") {
+                let persistent = r.get("persistent").and_then(Value::as_bool) == Some(true);
+                let until = match r.get("timeoutMs").and_then(Value::as_i64) {
+                    Some(ms) if !persistent => at + ms + 60_000,
+                    _ => at + AGENT_WAIT_MS,
+                };
+                running.insert(id, until);
+            }
+        }
+        for b in v
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if b.get("type").and_then(Value::as_str) == Some("tool_use")
+                && matches!(
+                    b.get("name").and_then(Value::as_str),
+                    Some("TaskStop" | "KillShell" | "KillBash")
+                )
+            {
+                let input = b.get("input").cloned().unwrap_or(Value::Null);
+                for k in ["task_id", "shell_id", "bash_id", "id"] {
+                    if let Some(id) = input.get(k).and_then(Value::as_str) {
+                        done.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    running
+        .into_iter()
+        .filter(|(id, until)| !done.contains(id) && now_ms < *until)
+        .count()
 }
