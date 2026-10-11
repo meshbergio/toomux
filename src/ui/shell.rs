@@ -15,7 +15,10 @@ pub(super) struct Shell {
     pub(super) popup: bool,
     /// The terminal (tmux client) the popup opened in, which alt-j moves.
     pub(super) origin: Option<String>,
-    control: Control,
+    /// Our control client, on the server of the session being followed.
+    /// None while there's no session in tmux to follow: toomux never makes
+    /// a server or session just to have something to attach to.
+    control: Option<Control>,
     /// Bumped with each control client, so a replaced one's last words
     /// (its exit) aren't taken for the current one's.
     generation: u64,
@@ -125,10 +128,11 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
         None
     };
     let mut app = App::new(cfg);
-    // Attach to the server of the session that most wants attention.
-    let server = app.selected_server();
-    let control = Control::start(&server, tx.clone(), |e| Msg::Tmux(0, e))
-        .or_else(|_| Control::start("default", tx.clone(), |e| Msg::Tmux(0, e)))?;
+    // Attach to the server of the session that most wants attention, if
+    // there is one in tmux; otherwise there's nothing to follow yet.
+    let control = app
+        .selected_server()
+        .and_then(|server| Control::start(&server, tx.clone(), |e| Msg::Tmux(0, e)).ok());
     app.shell = Some(Shell {
         popup,
         origin,
@@ -214,19 +218,23 @@ fn run_inner(cfg: Config, popup: bool, term: &mut DefaultTerminal) -> Result<()>
         let reload_due = now >= app.loaded_at + Duration::from_secs(2)
             || (app.changed && now >= app.loaded_at + Duration::from_millis(500));
         if reload_due && app.shell_ref().listing.is_none() {
-            if app.shell_ref().gone {
-                app.reload();
-                let server = app.selected_server();
-                app.restart_control(&server);
-            } else {
-                // The reload happens when tmux answers with its panes.
-                let sh = app.shell_mut();
-                let seq = sh.control.one(format!(
-                    "list-panes -a -F {}",
-                    control::quote(crate::tmux::PANES_FORMAT)
-                ));
-                sh.listing = Some(seq);
-                app.loaded_at = now;
+            let sh = app.shell_mut();
+            match sh.control.as_mut().filter(|_| !sh.gone) {
+                Some(c) => {
+                    // The reload happens when tmux answers with its panes.
+                    let seq = c.one(format!(
+                        "list-panes -a -F {}",
+                        control::quote(crate::tmux::PANES_FORMAT)
+                    ));
+                    sh.listing = Some(seq);
+                    app.loaded_at = now;
+                }
+                None => {
+                    app.reload();
+                    if let Some(server) = app.selected_server() {
+                        let _ = app.restart_control(&server);
+                    }
+                }
             }
         }
         // The live view follows the list only while you're moving through it;
@@ -311,31 +319,32 @@ impl App {
         self.shell.as_mut().expect("shell mode")
     }
 
-    /// The server of the selected session's pane, else the default one.
-    fn selected_server(&self) -> String {
-        self.selected()
-            .and_then(|s| s.pane.as_ref())
-            .and_then(|p| crate::tmux::server_of(&p.id).map(str::to_string))
-            .unwrap_or_else(|| "default".into())
+    /// The server of the selected session's pane, if it's in tmux.
+    fn selected_server(&self) -> Option<String> {
+        self.selected().and_then(|s| s.pane.as_ref()).map(|p| {
+            crate::tmux::server_of(&p.id)
+                .unwrap_or("default")
+                .to_string()
+        })
     }
 
     /// A fresh control client on `server` (each session has a server of its
-    /// own, so following another session can mean another server).
-    fn restart_control(&mut self, server: &str) -> bool {
+    /// own, so following another session can mean another server). There
+    /// is no fallback: a session's server that isn't running is an error,
+    /// never a reason to follow some other server.
+    fn restart_control(&mut self, server: &str) -> Result<()> {
         let sh = self.shell_mut();
         let g = sh.generation + 1;
-        let started = Control::start(server, sh.tx.clone(), move |e| Msg::Tmux(g, e))
-            .or_else(|_| Control::start("default", sh.tx.clone(), move |e| Msg::Tmux(g, e)));
-        let Ok(c) = started else { return false };
+        let c = Control::start(server, sh.tx.clone(), move |e| Msg::Tmux(g, e))?;
         sh.generation = g;
-        sh.control = c;
+        sh.control = Some(c);
         sh.gone = false;
         sh.sized = (0, 0);
         sh.live = None;
         sh.listing = None;
         sh.outbox.clear();
         self.dirty = true;
-        true
+        Ok(())
     }
 
     fn handle(&mut self, m: Msg) {
@@ -370,7 +379,9 @@ impl App {
             }
             control::Event::Reply { seq, lines, .. } if sh.listing == Some(seq) => {
                 sh.listing = None;
-                crate::tmux::give_panes(&sh.control.server, &lines.join("\n"));
+                if let Some(c) = &sh.control {
+                    crate::tmux::give_panes(&c.server, &lines.join("\n"));
+                }
                 self.reload();
                 crate::tmux::forget_panes();
             }
@@ -390,7 +401,24 @@ impl App {
             control::Event::Exit => {
                 sh.gone = true;
                 sh.listing = None;
-                sh.live = None;
+                // The session you were following ended with its server: say
+                // so, with the last thing it showed, rather than going blank.
+                let ended = sh.live.take().map(|l| (l.pane.clone(), last_words(&l)));
+                if ended.is_some() {
+                    sh.focus_live = false;
+                }
+                if let Some((pane, last)) = ended {
+                    let title = self
+                        .sessions
+                        .iter()
+                        .find(|s| s.pane.as_ref().is_some_and(|p| p.id == pane))
+                        .map_or_else(|| "the session".to_string(), |s| s.title.clone());
+                    let msg = match last {
+                        Some(t) => format!("{title} exited: {t}"),
+                        None => format!("{title} exited"),
+                    };
+                    self.fail(msg);
+                }
                 self.dirty = true;
             }
         }
@@ -402,13 +430,21 @@ impl App {
         let server = crate::tmux::server_of(pane)
             .unwrap_or("default")
             .to_string();
-        if server != self.shell_ref().control.server && !self.restart_control(&server) {
+        let sh = self.shell_ref();
+        let attached = !sh.gone && sh.control.as_ref().is_some_and(|c| c.server == server);
+        if !attached && let Err(e) = self.restart_control(&server) {
+            let title = self
+                .sessions
+                .iter()
+                .find(|s| s.pane.as_ref().is_some_and(|p| p.id == pane))
+                .map_or_else(|| pane.to_string(), |s| s.title.clone());
+            self.fail(format!("can't show {title}: {e}"));
             return;
         }
         let sh = self.shell_mut();
-        if sh.gone {
+        let Some(control) = sh.control.as_mut() else {
             return;
-        }
+        };
         let live = Live::new(pane, w, h);
         let pane = crate::tmux::bare(pane);
         let mut cmds = vec![
@@ -417,7 +453,7 @@ impl App {
             format!("select-pane -t {pane}"),
         ];
         cmds.extend(live.seed_commands());
-        let seqs = sh.control.send(&cmds);
+        let seqs = control.send(&cmds);
         let mut live = live;
         live.seed = Some((seqs[3], seqs[4]));
         sh.live = Some(live);
@@ -426,11 +462,13 @@ impl App {
 
     fn reseed(&mut self) {
         let sh = self.shell_mut();
-        let Some(l) = sh.live.as_ref() else { return };
+        let (Some(l), Some(control)) = (sh.live.as_ref(), sh.control.as_mut()) else {
+            return;
+        };
         let pane = l.pane.clone();
         let (w, h) = (l.cols, l.lines);
         let mut fresh = Live::new(&pane, w, h);
-        let seqs = sh.control.send(&fresh.seed_commands());
+        let seqs = control.send(&fresh.seed_commands());
         fresh.seed = Some((seqs[0], seqs[1]));
         // Keep drawing the old picture until the new one is in.
         let old = sh.live.replace(fresh);
@@ -444,7 +482,9 @@ impl App {
             return;
         }
         let cmds = std::mem::take(&mut sh.outbox);
-        sh.control.send(&cmds);
+        if let Some(c) = sh.control.as_mut() {
+            c.send(&cmds);
+        }
     }
 
     /// The live pane, qualified with its server.
@@ -1042,8 +1082,9 @@ impl App {
         let want = (inner.width, inner.height);
         if sh.sized != want && inner.width > 4 && inner.height > 2 {
             sh.sized = want;
-            sh.control
-                .one(format!("refresh-client -C {}x{}", want.0, want.1));
+            if let Some(c) = sh.control.as_mut() {
+                c.one(format!("refresh-client -C {}x{}", want.0, want.1));
+            }
             if sh.live.is_some() {
                 sh.reseed_at = Some(Instant::now() + Duration::from_millis(150));
             }
@@ -1160,6 +1201,21 @@ impl Shell {
             (80, 24)
         }
     }
+}
+
+/// The last line of words a live view showed (frames and blank rows
+/// skipped), to say what a session that ended last said.
+fn last_words(l: &Live) -> Option<String> {
+    let area = Rect::new(0, 0, l.cols.max(2), l.lines.max(1));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    l.render(&mut buf, area, Color::Reset, Color::Reset);
+    (0..area.height).rev().find_map(|y| {
+        let row: String = (0..area.width).map(|x| buf[(x, y)].symbol()).collect();
+        let row = row.split_whitespace().collect::<Vec<_>>().join(" ");
+        row.chars()
+            .any(char::is_alphanumeric)
+            .then(|| row.chars().take(160).collect())
+    })
 }
 
 /// Cursor shape for the outer terminal, following the program's.

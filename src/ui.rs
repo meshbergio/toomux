@@ -942,6 +942,11 @@ impl App {
         self.flash = Some((msg, color, Instant::now()));
     }
 
+    /// Something went wrong: say so in the attention colour.
+    fn fail(&mut self, msg: String) {
+        self.say(msg, self.pal.attention);
+    }
+
     // ---- model -------------------------------------------------------------
 
     fn matches(&self, s: &Session) -> bool {

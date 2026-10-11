@@ -604,6 +604,10 @@ a server of your own making (`tmux -L work`, or `-S /some/socket`, carried as
 `%N@/some/socket`) is found by the `TMUX` its process started with. Jumping to a
 session on another server moves your terminal over (`detach-client -E` then
 `attach`); the full-screen view reconnects its control client to that server.
+It only ever attaches to a server that is running: when the session you're
+watching ends, toomux says so with the last line it showed, and with no session
+in tmux at all it attaches to nothing (it never starts a server or a shell
+session of its own).
 
 Its servers start from `~/.local/state/toomux/server.tmux.conf`: your
 `~/.tmux.conf`, rewritten on each start without tmux-resurrect, tmux-continuum and
