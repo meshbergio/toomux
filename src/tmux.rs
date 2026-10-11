@@ -262,7 +262,9 @@ pub fn new_server_name(id: Option<&str>) -> String {
 }
 
 /// Start a new server holding one session (`name`) that runs `cmd` in `cwd`.
-/// Returns the qualified pane id.
+/// Returns the qualified pane id. The pane is kept when `cmd` exits
+/// (remain-on-exit), so a launch that fails at once can be read: the caller
+/// clears that once the launch has held.
 pub fn new_server(
     server: &str,
     name: &str,
@@ -287,6 +289,8 @@ pub fn new_server(
         args.extend(["-e", e.as_str()]);
     }
     args.push(cmd);
+    // In the same command list, so tmux sets it before it can see `cmd` exit.
+    args.extend([";", "set-option", "-p", "remain-on-exit", "on"]);
     // Not nested in whichever server we might be inside.
     let mut c = command_on(server);
     if let Some(conf) = server_conf() {

@@ -243,23 +243,33 @@ impl Session {
     }
 
     pub fn transcript(&self, cfg: &Config) -> Option<PathBuf> {
-        let dir: String = self
-            .cwd
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
+        let dir = project_dir_name(&self.cwd);
         let file = format!("{}.jsonl", self.id);
-        let mut roots: Vec<PathBuf> = self
-            .config_dir
-            .iter()
-            .map(|d| crate::config::expand(d))
-            .collect();
+        // The config folder it runs with first (Claude's default when it
+        // runs with none); a placeholder only knows its account.
+        let own = match &self.config_dir {
+            Some(d) => Some(crate::config::expand(d)),
+            None if !self.dormant => Some(crate::config::home().join(".claude")),
+            None => self
+                .account
+                .filter(|a| *a < cfg.accounts.len())
+                .map(|a| cfg.account_dir(a)),
+        };
+        let mut roots: Vec<PathBuf> = own.into_iter().collect();
         roots.extend((0..cfg.accounts.len()).map(|i| cfg.account_dir(i)));
         roots
             .into_iter()
             .map(|r| r.join("projects").join(&dir).join(&file))
             .find(|p| p.is_file())
     }
+}
+
+/// The folder under `projects/` Claude keeps a working folder's
+/// conversations in.
+pub fn project_dir_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// When something comes back, briefly: "back 5pm", "back sat 5pm",
