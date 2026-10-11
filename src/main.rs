@@ -731,22 +731,9 @@ fn main() -> Result<()> {
                     print!("{}", voyage::show(&id, now, width)?)
                 }
                 VoyageCmd::Set { target, outcome } => {
-                    // Words as typed; a --check command keeps its spaces.
-                    let words: Vec<String> = outcome
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| {
-                            if i > 0 && outcome[i - 1] == "--check" {
-                                format!("\"{w}\"")
-                            } else {
-                                w.clone()
-                            }
-                        })
-                        .collect();
-                    println!(
-                        "{}",
-                        voyage::set_from_outside(&cfg, &target, &words.join(" "))?
-                    )
+                    // Words as the shell split them: a --check command keeps
+                    // its spaces and its own flags.
+                    println!("{}", voyage::set_from_outside(&cfg, &target, &outcome)?)
                 }
                 VoyageCmd::Clear { target } => println!("{}", voyage::clear(&target)?),
                 VoyageCmd::Scene {

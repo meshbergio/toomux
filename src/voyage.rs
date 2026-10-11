@@ -449,9 +449,23 @@ pub enum Ask {
     },
 }
 
-/// `/voyage` arguments: an outcome with optional `--check "<command>"`,
-/// `--budget <dollars>` and `--persistence <tier>`, or one of show, clear,
-/// resume.
+/// `/voyage` arguments: an outcome, then optional flags; or one of show,
+/// clear, resume.
+///
+/// The grammar: the outcome is free text up to the first known flag
+/// (`--check`, `--budget`, `--persistence`/`--persist`, each also as
+/// `--flag=value`) standing as a word of its own. From there on the text is
+/// read as shell words, quotes respected, and must be flags:
+///
+/// - `--check` takes everything up to the next known flag. One word (quoted
+///   if it has spaces) is the command; several words are the command as
+///   typed, quotes kept, so `--check cargo test -- --nocapture` works. A
+///   command containing a known flag itself (`git diff --check`) must be
+///   quoted, or it's an error.
+/// - `--budget` takes one number of dollars, `--persistence` one tier.
+///
+/// Anything else after the first flag is an error, never silently dropped
+/// or folded into the outcome.
 pub fn parse(args: &str) -> Result<Ask> {
     let a = args.trim();
     match a.to_lowercase().as_str() {
@@ -460,45 +474,243 @@ pub fn parse(args: &str) -> Result<Ask> {
         "resume" | "continue" | "go" => return Ok(Ask::Resume),
         _ => {}
     }
-    // A space in front, so flags alone (no outcome) are found too.
-    let mut outcome = format!(" {a}");
-    let mut check = None;
-    let mut budget = None;
-    let mut persistence = None;
-    // Flags come after the outcome; take them off the end, last first.
-    while let Some(i) = outcome.rfind(" --") {
-        let tail = outcome[i + 3..].to_string();
-        let (flag, value) = tail
-            .split_once(char::is_whitespace)
-            .map(|(f, v)| (f.to_string(), v.trim().to_string()))
-            .unwrap_or((tail.clone(), String::new()));
-        match flag.as_str() {
-            "check" => {
-                let v = unquote(&value);
+    let at = first_flag(a).unwrap_or(a.len());
+    let words = shell_words(&a[at..])?;
+    set_from_words(&a[..at], words)
+}
+
+/// `toomux voyage set` arguments, already split into words by the shell:
+/// the outcome's words up to the first known flag, then flags as for
+/// [`parse`]. One word with the flags inside it reads as `/voyage` would.
+pub fn parse_words(words: &[String]) -> Result<Ask> {
+    let Some(at) = words.iter().position(|w| flag_word(w).is_some()) else {
+        return parse(&words.join(" "));
+    };
+    let words_after = words[at..]
+        .iter()
+        .map(|w| Word {
+            text: w.clone(),
+            // The shell has taken its quotes off already: a flag is a flag.
+            raw: if flag_word(w).is_some() {
+                w.clone()
+            } else {
+                shell_quote(w)
+            },
+        })
+        .collect();
+    set_from_words(&words[..at].join(" "), words_after)
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Flag {
+    Check,
+    Budget,
+    Persistence,
+}
+
+const FLAGS: [(&str, Flag); 4] = [
+    ("--check", Flag::Check),
+    ("--budget", Flag::Budget),
+    ("--persistence", Flag::Persistence),
+    ("--persist", Flag::Persistence),
+];
+
+/// A known flag, and its `=value` if it came with one.
+fn flag_word(w: &str) -> Option<(Flag, Option<String>)> {
+    FLAGS.iter().find_map(|(name, f)| {
+        let rest = w.strip_prefix(name)?;
+        if rest.is_empty() {
+            Some((*f, None))
+        } else {
+            rest.strip_prefix('=').map(|v| (*f, Some(v.to_string())))
+        }
+    })
+}
+
+/// Where the first known flag stands as a word of its own.
+fn first_flag(a: &str) -> Option<usize> {
+    let mut after_space = true;
+    for (i, c) in a.char_indices() {
+        if after_space
+            && c == '-'
+            && flag_word(a[i..].split(char::is_whitespace).next().unwrap_or("")).is_some()
+        {
+            return Some(i);
+        }
+        after_space = c.is_whitespace();
+    }
+    None
+}
+
+/// A shell word: what it means, and how it was typed.
+#[derive(Debug, Clone)]
+struct Word {
+    text: String,
+    raw: String,
+}
+
+impl Word {
+    /// A known flag typed bare (a quoted "--check" is someone's text).
+    fn flag(&self) -> Option<(Flag, Option<String>)> {
+        flag_word(&self.text).filter(|_| self.raw.starts_with("--"))
+    }
+}
+
+/// Split text into shell words: whitespace between, '…' as it is, "…" with
+/// \" \\ \$ \` escapes, and a backslash outside quotes escaping the next
+/// character. An unclosed quote is an error.
+fn shell_words(s: &str) -> Result<Vec<Word>> {
+    let mut out = Vec::new();
+    let mut it = s.char_indices().peekable();
+    while let Some(&(start, c)) = it.peek() {
+        if c.is_whitespace() {
+            it.next();
+            continue;
+        }
+        let mut text = String::new();
+        let mut end = s.len();
+        while let Some(&(i, c)) = it.peek() {
+            if c.is_whitespace() {
+                end = i;
+                break;
+            }
+            it.next();
+            match c {
+                '\'' => loop {
+                    match it.next() {
+                        Some((_, '\'')) => break,
+                        Some((_, ch)) => text.push(ch),
+                        None => bail!("a ' isn't closed in: {}", &s[start..]),
+                    }
+                },
+                '"' => loop {
+                    match it.next() {
+                        Some((_, '"')) => break,
+                        Some((_, '\\')) => match it.next() {
+                            Some((_, ch @ ('"' | '\\' | '$' | '`'))) => text.push(ch),
+                            Some((_, ch)) => {
+                                text.push('\\');
+                                text.push(ch);
+                            }
+                            None => bail!("a \" isn't closed in: {}", &s[start..]),
+                        },
+                        Some((_, ch)) => text.push(ch),
+                        None => bail!("a \" isn't closed in: {}", &s[start..]),
+                    }
+                },
+                '\\' => {
+                    if let Some((_, ch)) = it.next() {
+                        text.push(ch);
+                    }
+                }
+                ch => text.push(ch),
+            }
+        }
+        out.push(Word {
+            text,
+            raw: s[start..end].to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// A word as it would be typed to a shell.
+fn shell_quote(w: &str) -> String {
+    let plain = !w.is_empty()
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if plain {
+        w.to_string()
+    } else {
+        format!("'{}'", w.replace('\'', r"'\''"))
+    }
+}
+
+/// The outcome and the flags after it (see [`parse`] for the grammar).
+fn set_from_words(outcome: &str, words: Vec<Word>) -> Result<Ask> {
+    let (mut check, mut budget, mut persistence) = (None, None, None);
+    let mut i = 0;
+    while i < words.len() {
+        let Some((flag, inline)) = words[i].flag() else {
+            bail!(
+                "`{}` isn't a voyage flag. The outcome comes first, then --check \"<command>\", --budget <dollars> \
+                 and --persistence <tier>; quote a --check command that itself contains one of those flags",
+                words[i].raw
+            );
+        };
+        let name = FLAGS
+            .iter()
+            .find(|(_, f)| *f == flag)
+            .map_or("", |(n, _)| *n);
+        i += 1;
+        let mut values: Vec<Word> = Vec::new();
+        if let Some(v) = inline {
+            values.push(Word {
+                raw: shell_quote(&v),
+                text: v,
+            });
+        } else {
+            while i < words.len() && words[i].flag().is_none() {
+                values.push(words[i].clone());
+                i += 1;
+            }
+        }
+        let raw = |ws: &[Word]| {
+            ws.iter()
+                .map(|w| w.raw.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let one = |what: &str| -> Result<String> {
+            match values.as_slice() {
+                [v] => Ok(v.text.clone()),
+                [] => bail!("{name} needs {what}"),
+                more => bail!("{name} takes one value, not `{}`", raw(more)),
+            }
+        };
+        match flag {
+            Flag::Check => {
+                if check.is_some() {
+                    bail!(
+                        "--check is given twice: quote a command that contains --check itself, e.g. --check \"git diff --check\""
+                    );
+                }
+                // One word is the command; several are the command as typed.
+                let v = match values.as_slice() {
+                    [v] => v.text.trim().to_string(),
+                    more => raw(more),
+                };
                 if v.is_empty() {
                     bail!("--check needs a command, e.g. --check \"cargo test\"");
                 }
                 check = Some(v);
             }
-            "budget" => {
-                let v = value.trim_start_matches('$').replace(',', "");
+            Flag::Budget => {
+                if budget.is_some() {
+                    bail!("--budget is given twice");
+                }
+                let v = one("dollars, e.g. --budget 40")?;
                 let n: f64 = v
+                    .trim_start_matches('$')
+                    .replace(',', "")
                     .parse()
                     .map_err(|_| anyhow::anyhow!("--budget takes dollars, e.g. --budget 40"))?;
-                if n <= 0.0 {
+                if !(n > 0.0 && n.is_finite()) {
                     bail!("--budget takes dollars above 0");
                 }
                 budget = Some(n);
             }
-            "persistence" | "persist" => {
+            Flag::Persistence => {
+                if persistence.is_some() {
+                    bail!("--persistence is given twice");
+                }
+                let v = one("a tier: light, steady, hard or relentless")?;
                 persistence = Some(
-                    Persistence::parse(&value)
+                    Persistence::parse(&v)
                         .context("--persistence is light, steady, hard or relentless")?,
                 );
             }
-            _ => break,
         }
-        outcome.truncate(i);
     }
     let outcome = outcome.trim().to_string();
     if outcome.is_empty() {
@@ -513,16 +725,6 @@ pub fn parse(args: &str) -> Result<Ask> {
         budget,
         persistence,
     })
-}
-
-fn unquote(s: &str) -> String {
-    let t = s.trim();
-    for q in ['"', '\''] {
-        if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) {
-            return t[1..t.len() - 1].to_string();
-        }
-    }
-    t.to_string()
 }
 
 /// Start a voyage in this conversation (any open one there ends).
@@ -1204,13 +1406,13 @@ pub fn show(target: &str, now: i64, scene: Option<usize>) -> Result<String> {
 
 /// `toomux voyage set <session> <outcome>`: from outside the session. It
 /// starts on it at once if it's at rest at an empty prompt.
-pub fn set_from_outside(cfg: &Config, target: &str, words: &str) -> Result<String> {
+pub fn set_from_outside(cfg: &Config, target: &str, words: &[String]) -> Result<String> {
     let Ask::Set {
         outcome,
         check,
         budget,
         persistence,
-    } = parse(words)?
+    } = parse_words(words)?
     else {
         bail!("say what done looks like")
     };
@@ -1306,6 +1508,111 @@ mod tests {
         assert!(parse("x --persistence stubborn").is_err());
         assert!(parse("x --budget lots").is_err());
         assert!(parse("--check \"make\"").is_err());
+    }
+
+    fn checked(args: &str) -> (String, Option<String>, Option<Persistence>) {
+        match parse(args).unwrap() {
+            Ask::Set {
+                outcome,
+                check,
+                persistence,
+                ..
+            } => (outcome, check, persistence),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_check_command_keeps_its_own_double_dashes_and_no_flag_leaks_into_the_outcome() {
+        // The flags that were lost to the outcome text in real voyages.
+        let gradle = "cd native-tv && ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug && cd .. && \
+                      ./node_modules/.bin/vitest run cloudflare/worker && git diff --check";
+        let (outcome, check, tier) = checked(&format!(
+            "finish Midnight to the handover's Definition of Done; don't weaken gates. --persistence relentless --check \"{gradle}\""
+        ));
+        assert_eq!(
+            outcome,
+            "finish Midnight to the handover's Definition of Done; don't weaken gates."
+        );
+        assert_eq!(check.as_deref(), Some(gradle));
+        assert_eq!(tier, Some(Persistence::Relentless));
+
+        // Unquoted, a check runs to the next known flag.
+        let (outcome, check, tier) =
+            checked("tests pass --check cargo test -- --nocapture --persistence hard");
+        assert_eq!(outcome, "tests pass");
+        assert_eq!(check.as_deref(), Some("cargo test -- --nocapture"));
+        assert_eq!(tier, Some(Persistence::Hard));
+        let (_, check, _) = checked("it builds --check './gradlew --no-daemon build' --budget 5");
+        assert_eq!(check.as_deref(), Some("./gradlew --no-daemon build"));
+        // Several words keep their quotes for the shell that runs them.
+        let (_, check, _) = checked(r#"logs are clean --check grep -q "all good" out.log"#);
+        assert_eq!(check.as_deref(), Some(r#"grep -q "all good" out.log"#));
+        let (_, check, tier) = checked("x --check=make --persist=light");
+        assert_eq!(
+            (check.as_deref(), tier),
+            (Some("make"), Some(Persistence::Light))
+        );
+
+        // Ambiguous or unknown is an error, never silently dropped.
+        assert!(
+            parse("clean diff --check git diff --check")
+                .unwrap_err()
+                .to_string()
+                .contains("quote")
+        );
+        assert!(parse("x --budget 5 --verbose").is_err());
+        assert!(parse("x --budget 5 and then some").is_err());
+        assert!(parse("x --check \"unclosed").is_err());
+        assert!(parse("x --budget 5 --budget 6").is_err());
+        assert!(parse("x --check").is_err());
+    }
+
+    #[test]
+    fn words_from_the_command_line_keep_their_shell_split() {
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        match parse_words(&w(&[
+            "tests",
+            "pass",
+            "--check",
+            "cd native-tv && ./gradlew --no-daemon test && git diff --check",
+            "--persistence",
+            "relentless",
+        ]))
+        .unwrap()
+        {
+            Ask::Set {
+                outcome,
+                check,
+                persistence,
+                ..
+            } => {
+                assert_eq!(outcome, "tests pass");
+                assert_eq!(
+                    check.as_deref(),
+                    Some("cd native-tv && ./gradlew --no-daemon test && git diff --check")
+                );
+                assert_eq!(persistence, Some(Persistence::Relentless));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_words(&w(&[
+            "it", "works", "--check", "grep", "-q", "all good", "log",
+        ]))
+        .unwrap()
+        {
+            Ask::Set { check, .. } => assert_eq!(check.as_deref(), Some("grep -q 'all good' log")),
+            other => panic!("{other:?}"),
+        }
+        // The whole thing as one quoted word reads as /voyage would.
+        match parse_words(&w(&["it works --budget 3"])).unwrap() {
+            Ask::Set {
+                outcome, budget, ..
+            } => {
+                assert_eq!((outcome.as_str(), budget), ("it works", Some(3.0)))
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
