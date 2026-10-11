@@ -1,5 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
+  - name: Question or idea
+    url: https://github.com/meshbergio/toomux/discussions
+    about: Ask how something works, share a setup, or talk through an idea before filing it.
   - name: Security vulnerability
-    url: https://github.com/meshbergio/toomux/security/policy
-    about: Read the private-reporting guidance before sharing sensitive details.
+    url: https://github.com/meshbergio/toomux/security/advisories/new
+    about: Report it privately. Please don't open a public issue.
+  - name: Guide
+    url: https://github.com/meshbergio/toomux/blob/master/GUIDE.md
+    about: Setup, every command, configuration and troubleshooting.

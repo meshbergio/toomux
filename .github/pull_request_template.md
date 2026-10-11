@@ -1,16 +1,19 @@
 ## What changed
 
-<!-- What problem does this solve, and what invariant does the change establish? -->
+<!-- The problem this solves, and the invariant the change establishes. Link the issue if there is one. -->
 
 ## Validation
 
-<!-- Commands/tests run, including platform-specific validation where relevant. -->
+<!-- Commands and tests run, including platform-specific checks where relevant. -->
 
-- [ ] cargo fmt --all -- --check
-- [ ] cargo clippy --locked --all-targets -- -D warnings
-- [ ] cargo test --locked
-- [ ] Security/data migration implications considered
-- [ ] Documentation/changelog updated when user-visible behavior changed
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo build --locked`
+- [ ] `cargo clippy --locked --all-targets -- -D warnings`
+- [ ] `cargo test --locked`
+- [ ] `actionlint .github/workflows/*.yml` (if workflows changed)
+- [ ] `cargo audit --deny warnings` and `cargo deny check` (if dependencies changed)
+- [ ] No credentials, real transcripts or private machine paths in code, fixtures or screenshots
+- [ ] CHANGELOG.md and docs updated if user-visible behaviour changed
 
 ## Risk / compatibility
 

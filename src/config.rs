@@ -227,7 +227,7 @@ pub fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// `/home/sam/storage/x` -> `~/storage/x`
+/// `/home/me/storage/x` -> `~/storage/x`
 pub fn tilde(p: &str) -> String {
     let h = home();
     match Path::new(p).strip_prefix(&h) {
@@ -462,7 +462,7 @@ voyage_hard_model = "sonnet"
 voyage_relentless_model = "opus"
 # While a voyage runs, its session's status line shows its scene: a ship
 # sailing to an island, as far along as the judge reckons, landing when it's
-# done. Five lines tall; the toomux detail pane and sidebar show it too.
+# done. Five lines tall; the toomux detail pane shows it too.
 # false: the one-line chip only.
 voyage_scene = true
 # How hard a voyage pushes, when /voyage doesn't say (--persistence):
@@ -683,7 +683,7 @@ handover_tokens = 400000
 handover_turn_end_tokens = 200000
 
 [[context_policy]]
-account = "bonnie"
+account = "work"
 context_window_tokens = 1000000
 compaction = "toomux"
 
@@ -696,7 +696,7 @@ handover_turn_end_tokens = 12000
         let t: toml::Table = toml::from_str(raw).unwrap();
         let cfg: Config = lift_settings(t).try_into().unwrap();
         assert_eq!(cfg.context_policy.len(), 2);
-        assert_eq!(cfg.context_policy[0].account.as_deref(), Some("bonnie"));
+        assert_eq!(cfg.context_policy[0].account.as_deref(), Some("work"));
         assert_eq!(cfg.context_policy[0].handover_tokens, None);
         assert_eq!(cfg.context_policy[1].model.as_deref(), Some("local-qwen-*"));
         assert_eq!(cfg.context_policy[1].handover_tokens, Some(20_000));

@@ -72,6 +72,11 @@ It shows the change where the mechanism predicts it: far less old context carrie
 from call to call (cache reads and cache rewrites fell by half or more) while fresh
 input stayed flat. The work each call did didn't shrink; the baggage did.
 
+Every figure is per API call, not per task. The comparison doesn't measure what
+it cost to finish a given piece of work: a handover adds calls of its own (the
+brief, the fresh session reading it in), and those calls are counted on the "with"
+side like any other.
+
 It doesn't prove handover is the only cause. It is one person's workload, not a
 controlled benchmark across Claude Code users, and the two periods are different
 weeks of different work. Your numbers will differ with how long your sessions run,
