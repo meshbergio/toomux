@@ -1142,6 +1142,9 @@ pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
         .strip_prefix("/voyage")
         .filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))
     else {
+        if open().is_empty() {
+            return None;
+        }
         let _lock = lock();
         // A handover's successor takes the voyage on at its first prompt
         // (the handover's own carry may come later). That prompt is
