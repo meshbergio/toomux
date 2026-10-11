@@ -5251,6 +5251,8 @@ mod tests {
             env: vec![],
             tty: None,
             pane: None,
+            unregistered: false,
+            twin: None,
         }
     }
 
