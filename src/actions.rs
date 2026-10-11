@@ -106,10 +106,54 @@ pub fn carried_args(args: &[String]) -> Vec<String> {
 /// The account's CLAUDE_CONFIG_DIR for a launch: set in its environment,
 /// or (where it has to be unset) cleared by the `env` in front of claude.
 fn config_dir(cfg: &Config, account: usize, env: &mut Vec<String>, argv: &mut Vec<String>) {
-    match crate::credentials::config_dir_var(&cfg.account_dir(account)) {
+    let var = crate::credentials::config_dir_var(&cfg.account_dir(account));
+    config_dir_as(var, env, argv);
+}
+
+fn config_dir_as(var: Option<String>, env: &mut Vec<String>, argv: &mut Vec<String>) {
+    env.retain(|e| !e.starts_with("CLAUDE_CONFIG_DIR="));
+    match var {
         Some(v) => env.push(format!("CLAUDE_CONFIG_DIR={v}")),
         None => argv.extend(["-u".to_string(), "CLAUDE_CONFIG_DIR".to_string()]),
     }
+}
+
+/// A new conversation id (a random UUID, as `--session-id` wants), so a
+/// fresh launch's conversation is known before Claude records it.
+fn new_session_id() -> Option<String> {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .ok()?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// Stands in for the conversation id of a launch that doesn't know it yet.
+fn launch_marker() -> String {
+    format!(
+        "launch-{}-{}",
+        std::process::id(),
+        crate::registry::now_ms()
+    )
+}
+
+/// Whether launch flags already choose the conversation (`--resume`, `-c` …).
+fn selects_conversation(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let flag = a.split('=').next().unwrap_or(a);
+        SESSION_FLAGS.contains(&flag) || SESSION_FLAGS_WITH_VALUE.contains(&flag)
+    })
 }
 
 pub struct Launch {
@@ -133,6 +177,18 @@ pub fn launch_for(cfg: &Config, s: &Session, account: usize) -> Launch {
 /// A launch for this session's account and flags: resuming its conversation,
 /// or (with `fresh`) a new conversation that opens with that prompt.
 pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str>) -> Launch {
+    let var = crate::credentials::config_dir_var(&cfg.account_dir(account));
+    launch_in(cfg, s, account, var, fresh)
+}
+
+/// `launch_with`, its CLAUDE_CONFIG_DIR given (None: unset).
+fn launch_in(
+    cfg: &Config,
+    s: &Session,
+    account: usize,
+    config_var: Option<String>,
+    fresh: Option<&str>,
+) -> Launch {
     let same_account = s.account == Some(account);
     let inherited: Vec<(String, String)> = s
         .env
@@ -141,19 +197,23 @@ pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str
         .cloned()
         .collect();
     let mut env: Vec<String> = inherited.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    if !env
-        .iter()
-        .any(|v| v.starts_with("TOOMUX_PROVIDER_SESSION_ID="))
-    {
-        env.push(format!("TOOMUX_PROVIDER_SESSION_ID={}", s.id));
-    }
+    // The conversation this launch opens, never the one it was inherited
+    // from: a handover successor would otherwise carry its predecessor's id.
+    let new_id = fresh.and_then(|_| new_session_id());
+    let provider_id = match (fresh, &new_id) {
+        (None, _) => s.id.clone(),
+        (Some(_), Some(id)) => id.clone(),
+        (Some(_), None) => launch_marker(),
+    };
+    env.retain(|v| !v.starts_with(&format!("{}=", crate::running::ID_ENV)));
+    env.push(format!("{}={provider_id}", crate::running::ID_ENV));
     // Panes inherit the tmux server's environment, which may carry another
     // session's runtime markers; strip them so the relaunch starts clean.
     let mut argv = interactive_env_argv();
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
     }
-    config_dir(cfg, account, &mut env, &mut argv);
+    config_dir_as(config_var, &mut env, &mut argv);
     argv.push(expand(&cfg.claude_bin).display().to_string());
     // An opening prompt goes first: after a variadic flag it would be read
     // as one of that flag's values.
@@ -187,6 +247,8 @@ pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str
     if fresh.is_none() {
         argv.push("--resume".into());
         argv.push(s.id.clone());
+    } else if let Some(id) = new_id {
+        argv.extend(["--session-id".to_string(), id]);
     }
     Launch {
         env,
@@ -508,15 +570,26 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
     }
+    // Name the new conversation up front, so it's known even before (or
+    // without) Claude's own record of it.
+    let mut args = args.to_vec();
+    let named = crate::running::id_in_args(&[&["claude".to_string()], args.as_slice()].concat());
+    let id = match named {
+        Some(id) => Some(id),
+        None if !selects_conversation(&args) => new_session_id().inspect(|id| {
+            args.extend(["--session-id".to_string(), id.clone()]);
+        }),
+        None => None,
+    };
     let mut env = vec![format!(
-        "TOOMUX_PROVIDER_SESSION_ID=launch-{}-{}",
-        std::process::id(),
-        crate::registry::now_ms()
+        "{}={}",
+        crate::running::ID_ENV,
+        id.unwrap_or_else(launch_marker)
     )];
     config_dir(cfg, account, &mut env, &mut argv);
     argv.push(expand(&cfg.claude_bin).display().to_string());
     let prepared =
-        crate::context_policy::prepare_launch(cfg, account, Path::new(folder), args, &[], None);
+        crate::context_policy::prepare_launch(cfg, account, Path::new(folder), &args, &[], None);
     for (key, value) in prepared.env {
         env.push(format!("{key}={value}"));
     }
@@ -1142,6 +1215,8 @@ pub fn notify(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::carried_args;
+    use crate::config::{Account, Config};
+    use crate::registry::Session;
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
@@ -1298,6 +1373,93 @@ mod tests {
                 "x.json",
                 "y.json"
             ]
+        );
+    }
+
+    const ID: &str = "0f0f0f0f-1234-4abc-8def-000000000003";
+
+    fn cfg(dirs: &[&str]) -> Config {
+        let mut c = Config::default();
+        c.accounts = dirs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| Account {
+                name: format!("acct{i}"),
+                config_dir: d.to_string(),
+            })
+            .collect();
+        c
+    }
+
+    fn session(account: Option<usize>, config_dir: Option<&str>) -> Session {
+        Session {
+            pid: 1,
+            proc_start: None,
+            id: ID.into(),
+            cwd: "/w/x".into(),
+            name: "s".into(),
+            title: "s".into(),
+            topic: None,
+            pr: None,
+            queued: None,
+            pin: None,
+            dormant: false,
+            restore: None,
+            state: crate::registry::State::Idle,
+            waiting_for: None,
+            limit: None,
+            handover: None,
+            since_ms: 0,
+            started_ms: 0,
+            account,
+            config_dir: config_dir.map(str::to_string),
+            args: v(&["claude", "--model", "opus"]),
+            env: vec![],
+            tty: None,
+            pane: None,
+            unregistered: false,
+            twin: None,
+        }
+    }
+
+    fn provider_ids(env: &[String]) -> Vec<&str> {
+        env.iter()
+            .filter_map(|e| e.strip_prefix("TOOMUX_PROVIDER_SESSION_ID="))
+            .collect()
+    }
+
+    #[test]
+    fn a_resume_names_its_own_conversation_never_an_inherited_one() {
+        let cfg = cfg(&["/nonexistent/a", "/nonexistent/b"]);
+        let mut s = session(Some(0), None);
+        // A handover successor inherits its predecessor's environment.
+        s.env = vec![(
+            "TOOMUX_PROVIDER_SESSION_ID".into(),
+            "11111111-2222-4333-8444-555555555555".into(),
+        )];
+        let l = super::launch_for(&cfg, &s, 1);
+        assert_eq!(provider_ids(&l.env), vec![ID]);
+        assert!(l.cmd.ends_with(&format!("--resume {ID}")));
+    }
+
+    #[test]
+    fn a_fresh_launch_names_the_new_conversation_it_opens() {
+        let cfg = cfg(&["/nonexistent/a"]);
+        let mut s = session(Some(0), None);
+        s.env = vec![("TOOMUX_PROVIDER_SESSION_ID".into(), ID.into())];
+        let l = super::launch_with(&cfg, &s, 0, Some("carry on"));
+        let ids = provider_ids(&l.env);
+        assert_eq!(ids.len(), 1);
+        let new = ids[0];
+        assert_ne!(new, ID, "not the predecessor's");
+        assert!(l.cmd.contains(&format!("--session-id {new}")));
+        assert!(!l.cmd.contains("--resume"));
+        let parts: Vec<usize> = new.split('-').map(str::len).collect();
+        assert_eq!(parts, [8, 4, 4, 4, 12]);
+        assert_eq!(new.as_bytes()[14], b'4', "a version 4 UUID");
+        assert_eq!(
+            crate::running::id_in_args(&shell_words::split(&l.cmd).unwrap()).as_deref(),
+            Some(new)
         );
     }
 
