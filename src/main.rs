@@ -621,6 +621,9 @@ fn main() -> Result<()> {
                 config::tilde(&folder),
                 cfg.accounts[acct].name
             );
+            if let Some(note) = actions::needs_person(&pane) {
+                println!("  {note}: answer it there");
+            }
             if !detach && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
                 actions::jump_pane(&pane)?;
             }
@@ -650,7 +653,12 @@ fn main() -> Result<()> {
                         }
                         let pane = actions::revive(&cfg, &s)?;
                         snapshot::forget(std::slice::from_ref(&s.id));
-                        Ok(format!("{} reopened ({pane})", s.title))
+                        Ok(match actions::needs_person(&pane) {
+                            Some(note) => {
+                                format!("{} reopened ({pane}) · {note}: answer it there", s.title)
+                            }
+                            None => format!("{} reopened ({pane})", s.title),
+                        })
                     });
                 match r {
                     Ok(m) => println!("{m}"),

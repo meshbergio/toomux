@@ -296,6 +296,7 @@ const START_WAIT: Duration = Duration::from_secs(20);
 /// When it doesn't come up, the old conversation is resumed in its place and
 /// the error is a [`LaunchFailed`].
 pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<Option<String>> {
+    trust_real_path(&session_dir(cfg, s), &s.cwd);
     let account = s.account.context("its account isn't known")?;
     let pane = s.pane.clone().context("it isn't in tmux")?;
     // Claude started from a shell in the pane: keep the shell, start the
@@ -623,6 +624,7 @@ fn relaunch_from_shell(
 /// the fresh conversation in a tmux window of its own (same account, same
 /// flags). Returns the new pane.
 pub fn relaunch_fresh_in_tmux(cfg: &Config, s: &Session, prompt: &str) -> Result<String> {
+    trust_real_path(&session_dir(cfg, s), &s.cwd);
     let account = s.account.context("its account isn't known")?;
     let launch = launch_with(cfg, s, account, Some(prompt));
     let name = window_name(&s.title);
@@ -778,6 +780,7 @@ pub fn window_name(title: &str) -> String {
 /// current tmux session, else the adopt session.
 /// Returns the new pane id.
 pub fn revive(cfg: &Config, s: &Session) -> Result<String> {
+    trust_real_path(&launch_dir(cfg, s.account), &s.cwd);
     let account = s
         .account
         .context("the account it last ran on isn't configured")?;
@@ -890,6 +893,7 @@ fn last_words(pane: &str, mark: Option<i64>) -> Option<String> {
 /// Start a new Claude session in `folder` on `account`, in a tmux server of
 /// its own. Returns the pane id.
 pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Result<String> {
+    trust_real_path(&launch_dir(cfg, Some(account)), folder);
     if !std::path::Path::new(folder).is_dir() {
         bail!("{folder} isn't a folder");
     }
@@ -1438,6 +1442,47 @@ fn trusted(claude_json: &serde_json::Value, cwd: &str, exact: bool) -> bool {
     false
 }
 
+/// Claude Code records folder trust under the folder's real path; trust
+/// given before (or under a symlinked path the person works in) is under
+/// that path. If the account trusts `cwd` but not where it really is, record
+/// the same decision for the real path, so a launch there doesn't stop at
+/// the trust prompt. Never grants trust the person hasn't already given.
+fn trust_real_path(config_dir: &std::path::Path, cwd: &str) {
+    let Ok(real) = std::fs::canonicalize(cwd) else {
+        return;
+    };
+    let real = real.display().to_string();
+    if real == cwd {
+        return;
+    }
+    let path = crate::credentials::claude_json(config_dir);
+    let Some(json) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    else {
+        return;
+    };
+    if trusted(&json, cwd, false) && !trusted(&json, &real, false) {
+        let _ = mark_trusted(&path, &real);
+    }
+}
+
+/// The config folder a session runs with.
+fn session_dir(cfg: &Config, s: &Session) -> std::path::PathBuf {
+    match s.config_dir.as_deref() {
+        Some(d) => expand(d),
+        None => launch_dir(cfg, s.account),
+    }
+}
+
+/// The config folder a launch on `account` (None: Claude's default) uses.
+fn launch_dir(cfg: &Config, account: Option<usize>) -> std::path::PathBuf {
+    match account.filter(|a| *a < cfg.accounts.len()) {
+        Some(a) => cfg.account_dir(a),
+        None => crate::config::home().join(".claude"),
+    }
+}
+
 /// Folder trust is recorded per account. If the session's current account
 /// already trusts this folder, record the same decision for the target account
 /// so the resumed session doesn't stop at the trust prompt. Never grants trust
@@ -1457,7 +1502,17 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
     if !trusted(&src, &s.cwd, false) {
         return Ok(());
     }
-    let path = crate::credentials::claude_json(&cfg.account_dir(to));
+    mark_trusted(
+        &crate::credentials::claude_json(&cfg.account_dir(to)),
+        &s.cwd,
+    )
+}
+
+/// Record in one account's .claude.json that the person trusts `key`.
+fn mark_trusted(path: &std::path::Path, key: &str) -> Result<()> {
+    let read = |path: &std::path::Path| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
     // Live sessions on the target account rewrite this file too, and nothing
     // coordinates writers. So: write only if the file is unchanged since we
     // read it, and check afterwards that the entry survived.
@@ -1467,11 +1522,11 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
             .map(|m| (m.len(), m.modified().ok()))
     };
     for _ in 0..6 {
-        let before = stamp(&path);
-        let Some(mut dst) = read(&path) else {
+        let before = stamp(path);
+        let Some(mut dst) = read(path) else {
             return Ok(());
         };
-        if trusted(&dst, &s.cwd, true) {
+        if trusted(&dst, key, true) {
             return Ok(());
         }
         let projects = dst
@@ -1482,7 +1537,7 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
         let entry = projects
             .as_object_mut()
             .context("unexpected projects shape")?
-            .entry(s.cwd.clone())
+            .entry(key.to_string())
             .or_insert_with(|| serde_json::json!({}));
         if let Some(o) = entry.as_object_mut() {
             o.insert(
@@ -1492,21 +1547,28 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
         }
         let tmp = path.with_file_name(format!(".claude.json.toomux-{}", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(&dst)?)?;
-        if let Ok(meta) = std::fs::metadata(&path) {
+        if let Ok(meta) = std::fs::metadata(path) {
             let _ = std::fs::set_permissions(&tmp, meta.permissions());
         }
-        if stamp(&path) != before {
+        if stamp(path) != before {
             let _ = std::fs::remove_file(&tmp);
             sleep(Duration::from_millis(150));
             continue;
         }
-        std::fs::rename(&tmp, &path)?;
+        std::fs::rename(&tmp, path)?;
         sleep(Duration::from_millis(400));
-        if read(&path).is_some_and(|v| trusted(&v, &s.cwd, true)) {
+        if read(path).is_some_and(|v| trusted(&v, key, true)) {
             return Ok(());
         }
     }
     bail!("another session kept rewriting {}", path.display())
+}
+
+/// A session just started in `pane` that stopped at a screen that needs the
+/// person (folder trust, sign-in, first-run), named; None once it shows its
+/// prompt. Waits up to a few seconds.
+pub fn needs_person(pane: &str) -> Option<String> {
+    settle(pane)
 }
 
 /// After a relaunch, report whether the new session is stuck at a prompt that
@@ -1573,6 +1635,7 @@ pub fn switch(
         (None, None) => "~/.claude".to_string(),
     };
     carry_trust(cfg, &s, account).context("copying folder trust")?;
+    trust_real_path(&cfg.account_dir(account), &s.cwd);
     carry_conversation(cfg, &s, account)
         .with_context(|| format!("copying the conversation to {target}"))?;
 
@@ -2385,6 +2448,47 @@ mod tests {
             "x",
         ]);
         assert_eq!(carried_args(&a), v(&["--model=sonnet"]));
+    }
+
+    #[test]
+    fn trust_given_under_a_symlinked_path_carries_to_the_real_path_and_nowhere_else() {
+        let root = std::env::temp_dir().join(format!("toomux-trust-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        for d in ["trusted", "untrusted"] {
+            std::fs::create_dir_all(real.join(d)).unwrap();
+        }
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        let acct = root.join("acct");
+        std::fs::create_dir_all(&acct).unwrap();
+        let link = |d: &str| root.join("link").join(d).display().to_string();
+        let real_of = |d: &str| {
+            std::fs::canonicalize(real.join(d))
+                .unwrap()
+                .display()
+                .to_string()
+        };
+        let json = acct.join(".claude.json");
+        std::fs::write(
+            &json,
+            serde_json::json!({
+                "projects": { link("trusted"): { "hasTrustDialogAccepted": true } },
+                "other": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        super::trust_real_path(&acct, &link("trusted"));
+        super::trust_real_path(&acct, &link("untrusted"));
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+        assert!(super::trusted(&v, &real_of("trusted"), true));
+        assert!(
+            !super::trusted(&v, &real_of("untrusted"), false),
+            "no trust the person hasn't given"
+        );
+        assert_eq!(v["other"], 1, "the rest of the file is left as it was");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
