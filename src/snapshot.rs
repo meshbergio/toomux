@@ -145,7 +145,25 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
         };
     }
     let live: Vec<&Session> = sessions.iter().filter(|s| !s.dormant).collect();
-    let same = live.len() == snap.entries.len()
+    // Not listed isn't gone: a session whose registry file went missing still
+    // runs, and must not be offered for reopening beside itself. Asked of
+    // the processes only when something recorded is missing.
+    let missing = snap
+        .entries
+        .iter()
+        .any(|e| !live.iter().any(|s| s.id == e.id));
+    let held: Vec<String> = if missing {
+        crate::running::all(cfg).into_iter().map(|h| h.id).collect()
+    } else {
+        Vec::new()
+    };
+    let kept: Vec<Entry> = snap
+        .entries
+        .iter()
+        .filter(|e| !live.iter().any(|s| s.id == e.id) && held.contains(&e.id))
+        .cloned()
+        .collect();
+    let same = live.len() + kept.len() == snap.entries.len()
         && live.iter().all(|s| {
             let args = crate::actions::carried_args(&s.args);
             let context_env = context_env(cfg, s);
@@ -167,11 +185,8 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
     // A shutdown ends every session at once, usually before tmux itself
     // goes. Don't let that wipe the record: doubt a sudden loss of more than
     // half for two minutes before believing it.
-    let lost = snap
-        .entries
-        .iter()
-        .filter(|e| !live.iter().any(|s| s.id == e.id))
-        .count();
+    let gone = |e: &Entry| !live.iter().any(|s| s.id == e.id) && !held.contains(&e.id);
+    let lost = snap.entries.iter().filter(|e| gone(e)).count();
     if snap.entries.len() >= 3 && lost * 2 > snap.entries.len() {
         match snap.shrink_since {
             None => {
@@ -183,12 +198,7 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
             Some(_) => {
                 // Real: a tmux server went down with them (a reboot is
                 // caught above). Offer them back, as after a restart.
-                let lost: Vec<Entry> = snap
-                    .entries
-                    .iter()
-                    .filter(|e| !live.iter().any(|s| s.id == e.id))
-                    .cloned()
-                    .collect();
+                let lost: Vec<Entry> = snap.entries.iter().filter(|e| gone(e)).cloned().collect();
                 let mut r: Restore = read("restore.json");
                 r.entries.retain(|e| !lost.iter().any(|l| l.id == e.id));
                 r.entries.extend(lost);
@@ -198,6 +208,7 @@ pub fn record(cfg: &Config, sessions: &[Session], now: i64) {
         }
     }
     snap.entries = live.iter().map(|s| entry(cfg, s)).collect();
+    snap.entries.extend(kept);
     snap.at_ms = now;
     snap.shrink_since = None;
     write("running.json", &snap);
@@ -292,6 +303,66 @@ mod tests {
         cfg.reopen_after_restart = false;
         earlier(&cfg);
         assert!(!reopen_due(), "off: only offered");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_session_still_running_without_its_registry_file_is_not_offered_to_reopen() {
+        use std::os::unix::process::CommandExt;
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp) };
+        let held = "0f0f0f0f-1234-4abc-8def-000000000004";
+        // Still running: a Claude process resuming it, with no registry record.
+        let mut claude = std::process::Command::new("sh")
+            .arg0("claude")
+            .args(["-c", "sleep 30; :", "--resume", held])
+            .spawn()
+            .unwrap();
+        let e = |id: &str| Entry {
+            id: id.into(),
+            cwd: "/".into(),
+            account: "x".into(),
+            title: id.into(),
+            args: vec![],
+            context_env: vec![],
+            tmux_session: None,
+            window: None,
+        };
+        let ended = [
+            "0f0f0f0f-1234-4abc-8def-00000000000a",
+            "0f0f0f0f-1234-4abc-8def-00000000000b",
+        ];
+        write(
+            "running.json",
+            &Snap {
+                boot: boot_id(),
+                at_ms: 1,
+                entries: vec![e(ended[0]), e(ended[1]), e(held)],
+                shrink_since: None,
+            },
+        );
+        let mut cfg = Config::default();
+        cfg.accounts.clear();
+        // Every registry file gone at once: doubted, then believed.
+        let now = crate::registry::now_ms();
+        record(&cfg, &[], now);
+        record(&cfg, &[], now + 130_000);
+        let r: Restore = read("restore.json");
+        let offered: Vec<&str> = r.entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(offered, ended, "only what really ended is offered");
+        assert_eq!(
+            recorded()
+                .1
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            [held],
+            "and what still runs stays recorded as running"
+        );
+        let _ = claude.kill();
+        let _ = claude.wait();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

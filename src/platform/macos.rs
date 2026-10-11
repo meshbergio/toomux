@@ -266,7 +266,8 @@ pub fn stdin(pid: i32) -> Option<PathBuf> {
     Some(PathBuf::from("/dev").join(name))
 }
 
-fn pids() -> Vec<i32> {
+/// Every live process id.
+pub fn pids() -> Vec<i32> {
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count < 1 {
         return Vec::new();
@@ -320,15 +321,15 @@ pub fn descendants(pid: i32) -> Vec<i32> {
     out
 }
 
+/// A process's current folder.
+pub fn cwd(pid: i32) -> Option<PathBuf> {
+    let v = unsafe { pidinfo::<libc::proc_vnodepathinfo>(pid, libc::PROC_PIDVNODEPATHINFO)? };
+    vip_path(&v.pvi_cdir)
+}
+
 /// Every process's current folder.
 pub fn folders_in_use() -> Vec<PathBuf> {
-    pids()
-        .into_iter()
-        .filter_map(|pid| unsafe {
-            pidinfo::<libc::proc_vnodepathinfo>(pid, libc::PROC_PIDVNODEPATHINFO)
-        })
-        .filter_map(|v| vip_path(&v.pvi_cdir))
-        .collect()
+    pids().into_iter().filter_map(cwd).collect()
 }
 
 /// Changes at every boot: how toomux tells a restart from a lost tmux server.

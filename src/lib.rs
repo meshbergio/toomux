@@ -29,6 +29,7 @@ pub mod queue;
 pub mod redact;
 pub mod registry;
 pub mod remote;
+pub mod running;
 pub mod scene;
 pub mod setup;
 pub mod snapshot;

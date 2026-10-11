@@ -478,6 +478,8 @@ pub fn revive(cfg: &Config, s: &Session) -> Result<String> {
     if !std::path::Path::new(&s.cwd).is_dir() {
         bail!("its folder {} no longer exists", s.cwd);
     }
+    // Two processes on one conversation both write its transcript.
+    crate::running::ensure_free(cfg, &s.id, None)?;
     let launch = launch_for(cfg, s, account);
     // Under the name it had before a restart, if someone chose one.
     let name = s

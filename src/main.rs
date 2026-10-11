@@ -535,6 +535,11 @@ fn main() -> Result<()> {
             for s in registry::restorable(&cfg, &live) {
                 match actions::revive(&cfg, &s) {
                     Ok(_) => ok.push(s.id.clone()),
+                    // Still running (its registry file was what went): not
+                    // to be offered again, nor counted as reopened.
+                    Err(e) if e.is::<toomux::running::AlreadyRunning>() => {
+                        snapshot::forget(std::slice::from_ref(&s.id));
+                    }
                     Err(e) => failed.push(format!("{}: {e}", s.title)),
                 }
             }
@@ -882,7 +887,16 @@ fn jump_pin(cfg: &Config, all: &[registry::Session], n: usize) -> Result<()> {
         .iter()
         .find(|s| s.id == pin.id)
         .context("pin vanished")?;
-    let pane = actions::revive(cfg, s)?;
+    let pane = match actions::revive(cfg, s) {
+        Ok(pane) => pane,
+        // Open already, where toomux's registry couldn't see it: go there.
+        Err(e) => match e.downcast_ref::<toomux::running::AlreadyRunning>() {
+            Some(toomux::running::AlreadyRunning { pane: Some(p), .. }) => {
+                return actions::jump_pane(p);
+            }
+            _ => return Err(e),
+        },
+    };
     actions::notify(&format!("reopening {}", s.title));
     actions::jump_pane(&pane)
 }
