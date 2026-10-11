@@ -4,6 +4,17 @@ All notable user-visible changes are recorded here. toomux follows semantic
 versioning once a compatibility promise is established; the 0.x series may
 still change configuration and command details while they settle.
 
+## 0.4.4 - 2026-10-11
+
+### Fixed
+
+- Prevent inherited `NO_COLOR` from removing Claude Code's dim prompt styling, which caused suggested prompts to be mistaken for user drafts and blocked handover after automation or workspace migration.
+- Remove `NO_COLOR` for each Claude launch and for new tmux servers, including resumes and handovers on existing servers, while retaining protection for genuine typed drafts.
+
+### Reliability
+
+- Add regression coverage for launch environment filtering and suggestion detection in an isolated tmux server.
+
 ## 0.4.3 - 2026-10-04
 
 ### Fixed

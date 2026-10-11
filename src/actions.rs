@@ -117,6 +117,15 @@ pub struct Launch {
     pub cmd: String,
 }
 
+// Claude's prompt suggestions must retain their dim attribute: the prompt
+// reader uses it to distinguish suggestions from the user's unsent input.
+// Automation commonly exports NO_COLOR; a tmux server can retain it even
+// after the process that created the server has exited. Sanitize each Claude
+// launch, including handovers and respawns on an existing server.
+fn interactive_env_argv() -> Vec<String> {
+    vec!["env".into(), "-u".into(), "NO_COLOR".into()]
+}
+
 pub fn launch_for(cfg: &Config, s: &Session, account: usize) -> Launch {
     launch_with(cfg, s, account, None)
 }
@@ -140,7 +149,7 @@ pub fn launch_with(cfg: &Config, s: &Session, account: usize, fresh: Option<&str
     }
     // Panes inherit the tmux server's environment, which may carry another
     // session's runtime markers; strip them so the relaunch starts clean.
-    let mut argv = vec!["env".to_string()];
+    let mut argv = interactive_env_argv();
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
     }
@@ -1134,6 +1143,23 @@ mod tests {
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn interactive_launch_removes_inherited_no_color() {
+        let argv = super::interactive_env_argv();
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .args(["sh", "-c", "printf '%s|%s' \"${NO_COLOR-unset}\" \"$TERM\""])
+            .env("NO_COLOR", "1")
+            .env("TERM", "tmux-256color")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "unset|tmux-256color"
+        );
     }
 
     #[test]
