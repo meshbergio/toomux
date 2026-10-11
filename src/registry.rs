@@ -144,6 +144,9 @@ impl Session {
         use crate::handover::Phase;
         match &self.handover {
             Some(Phase::Running) => return ("handing over".into(), None, since),
+            Some(Phase::Waiting(note)) => {
+                return ("handing over".into(), Some(note.clone()), since);
+            }
             Some(Phase::Asked { written: false }) => {
                 return (
                     "handing over".into(),

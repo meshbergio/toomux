@@ -50,11 +50,23 @@ const QUIET_MS: i64 = 45_000;
 const TURN_END_QUIET_MS: i64 = 10 * 60_000;
 /// A failed handover isn't retried for this long...
 const RETRY_MS: i64 = 30 * 60_000;
-/// ...unless it only waited on someone typing in the prompt.
+/// ...unless it only waited on the prompt (someone typing in it, it not
+/// being readable, toomux's own text not sending).
 const RETRY_TYPED_MS: i64 = 60_000;
 const TYPED: &str = "something is typed in its prompt";
+const UNREADABLE: &str = "can't read its prompt";
+/// A failure's short reason when the fresh session didn't come up.
+const NO_START: &str = "the fresh session didn't start";
 const WRITE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(12 * 60);
+/// A handover waiting on the prompt before it starts gives up (visibly)
+/// after this long, and says it's still waiting this often in the log.
+const DEFER_TIMEOUT_MS: i64 = 30 * 60_000;
+const DEFER_LOG_MS: i64 = 10 * 60_000;
+/// After this many fresh sessions that wouldn't start, a conversation is left
+/// to carry on as it is for a day: no gate, no tries.
+const LAUNCH_ATTEMPTS: u32 = 3;
+const GIVE_UP_MS: i64 = 24 * 3_600_000;
 
 pub fn dir() -> PathBuf {
     crate::paths::state().join("handovers")
@@ -242,6 +254,13 @@ pub fn gate(cfg: &Config, v: &Value) -> Option<String> {
         // This conversation already handed over, and someone reopened it on
         // purpose: it carries on as it is.
         if load_lineage().iter().any(|l| l.old_id == session) {
+            release();
+            return None;
+        }
+        // Its fresh session wouldn't start and it was put back: until the
+        // next try it works as it is (holding it to a brief that is already
+        // written would only refuse everything it does).
+        if launch_failed(session, registry::now_ms()).is_some_and(|(_, holding)| holding) {
             release();
             return None;
         }
@@ -656,7 +675,9 @@ pub fn prompt_hook(cfg: &Config, v: &Value) -> Option<String> {
 
 // ---- when to hand a main session over -------------------------------------------
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// One per process: `writing` while a handover runs, `deferred` while one is
+/// due but waits on the prompt, then `done` or `failed`.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Marker {
     pub pid: i32,
     pub id: String,
@@ -673,6 +694,15 @@ pub struct Marker {
     /// The process doing the handover (0 while it starts).
     #[serde(default)]
     pub owner: i32,
+    /// What it's waiting on now, for the list (empty: nothing to say).
+    #[serde(default)]
+    pub note: String,
+    /// Deferred: when it last said so in the log.
+    #[serde(default)]
+    pub logged_ms: i64,
+    /// Fresh sessions for this conversation that wouldn't start, so far.
+    #[serde(default)]
+    pub launch_failures: u32,
 }
 
 /// A handover is under way for this marker: its process is alive and it
@@ -716,6 +746,26 @@ fn in_progress_for(session: &str) -> bool {
     markers_for(session).iter().any(|m| live(m, now))
 }
 
+/// Fresh sessions for this conversation that wouldn't start, so far.
+fn launch_failures(session: &str) -> u32 {
+    markers_for(session)
+        .iter()
+        .map(|m| m.launch_failures)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The latest time a fresh session for this conversation wouldn't start, and
+/// whether toomux is still holding off trying again then. The old
+/// conversation was put back: it's to be used, not held to its brief.
+fn launch_failed(session: &str, now: i64) -> Option<(i64, bool)> {
+    markers_for(session)
+        .iter()
+        .filter(|m| m.state == "failed" && m.launch_failures > 0 && m.why.starts_with(NO_START))
+        .map(|m| (m.at_ms, now < m.retry_at_ms))
+        .max()
+}
+
 fn marker_path(pid: i32) -> PathBuf {
     dir().join(format!("{pid}.json"))
 }
@@ -731,6 +781,9 @@ pub fn marker(pid: i32) -> Option<Marker> {
 pub enum Phase {
     /// toomux is handing it over now.
     Running,
+    /// Handing over, and waiting on this (its brief, its subagents, text in
+    /// its prompt): said so the list shows why nothing seems to happen.
+    Waiting(String),
     /// The gate asked for its brief; it goes once that's written and it's idle.
     Asked { written: bool },
     /// The last try failed, and why.
@@ -740,7 +793,16 @@ pub enum Phase {
 pub fn phase(session: &str, pid: i32) -> Option<Phase> {
     let now = registry::now_ms();
     match marker(pid) {
+        Some(m) if live(&m, now) && !m.note.is_empty() => return Some(Phase::Waiting(m.note)),
         Some(m) if live(&m, now) => return Some(Phase::Running),
+        // A deferral is looked at again every minute; one not renewed is over.
+        Some(m)
+            if m.state == "deferred"
+                && m.id == session
+                && now < m.retry_at_ms + 2 * RETRY_TYPED_MS =>
+        {
+            return Some(Phase::Waiting(m.note));
+        }
         Some(m)
             if m.state == "failed"
                 && m.id == session
@@ -777,6 +839,8 @@ pub fn prune() {
         if !(name.starts_with("req-")
             || name.starts_with("drain-")
             || name.starts_with("tick-")
+            || name.starts_with("retry-")
+            || name.starts_with("typed-")
             || marker
             || stray)
         {
@@ -913,10 +977,14 @@ fn idle_limit(policy: &ResolvedContextPolicy, idle_ms: i64) -> u64 {
 fn short_why(e: &str) -> String {
     let short = if e.starts_with(TYPED) {
         "unsent prompt text"
+    } else if e.starts_with(UNREADABLE) {
+        "its prompt couldn't be read"
+    } else if e.starts_with(actions::NOT_SENT) {
+        "toomux's request didn't send"
     } else if e.contains("wouldn't start") {
-        "the fresh session didn't start"
+        NO_START
     } else if e.contains("before the brief was written") {
-        "waiting for the limit to reset"
+        "hit a usage limit"
     } else if e.contains("no handover was written") {
         "no brief after 20 min"
     } else if e.contains("ended while writing") {
@@ -978,18 +1046,167 @@ pub fn start_due(cfg: &Config, sessions: &[Session], now: i64) {
     // Two ticks at once would start the same handover twice.
     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
     for pid in due(cfg, sessions, now) {
-        // Someone is typing in it: wait, quietly, rather than fail each minute.
-        let typing = sessions.iter().find(|s| s.pid == pid).is_some_and(|s| {
-            !written(&brief_path(&s.id, None))
-                && s.pane
-                    .as_ref()
-                    .is_some_and(|p| !actions::prompt_empty(&p.id))
-        });
-        if !typing {
-            spawn(pid);
+        let Some(s) = sessions.iter().find(|s| s.pid == pid) else {
+            continue;
+        };
+        match prompt_wait(s) {
+            None => spawn(pid),
+            // Someone is typing in it (or it can't be seen): wait rather than
+            // fail each minute, but say so, and not forever.
+            Some(wait) => defer(cfg, s, wait, now),
         }
     }
     carry(cfg, sessions);
+}
+
+/// Why a due handover can't start yet: toomux would have to type its request
+/// into a prompt that holds someone's text, or that it can't read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Wait {
+    Typed,
+    Unreadable,
+}
+
+impl Wait {
+    fn note(self) -> &'static str {
+        match self {
+            Wait::Typed => "waiting: something is typed in its prompt",
+            Wait::Unreadable => {
+                "waiting: can't read its prompt (scrolled back, or a dialog is open)"
+            }
+        }
+    }
+
+    fn gave_up(self) -> String {
+        let mins = DEFER_TIMEOUT_MS / 60_000;
+        match self {
+            Wait::Typed => format!("unsent prompt text for {mins} min"),
+            Wait::Unreadable => format!("its prompt couldn't be read for {mins} min"),
+        }
+    }
+}
+
+/// A handover with its brief still to ask for needs Claude's prompt free to
+/// type into. toomux's own unsent text doesn't count: it's replaced.
+fn prompt_wait(s: &Session) -> Option<Wait> {
+    if written(&brief_path(&s.id, None)) {
+        // Drafts are preserved in the brief from here.
+        return None;
+    }
+    let pane = s.pane.as_ref()?;
+    match actions::prompt_state(&pane.id) {
+        actions::Prompt::Empty => None,
+        actions::Prompt::Draft(text) if ours(&s.id, &text) => None,
+        actions::Prompt::Draft(_) => Some(Wait::Typed),
+        actions::Prompt::Unknown => Some(Wait::Unreadable),
+    }
+}
+
+/// Where toomux notes that it typed into this conversation's prompt.
+fn typed_path(session: &str) -> PathBuf {
+    dir().join(format!("typed-{session}"))
+}
+
+/// Text in the prompt that toomux put there and that never sent: its own
+/// requests are marked `[toomux …]`, and Claude may show a long one as a
+/// pasted-text placeholder instead (only taken as ours shortly after toomux
+/// typed into this conversation).
+fn ours(session: &str, draft: &str) -> bool {
+    let d = draft.trim();
+    if d.starts_with("[toomux ") {
+        return true;
+    }
+    let pasted = d.starts_with("[Pasted text #") && d.ends_with(']') && !d.contains('\n');
+    pasted && mtime_ms(&typed_path(session)).is_some_and(|t| registry::now_ms() - t < 2 * 3_600_000)
+}
+
+/// The next marker for a handover that waits on the prompt, and what to log:
+/// the wait starts (or carries on from `prev`), is logged when it starts,
+/// changes or has gone on another DEFER_LOG_MS, and fails after
+/// DEFER_TIMEOUT_MS.
+fn deferral(
+    prev: Option<&Marker>,
+    s: &Session,
+    wait: Wait,
+    now: i64,
+    launch_failures: u32,
+) -> (Marker, Option<&'static str>) {
+    let prev = prev.filter(|m| m.state == "deferred" && m.id == s.id);
+    let since = prev.map_or(now, |m| m.at_ms);
+    let mut m = Marker {
+        pid: s.pid,
+        id: s.id.clone(),
+        pane: s.pane.as_ref().map(|p| p.id.clone()).unwrap_or_default(),
+        launch_failures,
+        ..Default::default()
+    };
+    if now - since >= DEFER_TIMEOUT_MS {
+        m.state = "failed".into();
+        m.at_ms = now;
+        m.retry_at_ms = now + RETRY_MS;
+        m.why = wait.gave_up();
+        return (m, Some("failed"));
+    }
+    m.state = "deferred".into();
+    m.at_ms = since;
+    m.retry_at_ms = now + RETRY_TYPED_MS;
+    m.note = wait.note().into();
+    let fresh = prev.is_none_or(|p| p.note != m.note || now - p.logged_ms >= DEFER_LOG_MS);
+    m.logged_ms = if fresh {
+        now
+    } else {
+        prev.map_or(now, |p| p.logged_ms)
+    };
+    (m, fresh.then_some("deferred"))
+}
+
+fn defer(cfg: &Config, s: &Session, wait: Wait, now: i64) {
+    let (m, event) = deferral(marker(s.pid).as_ref(), s, wait, now, launch_failures(&s.id));
+    write_marker(&m);
+    match event {
+        Some("failed") => {
+            let msg = format!(
+                "couldn't hand over {}: it waited {} min on its prompt ({})",
+                s.title,
+                DEFER_TIMEOUT_MS / 60_000,
+                wait.note().trim_start_matches("waiting: ")
+            );
+            log(json!({"event": "failed", "session": s.id, "pid": s.pid, "message": msg}));
+            crate::watch::announce_text(cfg, &msg, "handover", &s.title, &s.id);
+        }
+        Some(event) => log(
+            json!({"event": event, "session": s.id, "pid": s.pid, "title": s.title, "note": m.note, "since": m.at_ms}),
+        ),
+        None => {}
+    }
+    // Failed, it isn't due before then; deferred, it is, at every tick.
+    schedule_retry(&s.id, m.retry_at_ms, m.state == "deferred");
+}
+
+/// Whether a retry at `at` still needs a tick of its own, given the time a
+/// pending one was set for. One that has gone by doesn't count, nor one much
+/// later. One before `at` only does when the session stays due meanwhile
+/// (`early`: a deferral, which that tick just looks at again), not when it
+/// waits out a failure until `at`.
+fn retry_needed(pending: Option<i64>, at: i64, now: i64, early: bool) -> bool {
+    !pending.is_some_and(|p| p > now && p <= at + 60_000 && (early || p >= at))
+}
+
+/// Make sure something looks again at `at_ms`, terminal attached or not: one
+/// detached, sleeping `toomux tick` per conversation at most.
+fn schedule_retry(session: &str, at_ms: i64, early: bool) {
+    let stamp = dir().join(format!("retry-{session}"));
+    let now = registry::now_ms();
+    let pending = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|t| t.trim().parse::<i64>().ok());
+    // A couple of seconds late, so it's due by then.
+    let at = at_ms + 2_000;
+    if !retry_needed(pending, at, now, early) {
+        return;
+    }
+    touch(&stamp, &at.to_string());
+    spawn_tick(&[((at - now).max(0) as u64).div_ceil(1000)]);
 }
 
 /// Stop hook: a turn has ended. Past the turn-end limit, this is the break
@@ -1051,6 +1268,15 @@ fn schedule_tick(v: &Value, policy: &ResolvedContextPolicy) {
         return;
     }
     touch(&stamp, "");
+    spawn_tick(after);
+}
+
+/// Start a detached `toomux tick` for these many seconds from now.
+fn spawn_tick(after: &[u64]) {
+    // A test binary would run itself with these as a filter.
+    if cfg!(test) {
+        return;
+    }
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -1114,10 +1340,7 @@ pub fn spawn(pid: i32) {
         pane: String::new(),
         state: "writing".into(),
         at_ms: registry::now_ms(),
-        tokens: 0,
-        retry_at_ms: 0,
-        why: String::new(),
-        owner: 0,
+        ..Default::default()
     };
     write_marker(&claim);
     match cmd.spawn() {
@@ -1162,15 +1385,33 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
         state: "writing".into(),
         at_ms: registry::now_ms(),
         tokens,
-        retry_at_ms: 0,
-        why: String::new(),
         owner: std::process::id() as i32,
+        launch_failures: launch_failures(&s.id),
+        ..Default::default()
     };
     write_marker(&m);
     log(
         json!({"event": "start", "session": s.id, "pid": pid, "title": s.title, "pane": pane, "tokens": tokens}),
     );
-    let result = hand_over(cfg, &s, pane.as_deref(), tokens, transcript.as_deref());
+    // What it waits on as it goes: in the list, and in the log.
+    let progress = |note: &str, detail: Option<String>| {
+        let mut now = m.clone();
+        now.note = note.to_string();
+        write_marker(&now);
+        let mut entry = json!({"event": "waiting", "session": s.id, "pid": pid, "note": note});
+        if let Some(d) = detail {
+            entry["detail"] = json!(d);
+        }
+        log(entry);
+    };
+    let result = hand_over(
+        cfg,
+        &s,
+        pane.as_deref(),
+        tokens,
+        transcript.as_deref(),
+        &progress,
+    );
     let now = registry::now_ms();
     m.state = if result.is_ok() {
         "done".into()
@@ -1178,22 +1419,27 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
         "failed".into()
     };
     m.at_ms = now;
+    let mut screen = None;
     if let Err(e) = &result {
-        m.retry_at_ms = now
-            + if e.to_string().starts_with(TYPED) {
-                RETRY_TYPED_MS
-            } else {
-                RETRY_MS
-            };
-        m.why = short_why(&e.to_string());
+        let launch = e.downcast_ref::<actions::LaunchFailed>();
+        screen = launch.map(|l| l.screen.clone());
+        if launch.is_some() {
+            m.launch_failures += 1;
+        }
+        let (wait, why) = after_failure(&e.to_string(), launch.is_some(), m.launch_failures);
+        m.retry_at_ms = now + wait;
+        m.why = why;
         // Its background commands go back to it (they'd otherwise run on,
         // unowned).
         crate::jobs::release(&s.id);
+        schedule_retry(&s.id, m.retry_at_ms, false);
     }
     write_marker(&m);
     // A request stays while the session still has to go: the gate keeps it to
-    // its brief, and the next try goes ahead as soon as it's ready.
-    if result.is_ok() {
+    // its brief, and the next try goes ahead as soon as it's ready. Not when
+    // the old conversation was put back after its fresh one wouldn't start:
+    // it carries on as it is until the next try.
+    if result.is_ok() || screen.is_some() {
         for p in [requested_path(&s.id, None), drain_path(&s.id)] {
             let _ = std::fs::remove_file(p);
         }
@@ -1206,11 +1452,36 @@ pub fn run(cfg: &Config, pid: i32) -> Result<String> {
         ),
         Err(e) => format!("couldn't hand over {}: {e}", s.title),
     };
-    log(
-        json!({"event": if result.is_ok() { "done" } else { "failed" }, "session": s.id, "pid": pid, "message": msg}),
-    );
+    let mut entry = json!({"event": if result.is_ok() { "done" } else { "failed" }, "session": s.id, "pid": pid, "message": msg});
+    if let Some(screen) = screen {
+        entry["screen"] = json!(screen);
+        entry["launch_failures"] = json!(m.launch_failures);
+    }
+    log(entry);
     crate::watch::announce_text(cfg, &msg, "handover", &s.title, &s.id);
     result.map(|_| msg)
+}
+
+/// How long until a failed handover is tried again, and the reason the list
+/// shows. Waiting on the prompt is retried in a minute. A fresh session that
+/// wouldn't start backs off (30 min, then 2 h) and after LAUNCH_ATTEMPTS
+/// leaves the conversation alone for a day, so a launch that can't work
+/// doesn't stop and resume it over and over.
+fn after_failure(e: &str, launch: bool, launch_failures: u32) -> (i64, String) {
+    if launch {
+        return if launch_failures >= LAUNCH_ATTEMPTS {
+            (
+                GIVE_UP_MS,
+                format!("{NO_START} {launch_failures} times · it carries on as it is for a day"),
+            )
+        } else {
+            (RETRY_MS << (2 * (launch_failures.max(1) - 1)), short_why(e))
+        };
+    }
+    let prompt = [TYPED, UNREADABLE, actions::NOT_SENT]
+        .iter()
+        .any(|p| e.starts_with(p));
+    (if prompt { RETRY_TYPED_MS } else { RETRY_MS }, short_why(e))
 }
 
 /// Hands the session over; on success, says where the fresh one is when
@@ -1221,16 +1492,36 @@ fn hand_over(
     pane: Option<&str>,
     tokens: u64,
     transcript: Option<&Path>,
+    progress: &dyn Fn(&str, Option<String>),
 ) -> Result<String> {
     let policy = context_policy::for_session(cfg, s);
     let policy_boundary = context_policy::needs_policy_boundary_for_session(s, &policy);
     let brief = brief_path(&s.id, None);
+    // A brief from before a fresh session failed to start describes the
+    // conversation as it was then, and it has gone on since: set it aside
+    // (keeping any unsent prompt it preserved) and ask for a new one.
+    let mut kept_draft = None;
+    if let Some((at, _)) = launch_failed(&s.id, registry::now_ms())
+        && written(&brief)
+        && !brief_since(&s.id, at)
+    {
+        let old = std::fs::read_to_string(&brief).unwrap_or_default();
+        kept_draft = unsent_section(&old).map(str::to_string);
+        let aside = dir().join(format!("{}.before-{at}.md", s.id));
+        std::fs::rename(&brief, &aside).context("setting aside the brief from before")?;
+    }
     if !written(&brief) {
         let Some(pane) = pane else {
             bail!("it runs outside tmux, so toomux can't ask it for a brief")
         };
-        if !actions::prompt_empty(pane) {
-            bail!("{TYPED}");
+        match actions::prompt_state(pane) {
+            actions::Prompt::Empty => {}
+            // toomux's own request from an earlier try, never sent: replaced.
+            actions::Prompt::Draft(text) if ours(&s.id, &text) => {
+                actions::clear_prompt_if(pane, &text, false)?;
+            }
+            actions::Prompt::Draft(_) => bail!("{TYPED}"),
+            actions::Prompt::Unknown => bail!("{UNREADABLE}"),
         }
     }
     // Subagent briefs from before this session was asked belong to earlier
@@ -1255,10 +1546,15 @@ fn hand_over(
             main_instruction(tokens / 1000, limit / 1000, &brief, turn_end, transcript)
         };
         let ask = format!("[toomux handover] {}", ask);
+        touch(&typed_path(&s.id), pane);
         actions::type_prompt(pane, &ask)?;
+    }
+    if !written(&brief) {
+        progress("writing its brief", None);
     }
     // The brief, and the session settled after writing it.
     let start = Instant::now();
+    let mut said = Duration::ZERO;
     loop {
         let Some(now) = find(cfg, s.pid) else {
             bail!("the session ended while writing its handover")
@@ -1266,10 +1562,25 @@ fn hand_over(
         if now.id != s.id {
             bail!("the session moved to another conversation");
         }
-        // It can't write anything until the limit resets; it's asked again then.
+        // It can't write anything while the account is limited.
         if let Some(l) = &now.limit {
             bail!(
-                "the account hit its usage limit ({l}) before the brief was written; it hands over once that resets"
+                "the account hit its usage limit ({l}) before the brief was written; waiting for it to reset"
+            );
+        }
+        if start.elapsed() >= said + Duration::from_secs(5 * 60) {
+            said = start.elapsed();
+            let mins = said.as_secs() / 60;
+            progress(
+                &format!(
+                    "{} · {mins} min",
+                    if written(&brief) {
+                        "brief written, waiting for its turn to end"
+                    } else {
+                        "writing its brief"
+                    }
+                ),
+                Some(format!("state {:?}", now.state)),
             );
         }
         let settled = matches!(now.state, State::Idle | State::Finished | State::Background);
@@ -1297,10 +1608,16 @@ fn hand_over(
     }
     // Its subagents are handing over too: wait until they have all stopped.
     let subagents = transcript.map(|t| t.with_file_name(&s.id).join("subagents"));
-    if let Some(d) = &subagents {
+    if let Some(d) = subagents.as_deref().filter(|d| any_active(d)) {
+        progress("waiting for its subagents to hand over", None);
         let start = Instant::now();
         while any_active(d) && start.elapsed() < SUBAGENT_TIMEOUT {
             std::thread::sleep(Duration::from_secs(3));
+        }
+        if any_active(d) {
+            log(
+                json!({"event": "subagents", "session": s.id, "pid": s.pid, "note": format!("still active after {} min: going on without them", SUBAGENT_TIMEOUT.as_secs() / 60)}),
+            );
         }
     }
     // What the successor has to pick up besides the brief.
@@ -1322,32 +1639,49 @@ fn hand_over(
     if let Some(u) = &unseen {
         text.push_str(&unseen_section(u));
     }
+    if let Some(kept) = &kept_draft
+        && !text.contains(UNSENT_DRAFT)
+    {
+        text = with_unsent_section(&text, kept);
+    }
 
     // Once the brief is complete, an old unsent draft must not strand the
     // handover forever. Preserve it first, then clear only that exact draft.
     // If the user types something new between those two checks, clearing is
     // refused and the handover stays put.
-    if let Some(p) = pane
-        && !actions::prompt_empty(p)
-    {
-        let Some(cur) = find(cfg, s.pid) else {
-            bail!("the session ended before its prompt draft could be preserved")
-        };
-        if cur.id != s.id
-            || cur.proc_start != s.proc_start
-            || cur.pane.as_ref().map(|pane| pane.id.as_str()) != pane
-        {
-            bail!("the session changed while preserving its prompt draft");
+    // With NO_COLOR in its environment Claude draws suggestions like typed
+    // text; one that editing keys can't touch is a suggestion, not a draft.
+    let unstyled = registry::full_env(s.pid)
+        .iter()
+        .any(|(k, _)| k == "NO_COLOR");
+    let mut suggestion = None;
+    match pane.map(|p| (p, actions::prompt_state(p))) {
+        None | Some((_, actions::Prompt::Empty)) => {}
+        Some((_, actions::Prompt::Unknown)) => bail!("{UNREADABLE}"),
+        // toomux's own request, never sent: not the user's to keep.
+        Some((p, actions::Prompt::Draft(draft))) if ours(&s.id, &draft) => {
+            actions::clear_prompt_if(p, &draft, false)?;
         }
-        let draft = actions::prompt_draft(p).context("can't read the unsent prompt draft")?;
-        if draft.trim().is_empty() {
-            bail!("{TYPED}");
+        Some((p, actions::Prompt::Draft(draft))) => {
+            let Some(cur) = find(cfg, s.pid) else {
+                bail!("the session ended before its prompt draft could be preserved")
+            };
+            if cur.id != s.id
+                || cur.proc_start != s.proc_start
+                || cur.pane.as_ref().map(|pane| pane.id.as_str()) != pane
+            {
+                bail!("the session changed while preserving its prompt draft");
+            }
+            let before = text.clone();
+            text = with_unsent_draft(&text, &draft);
+            // Persistence comes before deletion: a crash after this point can
+            // lose neither the brief nor the user's unsent text.
+            write_atomic(&brief, &text);
+            if actions::clear_prompt_if(p, &draft, unstyled)? == actions::Cleared::NotEditable {
+                text = before;
+                suggestion = Some(draft);
+            }
         }
-        text = with_unsent_draft(&text, &draft);
-        // Persistence comes before deletion: a crash after this point can lose
-        // neither the brief nor the user's unsent text.
-        write_atomic(&brief, &text);
-        actions::clear_prompt_if(p, &draft, false)?;
     }
     write_atomic(&brief, &text);
 
@@ -1429,10 +1763,13 @@ fn hand_over(
     {
         bail!("the session changed while handing over");
     }
-    if let Some(p) = pane
-        && !actions::prompt_empty(p)
-    {
-        bail!("{TYPED}");
+    if let Some(p) = pane {
+        match actions::prompt_state(p) {
+            actions::Prompt::Empty => {}
+            actions::Prompt::Draft(d) if suggestion.as_ref() == Some(&d) => {}
+            actions::Prompt::Draft(_) => bail!("{TYPED}"),
+            actions::Prompt::Unknown => bail!("{UNREADABLE}"),
+        }
     }
     // Same account, flags and environment (a handover isn't a move), and the
     // brief's folder readable without asking.
@@ -1459,10 +1796,16 @@ fn hand_over(
     }
     // The session's background commands carry on without it.
     crate::jobs::carry_on(&s.id);
+    progress("starting the fresh session", None);
     let (pane, where_) = match pane {
         Some(p) => {
-            actions::relaunch_fresh(cfg, &next, &fresh)?;
-            (p.to_string(), String::new())
+            // Started, but stopped at a screen that needs the person: it has
+            // handed over all the same, and the message says what it needs.
+            let note = actions::relaunch_fresh(cfg, &next, &fresh)?;
+            (
+                p.to_string(),
+                note.map(|n| format!(" · {n}")).unwrap_or_default(),
+            )
         }
         None => {
             let p = actions::relaunch_fresh_in_tmux(cfg, &next, &fresh)?;
@@ -1533,6 +1876,26 @@ fn with_unsent_draft(brief: &str, draft: &str) -> String {
     text.push_str(&block);
     text.push_str(suffix);
     text
+}
+
+/// The preserved-unsent-prompt section of a brief, heading included, up to
+/// the next section toomux adds.
+fn unsent_section(brief: &str) -> Option<&str> {
+    let start = brief.find(UNSENT_DRAFT)?;
+    let rest = &brief[start + UNSENT_DRAFT.len()..];
+    let end = [CARRIED, UNSEEN, crate::voyage::BRIEF_HEADING]
+        .iter()
+        .filter_map(|h| rest.find(h))
+        .min()
+        .unwrap_or(rest.len());
+    Some(&brief[start..start + UNSENT_DRAFT.len() + end])
+}
+
+/// A brief with a preserved-unsent-prompt section (from an earlier brief) put
+/// back before the generated carried-over text.
+fn with_unsent_section(brief: &str, section: &str) -> String {
+    let at = brief.find(CARRIED).unwrap_or(brief.len());
+    format!("{}{section}{}", &brief[..at], &brief[at..])
 }
 
 /// The brief with what toomux carries over listed at its end (in place of any
@@ -2322,6 +2685,7 @@ mod tests {
             retry_at_ms: 0,
             why: String::new(),
             owner: std::process::id() as i32,
+            ..Default::default()
         });
         transcript(&tmp, "p/live.jsonl", 90_000);
         assert!(call("live", &t).is_some(), "held while its handover runs");
@@ -2701,6 +3065,205 @@ mod tests {
     }
 
     #[test]
+    fn a_handover_waiting_on_the_prompt_says_so_and_gives_up_visibly() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-defer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.join("state")) };
+        let s = session(7, "d", 60_000, true);
+        let t0 = registry::now_ms();
+        let (m, event) = deferral(None, &s, Wait::Typed, t0, 0);
+        assert_eq!((m.state.as_str(), event), ("deferred", Some("deferred")));
+        assert_eq!(
+            m.retry_at_ms,
+            t0 + RETRY_TYPED_MS,
+            "looked at again in a minute"
+        );
+        write_marker(&m);
+        assert_eq!(
+            phase("d", 7),
+            Some(Phase::Waiting(Wait::Typed.note().into())),
+            "the list says why it waits"
+        );
+        // A minute on: still waiting, from the same start, not logged again.
+        let (m2, event) = deferral(Some(&m), &s, Wait::Typed, t0 + 60_000, 0);
+        assert_eq!((m2.at_ms, event), (t0, None));
+        // What it waits on changed: said again.
+        let (m3, event) = deferral(Some(&m2), &s, Wait::Unreadable, t0 + 120_000, 0);
+        assert_eq!((m3.at_ms, event), (t0, Some("deferred")));
+        // Ten minutes after it last said so: said again.
+        let (m4, event) = deferral(
+            Some(&m3),
+            &s,
+            Wait::Unreadable,
+            t0 + 121_000 + DEFER_LOG_MS,
+            0,
+        );
+        assert_eq!(event, Some("deferred"));
+        // Not forever: a visible failure, tried again later.
+        let end = t0 + DEFER_TIMEOUT_MS;
+        let (m5, event) = deferral(Some(&m4), &s, Wait::Unreadable, end, 2);
+        assert_eq!((m5.state.as_str(), event), ("failed", Some("failed")));
+        assert_eq!(m5.retry_at_ms, end + RETRY_MS);
+        assert_eq!(m5.launch_failures, 2, "launch failures stay counted");
+        write_marker(&m5);
+        assert!(matches!(phase("d", 7), Some(Phase::Failed(w)) if w.contains("couldn't be read")));
+        // A deferral nobody renewed (the session went) stops showing.
+        let mut old = m;
+        old.retry_at_ms = registry::now_ms() - 3 * RETRY_TYPED_MS;
+        write_marker(&old);
+        assert_eq!(phase("d", 7), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toomux_text_left_unsent_in_the_prompt_is_not_someone_typing() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-ours-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.join("state")) };
+        assert!(ours(
+            "o",
+            "[toomux handover] STOP. toomux: this conversation is at 420k"
+        ));
+        assert!(ours("o", "[toomux voyage v1] You have a voyage."));
+        assert!(!ours("o", "please look at [toomux handover] later"));
+        assert!(!ours("o", "fix the bug"));
+        assert!(
+            !ours("o", "[Pasted text #1 +12 lines]"),
+            "a paste is the user's unless toomux just typed into this prompt"
+        );
+        touch(&typed_path("o"), "%1");
+        assert!(ours("o", "[Pasted text #1 +12 lines]"));
+        assert!(!ours("other", "[Pasted text #1 +12 lines]"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_fresh_session_that_wont_start_backs_off_then_leaves_it_alone() {
+        let e = "the fresh session wouldn't start from the pane's shell, so the old conversation is back in its pane";
+        let (wait, why) = after_failure(e, true, 1);
+        assert_eq!((wait, why.as_str()), (RETRY_MS, NO_START));
+        assert_eq!(after_failure(e, true, 2).0, 4 * RETRY_MS);
+        let (wait, why) = after_failure(e, true, LAUNCH_ATTEMPTS);
+        assert_eq!(wait, GIVE_UP_MS);
+        assert!(
+            why.starts_with(NO_START) && why.contains("3 times"),
+            "{why}"
+        );
+        // The prompt only: tried again in a minute.
+        for e in [TYPED, UNREADABLE, actions::NOT_SENT] {
+            assert_eq!(after_failure(e, false, 0).0, RETRY_TYPED_MS, "{e}");
+        }
+        assert_eq!(
+            after_failure("no handover was written within 20 minutes", false, 0).0,
+            RETRY_MS
+        );
+        // A limit: said as it is, with no promise of what happens at the reset.
+        let (_, why) = after_failure(
+            "the account hit its usage limit (resets 5pm) before the brief was written; waiting for it to reset",
+            false,
+            0,
+        );
+        assert_eq!(why, "hit a usage limit");
+    }
+
+    #[test]
+    fn a_conversation_put_back_after_its_fresh_session_failed_is_not_held_to_its_brief() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-putback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.join("state")) };
+        let main = transcript(&tmp, "p/b1.jsonl", 450_000);
+        let c = cfg_with(400_000, &tmp, &["b1"]);
+        let call = || {
+            gate(
+                &c,
+                &json!({"session_id": "b1", "transcript_path": main.display().to_string(), "tool_name": "Bash", "tool_input": {}}),
+            )
+        };
+        let now = registry::now_ms();
+        let failed = |retry_at_ms: i64| {
+            write_marker(&Marker {
+                pid: 11,
+                id: "b1".into(),
+                state: "failed".into(),
+                at_ms: now - 1_000,
+                retry_at_ms,
+                why: NO_START.into(),
+                launch_failures: 1,
+                ..Default::default()
+            })
+        };
+        failed(now + RETRY_MS);
+        touch(&requested_path("b1", None), "450000");
+        assert!(
+            call().is_none(),
+            "past the limit, but put back: it works as it is"
+        );
+        assert!(!requested("b1"), "and its request is released");
+        failed(now - 1);
+        assert!(
+            call().is_some_and(|r| r.contains("\"deny\"")),
+            "once it's time to try again, the gate holds it again"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_brief_set_aside_keeps_the_unsent_prompt_it_preserved() {
+        let old = with_carried(
+            &with_unsent_draft("# old brief", "my half-written question"),
+            &[],
+            &[],
+        );
+        let section = unsent_section(&old).unwrap();
+        assert!(
+            section.starts_with(UNSENT_DRAFT) && section.contains("    my half-written question\n")
+        );
+        let carried = format!("# new brief{CARRIED}\n\n- job j1\n");
+        let new = with_unsent_section(&carried, section);
+        assert!(
+            new.find("my half-written question").unwrap() < new.find(CARRIED).unwrap(),
+            "{new}"
+        );
+        assert!(new.starts_with("# new brief"));
+        assert_eq!(unsent_section("# no drafts here"), None);
+    }
+
+    #[test]
+    fn one_pending_retry_tick_per_conversation() {
+        let now = 1_000_000;
+        let at = now + 60_000;
+        assert!(retry_needed(None, at, now, false));
+        assert!(
+            !retry_needed(Some(at), at, now, false),
+            "the same retry is already pending"
+        );
+        assert!(
+            !retry_needed(Some(at + 30_000), at, now, false),
+            "one shortly after will do"
+        );
+        assert!(
+            retry_needed(Some(at - 10_000), at, now, false),
+            "one before a failure's retry finds it not due yet, and nothing would look again"
+        );
+        assert!(
+            !retry_needed(Some(at - 10_000), at, now, true),
+            "a deferral is due at any tick, which looks again and sets the next: \
+             status ticks every few seconds don't each start a sleeper"
+        );
+        assert!(
+            retry_needed(Some(now - 1), now - 1, now, true),
+            "one that has gone by doesn't count"
+        );
+        assert!(
+            retry_needed(Some(at + 3_600_000), at, now, true),
+            "one much later is too late"
+        );
+    }
+
+    #[test]
     fn a_marker_counts_only_while_its_owner_lives() {
         let now = registry::now_ms();
         let m = |owner: i32, age: i64| Marker {
@@ -2713,6 +3276,7 @@ mod tests {
             retry_at_ms: 0,
             why: String::new(),
             owner,
+            ..Default::default()
         };
         assert!(live(&m(std::process::id() as i32, 1_000), now));
         assert!(!live(&m(i32::MAX - 1, 1_000), now), "its process is gone");
@@ -2881,6 +3445,7 @@ mod tests {
                 retry_at_ms,
                 why: String::new(),
                 owner: 0,
+                ..Default::default()
             })
         };
         touch(&requested_path("t", None), "500000");
@@ -2905,6 +3470,7 @@ mod tests {
             retry_at_ms: now + 30 * 60_000,
             why: String::new(),
             owner: 0,
+            ..Default::default()
         });
         assert!(due(&c, &[session(6, "u", 10_000, true)], now).is_empty());
         // And a handover under way for it in another process blocks it too.
@@ -2918,6 +3484,7 @@ mod tests {
             retry_at_ms: 0,
             why: String::new(),
             owner: std::process::id() as i32,
+            ..Default::default()
         });
         touch(&requested_path("v", None), "500000");
         assert!(due(&c, &[session(8, "v", 10_000, true)], now).is_empty());
