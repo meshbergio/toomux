@@ -207,9 +207,33 @@ fn without_name(args: Vec<String>) -> Vec<String> {
     out
 }
 
+/// A fresh launch that didn't come up. `screen` is what its pane showed, for
+/// the handover log; the message says whether the old conversation is back.
+#[derive(Debug)]
+pub struct LaunchFailed {
+    pub msg: String,
+    pub screen: String,
+}
+
+impl std::fmt::Display for LaunchFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for LaunchFailed {}
+
+/// How long a fresh Claude gets to show its prompt (or a screen that needs
+/// the person) after it starts.
+const START_WAIT: Duration = Duration::from_secs(20);
+
 /// Restart a session in its own pane as a new conversation opening with
-/// `prompt` (same account, same flags). Used by handover.
-pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<()> {
+/// `prompt` (same account, same flags). Used by handover. On success, a note
+/// when the fresh Claude stopped at a screen that needs the person (a theme
+/// picker, the folder-trust question): it is running, but not yet working.
+/// When it doesn't come up, the old conversation is resumed in its place and
+/// the error is a [`LaunchFailed`].
+pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<Option<String>> {
     let account = s.account.context("its account isn't known")?;
     let pane = s.pane.clone().context("it isn't in tmux")?;
     // Claude started from a shell in the pane: keep the shell, start the
@@ -229,22 +253,259 @@ pub fn relaunch_fresh(cfg: &Config, s: &Session, prompt: &str) -> Result<()> {
             sleep(Duration::from_millis(100));
         }
         respawn(&pane.id, &s.cwd, &launch)?;
-        // A launch that dies at once (a bad flag, say) must not leave a dead
-        // pane: bring the old conversation back instead.
-        let t = Instant::now();
-        while t.elapsed() < Duration::from_secs(4) {
-            sleep(Duration::from_millis(250));
-            if tmux::pane_dead(&pane.id) == Some(true) {
+        // Respawning clears the screen: what shows now is the new Claude's.
+        let gone = || tmux::pane_dead(&pane.id) != Some(false);
+        match await_start(&pane.id, None, &gone, START_WAIT) {
+            Started::Ready => Ok(None),
+            Started::Blocked(note) => Ok(Some(note)),
+            // A launch that dies at once (a bad flag, say) must not leave a
+            // dead pane: bring the old conversation back instead.
+            Started::Gone(screen) => {
                 respawn(&pane.id, &s.cwd, &launch_for(cfg, s, account))?;
-                bail!(
-                    "the fresh session wouldn't start, so the old conversation is back in its pane"
+                let back = !matches!(
+                    await_start(&pane.id, None, &gone, Duration::from_secs(10)),
+                    Started::Gone(_)
                 );
+                Err(LaunchFailed {
+                    msg: if back {
+                        "the fresh session wouldn't start, so the old conversation is back in its pane"
+                            .into()
+                    } else {
+                        format!(
+                            "the fresh session wouldn't start, and neither would the old conversation: \
+                             resume it with claude --resume {}",
+                            s.id
+                        )
+                    },
+                    screen,
+                }
+                .into())
             }
         }
-        Ok(())
     })();
     let _ = tmux::run(&["set-option", "-p", "-u", "-t", &pane.id, "remain-on-exit"]);
     result
+}
+
+fn is_shell(command: &str) -> bool {
+    matches!(
+        command.trim_start_matches('-'),
+        "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh"
+    )
+}
+
+fn current_command(pane: &str) -> Option<String> {
+    tmux::run(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane,
+        "#{pane_current_command}",
+    ])
+    .ok()
+    .map(|c| c.trim().to_string())
+}
+
+/// Wait until the pane's shell is back in the foreground and has finished
+/// drawing its prompt: prompt hooks (`mise activate`, say) run commands of
+/// their own first, and a line typed while they run can be lost.
+fn wait_for_shell(pane: &str) -> Result<()> {
+    let t = Instant::now();
+    while !current_command(pane).is_some_and(|c| is_shell(&c)) {
+        if t.elapsed() > Duration::from_secs(5) {
+            bail!("the pane's shell didn't come back after the old session stopped");
+        }
+        sleep(Duration::from_millis(100));
+    }
+    let t = Instant::now();
+    let mut last = screen_from(pane, None);
+    while t.elapsed() < Duration::from_secs(3) {
+        sleep(Duration::from_millis(300));
+        let now = screen_from(pane, None);
+        if now == last && current_command(pane).is_some_and(|c| is_shell(&c)) {
+            break;
+        }
+        last = now;
+    }
+    // Anything left on the shell's line (a stray key) would run with ours.
+    tmux::run(&["send-keys", "-t", pane, "C-e", "C-u"])?;
+    sleep(Duration::from_millis(100));
+    Ok(())
+}
+
+/// Where the pane's next output goes (its history plus the cursor's row), so
+/// a later look can read only what came after.
+fn screen_mark(pane: &str) -> Option<i64> {
+    let out = tmux::run(&[
+        "display-message",
+        "-p",
+        "-t",
+        pane,
+        "#{history_size} #{cursor_y}",
+    ])
+    .ok()?;
+    let mut it = out.split_whitespace().map(|n| n.parse::<i64>().ok());
+    Some(it.next()?? + it.next()??)
+}
+
+/// The pane's text: the visible screen, or everything from a mark on.
+fn screen_from(pane: &str, mark: Option<i64>) -> String {
+    let start = mark.and_then(|m| {
+        let hist = tmux::run(&["display-message", "-p", "-t", pane, "#{history_size}"])
+            .ok()?
+            .trim()
+            .parse::<i64>()
+            .ok()?;
+        Some((m - hist).to_string())
+    });
+    let mut args = vec!["capture-pane", "-p", "-J", "-t", pane];
+    if let Some(s) = &start {
+        args.extend(["-S", s]);
+    }
+    tmux::run(&args).unwrap_or_default()
+}
+
+/// The end of a screen, plain and bounded, for the handover log.
+fn screen_tail(screen: &str) -> String {
+    let lines: Vec<&str> = screen
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let tail = lines[lines.len().saturating_sub(30)..].join("\n");
+    let skip = tail.chars().count().saturating_sub(4000);
+    tail.chars().skip(skip).collect()
+}
+
+/// What a freshly started Claude did.
+#[derive(Debug, PartialEq)]
+enum Started {
+    /// It shows its prompt.
+    Ready,
+    /// It is running but stopped at a screen that needs the person.
+    Blocked(String),
+    /// It never came up, or exited: what the pane showed.
+    Gone(String),
+}
+
+/// Screens a fresh Claude can stop at before its prompt, each needing the
+/// person, and what to say about it.
+fn blocking_screen(screen: &str) -> Option<&'static str> {
+    const SCREENS: &[(&str, &str)] = &[
+        (
+            "Is this a project you created or one you trust",
+            "it's asking you to trust the folder on this account",
+        ),
+        (
+            "Do you trust the files in this folder",
+            "it's asking you to trust the folder on this account",
+        ),
+        (
+            "Choose the text style that looks best with your terminal",
+            "it's waiting at Claude's first-run theme picker",
+        ),
+        (
+            "Select login method",
+            "it's asking you to sign in to this account",
+        ),
+        (
+            "Bypass Permissions mode",
+            "it's asking you to accept bypass-permissions mode",
+        ),
+        (
+            "Do you want to use this API key",
+            "it's asking whether to use an API key",
+        ),
+        (
+            "Press Enter to continue",
+            "it's waiting at one of Claude's first-run screens",
+        ),
+    ];
+    SCREENS
+        .iter()
+        .find(|(text, _)| screen.contains(text))
+        .map(|(_, note)| *note)
+}
+
+/// Claude's normal input box: the prompt mark between its rules.
+fn shows_prompt(screen: &str) -> bool {
+    screen.contains('❯') && screen.contains("──")
+}
+
+/// Watch a just-started Claude until it shows its prompt, stops at a screen
+/// that needs the person, or `gone` says it isn't running.
+fn await_start(pane: &str, mark: Option<i64>, gone: &dyn Fn() -> bool, wait: Duration) -> Started {
+    let t = Instant::now();
+    loop {
+        sleep(Duration::from_millis(250));
+        let screen = screen_from(pane, mark);
+        if gone() {
+            // tmux pushes a dead pane's last output off its screen when it
+            // says the pane is dead: look back a little further.
+            let last = match mark {
+                Some(_) => screen_from(pane, mark),
+                None => tmux::run(&["capture-pane", "-p", "-J", "-t", pane, "-S", "-40"])
+                    .unwrap_or_default(),
+            };
+            return Started::Gone(screen_tail(&last));
+        }
+        if let Some(note) = blocking_screen(&screen) {
+            return Started::Blocked(format!("{note}: finish it in its pane"));
+        }
+        if shows_prompt(&screen) {
+            return Started::Ready;
+        }
+        if t.elapsed() > wait {
+            return Started::Blocked("it hasn't shown Claude's prompt yet: check its pane".into());
+        }
+    }
+}
+
+/// What the shell prints when a launch typed into it fails. Typed split by
+/// quotes, so the echoed command line itself never reads as this.
+const LAUNCH_FAILED: &str = "toomux:launch-failed";
+
+/// Type a launch into the pane's shell. A leading space keeps it out of the
+/// shell's history (ignorespace). If it fails (the folder is gone, Claude
+/// exits with an error) the shell says so, so that is seen at once.
+fn type_launch(pane: &str, cwd: &str, launch: &Launch) -> Result<()> {
+    let line = format!(
+        " cd {} && env {} {} || echo 'toomux:''launch-failed'",
+        shell_words::quote(cwd),
+        launch
+            .env
+            .iter()
+            .map(|e| shell_words::quote(e).into_owned())
+            .collect::<Vec<_>>()
+            .join(" "),
+        launch.cmd
+    );
+    tmux::run(&["send-keys", "-t", pane, "-l", &line])?;
+    sleep(Duration::from_millis(150));
+    tmux::run(&["send-keys", "-t", pane, "Enter"])?;
+    Ok(())
+}
+
+/// Start a launch from the pane's shell and watch it come up.
+fn start_from_shell(pane: &str, cwd: &str, launch: &Launch, wait: Duration) -> Result<Started> {
+    wait_for_shell(pane)?;
+    let mark = screen_mark(pane);
+    type_launch(pane, cwd, launch)?;
+    // First the shell has to hand the terminal over: a launch that exits at
+    // once looks like the shell never leaving the foreground.
+    let t = Instant::now();
+    while current_command(pane).is_some_and(|c| is_shell(&c)) {
+        let screen = screen_from(pane, mark);
+        if screen.contains(LAUNCH_FAILED) || t.elapsed() > Duration::from_secs(15) {
+            return Ok(Started::Gone(screen_tail(&screen)));
+        }
+        sleep(Duration::from_millis(100));
+    }
+    let gone = || {
+        current_command(pane).is_none_or(|c| is_shell(&c))
+            || screen_from(pane, mark).contains(LAUNCH_FAILED)
+    };
+    Ok(await_start(pane, mark, &gone, wait))
 }
 
 fn relaunch_from_shell(
@@ -253,7 +514,7 @@ fn relaunch_from_shell(
     pane: &str,
     account: usize,
     prompt: &str,
-) -> Result<()> {
+) -> Result<Option<String>> {
     // The shell has its own environment; only the account and Claude's own
     // settings need saying.
     let mut plain = s.clone();
@@ -265,52 +526,35 @@ fn relaunch_from_shell(
         .collect();
     let launch = launch_with(cfg, &plain, account, Some(prompt));
     stop(s)?;
-    let shell = |c: &str| matches!(c, "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh");
-    let t = Instant::now();
-    while !tmux::run(&[
-        "display-message",
-        "-p",
-        "-t",
-        pane,
-        "#{pane_current_command}",
-    ])
-    .is_ok_and(|c| shell(c.trim()))
-    {
-        if t.elapsed() > Duration::from_secs(5) {
-            bail!("the pane's shell didn't come back after the old session stopped");
-        }
-        sleep(Duration::from_millis(100));
-    }
-    // A leading space keeps it out of the shell's history (ignorespace).
-    let line = format!(
-        " cd {} && env {} {}",
-        shell_words::quote(&s.cwd),
-        launch
-            .env
-            .iter()
-            .map(|e| shell_words::quote(e).into_owned())
-            .collect::<Vec<_>>()
-            .join(" "),
-        launch.cmd
-    );
-    tmux::run(&["send-keys", "-t", pane, "-l", &line])?;
-    tmux::run(&["send-keys", "-t", pane, "Enter"])?;
-    let t = Instant::now();
-    while t.elapsed() < Duration::from_secs(8) {
-        sleep(Duration::from_millis(250));
-        if tmux::run(&[
-            "display-message",
-            "-p",
-            "-t",
-            pane,
-            "#{pane_current_command}",
-        ])
-        .is_ok_and(|c| !shell(c.trim()))
-        {
-            return Ok(());
+    match start_from_shell(pane, &s.cwd, &launch, START_WAIT)? {
+        Started::Ready => Ok(None),
+        Started::Blocked(note) => Ok(Some(note)),
+        Started::Gone(screen) => {
+            // Never leave a bare shell where the conversation was: resume the
+            // old one, and say whether that worked.
+            let back = start_from_shell(
+                pane,
+                &s.cwd,
+                &launch_with(cfg, &plain, account, None),
+                Duration::from_secs(10),
+            )
+            .is_ok_and(|b| !matches!(b, Started::Gone(_)));
+            Err(LaunchFailed {
+                msg: if back {
+                    "the fresh session wouldn't start from the pane's shell, so the old conversation is back in its pane"
+                        .into()
+                } else {
+                    format!(
+                        "the fresh session wouldn't start from the pane's shell, and neither would the old \
+                         conversation: resume it there with claude --resume {}",
+                        s.id
+                    )
+                },
+                screen,
+            }
+            .into())
         }
     }
-    bail!("the fresh session wouldn't start from the pane's shell")
 }
 
 /// A session outside tmux can't be restarted where it runs: stop it and start
@@ -502,7 +746,7 @@ pub fn start(cfg: &Config, folder: &str, account: usize, args: &[String]) -> Res
     if !std::path::Path::new(folder).is_dir() {
         bail!("{folder} isn't a folder");
     }
-    let mut argv = vec!["env".to_string()];
+    let mut argv = interactive_env_argv();
     for v in registry::RUNTIME_VARS {
         argv.extend(["-u".to_string(), v.to_string()]);
     }
@@ -653,6 +897,16 @@ fn prompt_draft_in(screen: &str) -> Option<String> {
     let start = lines
         .iter()
         .rposition(|l| strip_ansi(l).trim_start().starts_with('❯'))?;
+    // A dialog's selected option ("❯ 1. Yes") isn't the input box.
+    if is_option(&strip_ansi(lines[start]))
+        && lines
+            .iter()
+            .skip(start + 1)
+            .take(6)
+            .any(|l| is_option(&strip_ansi(l)))
+    {
+        return None;
+    }
     let mut draft = vec![typed_text(lines[start])];
     for line in lines.iter().skip(start + 1) {
         let plain = strip_ansi(line);
@@ -672,32 +926,121 @@ fn prompt_draft_in(screen: &str) -> Option<String> {
     Some(draft.join("\n"))
 }
 
+/// A numbered option row, as dialogs draw them ("❯ 1. Yes", "  2. No").
+fn is_option(plain: &str) -> bool {
+    let rest = plain.trim_start().trim_start_matches('❯').trim_start();
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && rest[digits..].starts_with(". ")
+}
+
+/// Only Claude's placeholder ("Try \"…\"") or nothing: no one's text.
+fn placeholder(typed: &str) -> bool {
+    typed.is_empty() || typed.starts_with("Try \"")
+}
+
+/// What Claude's input box in a pane holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Prompt {
+    /// Nothing typed: only a placeholder or a dim suggestion.
+    Empty,
+    /// Text in normal intensity: an unsent draft (someone's, or toomux's own).
+    Draft(String),
+    /// It can't be read: scrolled back (copy mode), a dialog in the way, no
+    /// prompt on screen, or tmux failing. Not the same as someone typing.
+    Unknown,
+}
+
+pub fn prompt_state(pane: &str) -> Prompt {
+    match prompt_draft(pane) {
+        None => Prompt::Unknown,
+        Some(typed) if placeholder(&typed) => Prompt::Empty,
+        Some(typed) => Prompt::Draft(typed),
+    }
+}
+
 /// Whether Claude's input box in this pane is empty (only the placeholder),
 /// so typing a command into it can't mix with an unsent draft.
 pub fn prompt_empty(pane: &str) -> bool {
-    prompt_draft(pane).is_some_and(|typed| typed.is_empty() || typed.starts_with("Try \""))
+    prompt_state(pane) == Prompt::Empty
+}
+
+/// How a prompt was cleared.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cleared {
+    /// The input box reads empty now.
+    Emptied,
+    /// Editing keys didn't change the text at all: with unstyled output
+    /// (NO_COLOR) that is a suggestion drawn like typed text, not a draft.
+    NotEditable,
 }
 
 /// Clear exactly the draft we just preserved for a handover. If the prompt
 /// changed between inspection and clearing, leave it alone: that is active
 /// user input, not the stale draft we were asked to migrate.
-pub fn clear_prompt_if(pane: &str, expected: &str) -> Result<()> {
+/// `unstyled`: Claude draws without attributes here, so a suggestion can't be
+/// told from typed text by its looks (see [`Cleared::NotEditable`]).
+pub fn clear_prompt_if(pane: &str, expected: &str, unstyled: bool) -> Result<Cleared> {
     let current = prompt_draft(pane).context("can't read Claude's prompt before clearing it")?;
     if current != expected {
         bail!("something is typed in its prompt: it changed while handing over");
     }
-    if current.is_empty() || current.starts_with("Try \"") {
-        return Ok(());
-    }
-    tmux::run(&["send-keys", "-t", pane, "C-u"])?;
-    sleep(Duration::from_millis(250));
-    if !prompt_empty(pane) {
-        bail!("something is typed in its prompt: couldn't clear the preserved draft");
-    }
-    Ok(())
+    clear_prompt(pane, unstyled)
 }
 
-/// Type `text` into an empty Claude prompt and submit it, making sure it went.
+/// Keys that wipe Claude's input box from its end: kill each row back to
+/// its start and join it to the one above, for every row it may have (soft
+/// wraps included). Extra presses on an empty box do nothing.
+fn clearing_keys(draft: &str) -> Vec<&'static str> {
+    let rows = draft
+        .lines()
+        .map(|l| l.chars().count() / 40 + 1)
+        .sum::<usize>()
+        .clamp(1, 60);
+    let mut keys = vec!["C-e"];
+    for _ in 0..=rows {
+        keys.extend(["C-u", "BSpace"]);
+    }
+    keys
+}
+
+/// Empty Claude's input box, verified by reading it back. Claude's ctrl-u
+/// only clears back to the start of the cursor's row, so one press leaves the
+/// rest of a multi-line (or wrapped) draft behind.
+pub fn clear_prompt(pane: &str, unstyled: bool) -> Result<Cleared> {
+    let read = || prompt_draft(pane).context("can't read Claude's prompt while clearing it");
+    let first = read()?;
+    let mut last = first.clone();
+    for _ in 0..4 {
+        if placeholder(&last) {
+            return Ok(Cleared::Emptied);
+        }
+        let mut args = vec!["send-keys", "-t", pane];
+        args.extend(clearing_keys(&last));
+        tmux::run(&args)?;
+        let t = Instant::now();
+        loop {
+            sleep(Duration::from_millis(150));
+            let now = read()?;
+            if now != last || t.elapsed() > Duration::from_millis(900) {
+                last = now;
+                break;
+            }
+        }
+    }
+    if placeholder(&last) {
+        return Ok(Cleared::Emptied);
+    }
+    if unstyled && last == first {
+        return Ok(Cleared::NotEditable);
+    }
+    bail!(
+        "something is typed in its prompt: couldn't clear the preserved draft ({} characters stayed)",
+        last.chars().count()
+    )
+}
+
+/// Type `text` into an empty Claude prompt and submit it, making sure it
+/// went: an error if it is still sitting in the input box.
 pub fn type_prompt(pane: &str, text: &str) -> Result<()> {
     tmux::run(&["send-keys", "-t", pane, "-l", text])?;
     sleep(Duration::from_millis(400));
@@ -710,8 +1053,16 @@ pub fn type_prompt(pane: &str, text: &str) -> Result<()> {
         }
         tmux::run(&["send-keys", "-t", pane, "Enter"])?;
     }
+    sleep(Duration::from_millis(1200));
+    // Unreadable now (a dialog it opened, say) isn't proof it didn't go.
+    if matches!(prompt_state(pane), Prompt::Draft(_)) {
+        bail!("{NOT_SENT}");
+    }
     Ok(())
 }
+
+/// What [`type_prompt`] says when Enter didn't send the text.
+pub const NOT_SENT: &str = "toomux's text didn't send: it's still in Claude's prompt";
 
 /// What was typed after the prompt mark. Claude Code draws its placeholder
 /// and its suggested next prompt dim; only text in normal intensity was
@@ -1001,16 +1352,16 @@ fn carry_trust(cfg: &Config, s: &Session, to: usize) -> Result<()> {
 }
 
 /// After a relaunch, report whether the new session is stuck at a prompt that
-/// needs the person (currently: the folder-trust question).
+/// needs the person (folder trust, first-run screens: see `blocking_screen`).
 fn settle(pane: &str) -> Option<String> {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(8) {
         sleep(Duration::from_millis(500));
         let screen = String::from_utf8_lossy(&tmux::capture(pane, 60)?).to_string();
-        if screen.contains("Is this a project you created or one you trust") {
-            return Some("it's asking you to trust the folder on this account".into());
+        if let Some(note) = blocking_screen(&screen) {
+            return Some(note.into());
         }
-        if screen.contains("❯") && screen.contains("──") {
+        if shows_prompt(&screen) {
             return None;
         }
     }
@@ -1230,6 +1581,319 @@ mod tests {
             Some("first line\nsecond line\nthird line"),
             "hard newlines in the input box are preserved too"
         );
+    }
+
+    #[test]
+    fn a_dialog_option_is_not_a_draft_in_the_prompt() {
+        let dialog = concat!(
+            "Do you want to make this edit?\n",
+            "\u{1b}[36m❯ 1. Yes\u{1b}[39m\n",
+            "  2. Yes, allow all edits this session\n",
+            "  3. No, and tell Claude what to do differently\n",
+        );
+        assert_eq!(
+            super::prompt_draft_in(dialog),
+            None,
+            "unreadable, not typing"
+        );
+        assert_eq!(
+            super::prompt_draft_in("❯ 1. fix the thing\n──────\n").as_deref(),
+            Some("1. fix the thing"),
+            "a numbered draft without options beneath it is still a draft"
+        );
+    }
+
+    #[test]
+    fn first_run_screens_that_need_the_person_are_named() {
+        use super::blocking_screen;
+        let theme = "Let's get started.\n\nChoose the text style that looks best with your terminal\n❯ 1. Dark mode ✔\n";
+        assert!(blocking_screen(theme).unwrap().contains("theme picker"));
+        assert!(
+            blocking_screen("Quick safety check: Is this a project you created or one you trust?")
+                .unwrap()
+                .contains("trust")
+        );
+        assert_eq!(blocking_screen("──────\n❯ \n──────\n"), None);
+    }
+
+    #[test]
+    fn clearing_covers_every_row_of_a_draft() {
+        let keys = super::clearing_keys("one\ntwo\nthree");
+        assert_eq!(keys[0], "C-e");
+        assert!(
+            keys.iter().filter(|k| **k == "BSpace").count() >= 3,
+            "each row is joined to the one above: {keys:?}"
+        );
+        let long = "x".repeat(200);
+        assert!(super::clearing_keys(&long).len() > 2 * (200 / 40));
+    }
+
+    /// A private tmux server for one test (its own socket, no user
+    /// configuration), with a folder for fake programs. None without tmux.
+    struct Rig {
+        dir: std::path::PathBuf,
+        sock: String,
+    }
+
+    impl Rig {
+        fn new(name: &str) -> Option<Rig> {
+            let dir = std::env::temp_dir().join(format!("tmx-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("bin")).unwrap();
+            let sock = dir.join("sock").display().to_string();
+            let ok = crate::tmux::command()
+                .args(["-V"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if !ok {
+                eprintln!("tmux isn't available: skipped");
+                return None;
+            }
+            Some(Rig { dir, sock })
+        }
+
+        /// A pane running `cmd`, qualified with this rig's server.
+        fn pane(&self, cmd: &str) -> String {
+            let out = crate::tmux::command()
+                .args(["-S", &self.sock, "-f", "/dev/null", "new-session", "-d"])
+                .args(["-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", cmd])
+                .env_remove("TMUX")
+                .env_remove("TMUX_PANE")
+                .env_remove("NO_COLOR")
+                .env("PS1", "$ ")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            crate::tmux::qualify(&self.sock, String::from_utf8_lossy(&out.stdout).trim())
+        }
+
+        /// An executable script in the rig's bin folder.
+        fn script(&self, name: &str, body: &str) -> String {
+            use std::os::unix::fs::PermissionsExt;
+            let p = self.dir.join("bin").join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p.display().to_string()
+        }
+
+        fn screen(&self, pane: &str) -> String {
+            super::screen_from(pane, None)
+        }
+
+        fn wait_for(&self, pane: &str, what: &str) -> bool {
+            let t = std::time::Instant::now();
+            while t.elapsed() < std::time::Duration::from_secs(10) {
+                if self.screen(pane).contains(what) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            false
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = crate::tmux::command()
+                .args(["-S", &self.sock, "kill-server"])
+                .output();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// A stand-in for Claude: with --resume it shows an input box and stays
+    /// (as a process that isn't named like a shell, as Claude's isn't);
+    /// `fresh` says what it does when started with a prompt instead.
+    fn fake_claude(rig: &Rig, fresh: &str) -> String {
+        let pid = rig.dir.join("pid").display().to_string();
+        rig.script(
+            "claude",
+            &format!(
+                "case \" $* \" in\n\
+                 *' --resume '*) echo $$ > {pid}; printf '──────\\n❯ '; exec sleep 600 ;;\n\
+                 *) {fresh} ;;\n\
+                 esac\n"
+            ),
+        )
+    }
+
+    fn session_in(rig: &Rig, pane: &str) -> crate::registry::Session {
+        let t = std::time::Instant::now();
+        let pid_file = rig.dir.join("pid");
+        let pid = loop {
+            if let Some(p) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok())
+            {
+                break p;
+            }
+            assert!(t.elapsed().as_secs() < 10, "the fake claude never started");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let _ = std::fs::remove_file(&pid_file);
+        crate::registry::Session {
+            pid,
+            proc_start: None,
+            id: "0ld-c0nversation".into(),
+            cwd: rig.dir.display().to_string(),
+            name: "s".into(),
+            title: "s".into(),
+            topic: None,
+            pr: None,
+            queued: None,
+            pin: None,
+            dormant: false,
+            restore: None,
+            state: crate::registry::State::Idle,
+            waiting_for: None,
+            limit: None,
+            handover: None,
+            since_ms: 0,
+            started_ms: 0,
+            account: Some(0),
+            config_dir: None,
+            args: vec!["claude".into()],
+            env: vec![],
+            tty: None,
+            pane: Some(crate::tmux::Pane {
+                id: pane.to_string(),
+                session: "0".into(),
+                window_index: "0".into(),
+            }),
+        }
+    }
+
+    fn cfg_for(rig: &Rig, claude: &str) -> crate::config::Config {
+        let mut cfg = crate::config::Config::default();
+        cfg.claude_bin = claude.to_string();
+        let acct = rig.dir.join("acct");
+        std::fs::create_dir_all(&acct).unwrap();
+        cfg.accounts = vec![crate::config::Account {
+            name: "t".into(),
+            config_dir: acct.display().to_string(),
+        }];
+        cfg
+    }
+
+    #[test]
+    fn toomux_text_that_stays_in_the_prompt_is_an_error_not_a_success() {
+        let Some(rig) = Rig::new("unsent") else {
+            return;
+        };
+        // An input box that never takes what's typed into it.
+        let stuck = rig.script(
+            "stuck",
+            "printf '──────\\n❯ '; stty -icanon; exec sleep 600\n",
+        );
+        let pane = rig.pane(&stuck);
+        assert!(rig.wait_for(&pane, "❯"));
+        let e = super::type_prompt(&pane, "[toomux handover] write your brief").unwrap_err();
+        assert!(e.to_string().starts_with(super::NOT_SENT), "{e}");
+    }
+
+    #[test]
+    fn clearing_a_draft_is_checked_by_reading_the_prompt_back() {
+        let Some(rig) = Rig::new("clear") else {
+            return;
+        };
+        let prompt = rig.script("prompt", "printf '──────\\n❯ '; exec sleep 600\n");
+        let pane = rig.pane(&prompt);
+        assert!(rig.wait_for(&pane, "❯"));
+        crate::tmux::run(&["send-keys", "-t", &pane, "-l", "half a thought"]).unwrap();
+        assert!(rig.wait_for(&pane, "half a thought"));
+        assert_eq!(
+            super::prompt_state(&pane),
+            super::Prompt::Draft("half a thought".into())
+        );
+        assert!(
+            super::clear_prompt_if(&pane, "something else", false).is_err(),
+            "a prompt that changed is left alone"
+        );
+        assert_eq!(
+            super::clear_prompt_if(&pane, "half a thought", false).unwrap(),
+            super::Cleared::Emptied
+        );
+        assert_eq!(super::prompt_state(&pane), super::Prompt::Empty);
+        // Copy mode: the prompt can't be read, which is not someone typing.
+        crate::tmux::run(&["copy-mode", "-t", &pane]).unwrap();
+        assert_eq!(super::prompt_state(&pane), super::Prompt::Unknown);
+    }
+
+    #[test]
+    fn a_fresh_session_that_wont_start_from_the_shell_puts_the_old_one_back() {
+        let Some(rig) = Rig::new("shell") else {
+            return;
+        };
+        let claude = fake_claude(&rig, "echo 'claude: fake start-up failure'; exit 1");
+        let pane = rig.pane("sh");
+        assert!(rig.wait_for(&pane, "$"));
+        crate::tmux::run(&[
+            "send-keys",
+            "-t",
+            &pane,
+            "-l",
+            &format!("{claude} --resume x"),
+        ])
+        .unwrap();
+        crate::tmux::run(&["send-keys", "-t", &pane, "Enter"]).unwrap();
+        let s = session_in(&rig, &pane);
+        let cfg = cfg_for(&rig, &claude);
+        let e = super::relaunch_fresh(&cfg, &s, "Continue from a handover").unwrap_err();
+        let failed = e
+            .downcast_ref::<super::LaunchFailed>()
+            .expect("a launch failure carries its screen");
+        assert!(
+            failed.msg.contains("old conversation is back"),
+            "{}",
+            failed.msg
+        );
+        assert!(
+            failed.screen.contains("fake start-up failure"),
+            "the log gets what the pane showed: {}",
+            failed.screen
+        );
+        // It's the old conversation in the pane again, not a bare shell.
+        session_in(&rig, &pane);
+        assert!(!super::is_shell(&super::current_command(&pane).unwrap()));
+    }
+
+    #[test]
+    fn a_fresh_session_that_dies_at_once_in_its_own_pane_puts_the_old_one_back() {
+        let Some(rig) = Rig::new("respawn") else {
+            return;
+        };
+        let claude = fake_claude(&rig, "echo 'claude: bad flag'; exit 1");
+        let pane = rig.pane(&format!("{claude} --resume x"));
+        let s = session_in(&rig, &pane);
+        let cfg = cfg_for(&rig, &claude);
+        let e = super::relaunch_fresh(&cfg, &s, "Continue from a handover").unwrap_err();
+        let failed = e.downcast_ref::<super::LaunchFailed>().unwrap();
+        assert!(
+            failed.msg.contains("old conversation is back"),
+            "{}",
+            failed.msg
+        );
+        assert!(failed.screen.contains("bad flag"), "{}", failed.screen);
+        session_in(&rig, &pane);
+        assert_eq!(crate::tmux::pane_dead(&pane), Some(false));
+    }
+
+    #[test]
+    fn a_fresh_session_at_the_theme_picker_has_started_but_says_it_needs_you() {
+        let Some(rig) = Rig::new("theme") else {
+            return;
+        };
+        let claude = fake_claude(
+            &rig,
+            "printf 'Choose the text style that looks best with your terminal\\n❯ 1. Dark mode\\n  2. Light mode\\n'; exec sleep 600",
+        );
+        let pane = rig.pane(&format!("{claude} --resume x"));
+        let s = session_in(&rig, &pane);
+        let cfg = cfg_for(&rig, &claude);
+        let note = super::relaunch_fresh(&cfg, &s, "Continue from a handover")
+            .unwrap()
+            .expect("a blocking screen is reported");
+        assert!(note.contains("theme picker"), "{note}");
     }
 
     #[test]

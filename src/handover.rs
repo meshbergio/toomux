@@ -1347,7 +1347,7 @@ fn hand_over(
         // Persistence comes before deletion: a crash after this point can lose
         // neither the brief nor the user's unsent text.
         write_atomic(&brief, &text);
-        actions::clear_prompt_if(p, &draft)?;
+        actions::clear_prompt_if(p, &draft, false)?;
     }
     write_atomic(&brief, &text);
 
