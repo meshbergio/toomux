@@ -816,7 +816,7 @@ pub fn fetch_in_background(cfg: &Config, now: i64) {
     if due(cfg, now).is_empty() {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::install::active_exe() else {
         return;
     };
     let mut cmd = std::process::Command::new(exe);

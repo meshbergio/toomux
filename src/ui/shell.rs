@@ -299,7 +299,7 @@ impl App {
             return;
         }
         sh.ticked = Instant::now();
-        let Ok(me) = std::env::current_exe() else {
+        let Ok(me) = crate::install::active_exe() else {
             return;
         };
         sh.ticker = std::process::Command::new(me)

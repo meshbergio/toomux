@@ -376,7 +376,7 @@ fn spawn_tick(at_ms: i64) {
     if cfg!(test) {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::install::active_exe() else {
         return;
     };
     let mut cmd = std::process::Command::new(exe);

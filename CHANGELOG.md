@@ -32,6 +32,7 @@ still change configuration and command details while they settle.
 
 ### Fixed
 
+- Start background work (status ticks, handovers, usage fetches, limit wake-ups, account switches) with the toomux installed now, not the version a long-running process started as: a full-screen toomux left open across an upgrade kept running handovers with the old version's code.
 - Follow a session that Claude Code has parked as a background job: its row, context, cost and state now come from the job that holds the conversation, rather than from where it was parked (which could show 120k context for a conversation at 517k). Such a session isn't handed over, since restarting its pane would leave the job running on its own.
 - Memory search (`mem_search`) stays in the session's project and global notes unless it asks for `where: "all"`; it no longer fills up with other projects' matches when its own project has few.
 - Handovers no longer stall silently: a handover waiting on text in the prompt shows "handing over · waiting: …", logs why, and after 30 minutes fails visibly. Retries run on their own schedule without an attached tmux client, and a fresh session that won't start puts the old conversation back and backs off (30 minutes, 2 hours, then a day after three attempts) instead of looping.

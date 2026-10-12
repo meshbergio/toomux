@@ -1292,7 +1292,7 @@ fn spawn_tick(after: &[u64]) {
     if cfg!(test) {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::install::active_exe() else {
         return;
     };
     let mut cmd = std::process::Command::new(exe);
@@ -1333,7 +1333,7 @@ pub fn tick(cfg: &Config, after: &[u64]) {
 
 /// Start `toomux handover <pid>` in the background.
 pub fn spawn(pid: i32) {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::install::active_exe() else {
         return;
     };
     let mut cmd = std::process::Command::new(exe);

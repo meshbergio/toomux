@@ -1186,7 +1186,7 @@ fn upkeep(cfg: &Config, apply: bool, repos: bool) -> Result<String> {
 }
 
 fn in_background(args: &[&str]) {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = install::active_exe() else {
         return;
     };
     let mut cmd = std::process::Command::new(exe);
