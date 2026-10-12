@@ -885,9 +885,6 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
     sessions
         .iter()
         .filter(|s| !s.dormant && s.limit.is_none() && s.queued.is_none())
-        // Parked as a background job: restarting the pane would leave the job
-        // running the conversation on its own.
-        .filter(|s| s.parked.is_none())
         // A conversation hands over once: another process still holding it
         // afterwards is an old copy, not a second one to continue.
         .filter(|s| !lineage.iter().any(|l| l.old_id == s.id))
@@ -1379,11 +1376,6 @@ fn find(cfg: &Config, pid: i32) -> Option<Session> {
 /// The whole handover of a main session, start to finish.
 pub fn run(cfg: &Config, pid: i32) -> Result<String> {
     let s = find(cfg, pid).context("that session has gone")?;
-    if let Some(job) = s.parked {
-        bail!(
-            "it's parked as a Claude Code background job (pid {job}), which toomux can't hand over yet"
-        );
-    }
     if load_lineage().iter().any(|l| l.old_id == s.id) {
         let _ = std::fs::remove_file(marker_path(pid));
         bail!(
@@ -1816,6 +1808,12 @@ fn hand_over(
     }
     // The session's background commands carry on without it.
     crate::jobs::carry_on(&s.id);
+    // Parked as a background job: the job holds the conversation, and would
+    // carry on without the pane once that restarts.
+    if let Some(p) = &cur.parked {
+        progress("stopping its background job", None);
+        actions::stop_job(cfg, &cur, p)?;
+    }
     progress("starting the fresh session", None);
     let (pane, where_) = match pane {
         Some(p) => {
@@ -3448,10 +3446,15 @@ mod tests {
             "only the live copy hands over, once its brief is written"
         );
         let mut parked = live.clone();
-        parked.parked = Some(99);
-        assert!(
-            due(&c, &[stale.clone(), parked], now).is_empty(),
-            "parked as a background job: restarting its pane would leave the job running"
+        parked.parked = Some(registry::Parked {
+            pid: 99,
+            proc_start: None,
+            job: "68809048".into(),
+        });
+        assert_eq!(
+            due(&c, &[stale.clone(), parked], now),
+            vec![2],
+            "parked as a background job, it hands over all the same"
         );
         remember(Lineage {
             old_id: "r".into(),

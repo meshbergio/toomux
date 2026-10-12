@@ -105,9 +105,18 @@ pub struct Session {
     pub unregistered: bool,
     /// Another live process has the same conversation open (its pid).
     pub twin: Option<i32>,
-    /// Parked as a Claude Code background job: the job's pid. The job holds
-    /// the conversation (`id`), and the pane shows it.
-    pub parked: Option<i32>,
+    /// Parked as a Claude Code background job, which holds the conversation
+    /// (`id`); the pane shows it.
+    pub parked: Option<Parked>,
+}
+
+/// The background job a session is parked as.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parked {
+    pub pid: i32,
+    pub proc_start: Option<String>,
+    /// Claude Code's id for the job (`claude stop <job>`).
+    pub job: String,
 }
 
 impl Session {
@@ -535,16 +544,21 @@ pub fn load(cfg: &Config) -> Vec<Session> {
 }
 
 /// A session parked as a background job: the conversation and what it's
-/// doing are the job's (its own record stops where it was parked). The job's
-/// pid, if it's one.
-fn follow_parked(r: &mut Raw, jobs: &std::collections::HashMap<String, Raw>) -> Option<i32> {
-    let job = jobs.get(r.parked_job_id.as_deref()?)?;
+/// doing are the job's (its own record stops where it was parked). The job,
+/// if it's one.
+fn follow_parked(r: &mut Raw, jobs: &std::collections::HashMap<String, Raw>) -> Option<Parked> {
+    let id = r.parked_job_id.clone()?;
+    let job = jobs.get(&id)?;
     r.session_id = job.session_id.clone();
     r.status = job.status.clone();
     r.waiting_for = job.waiting_for.clone();
     r.updated_at = job.updated_at;
     r.status_updated_at = job.status_updated_at;
-    Some(job.pid)
+    Some(Parked {
+        pid: job.pid,
+        proc_start: job.proc_start.clone(),
+        job: id,
+    })
 }
 
 /// Live Claude Code background jobs (`claude --bg`, or a session parked as
@@ -1026,22 +1040,25 @@ pub fn full_env(pid: i32) -> Vec<(String, String)> {
 /// A live interactive Claude session holds this conversation (not `claude -p`
 /// or an SDK run, which toomux can't restart).
 pub fn is_interactive(cfg: &Config, session: &str) -> bool {
-    cfg.session_dirs().iter().any(|dir| {
-        std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|e| {
-                let Ok(raw) = std::fs::read_to_string(e.path()) else {
-                    return false;
-                };
-                let Ok(r) = serde_json::from_str::<Raw>(&raw) else {
-                    return false;
-                };
-                r.session_id == session
-                    && r.kind.as_deref().is_none_or(|k| k == "interactive")
-                    && alive(r.pid, r.proc_start.as_deref())
-            })
+    let records: Vec<Raw> = cfg
+        .session_dirs()
+        .iter()
+        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|raw| serde_json::from_str::<Raw>(&raw).ok())
+        .filter(|r| alive(r.pid, r.proc_start.as_deref()))
+        .collect();
+    let interactive = |r: &Raw| r.kind.as_deref().is_none_or(|k| k == "interactive");
+    records.iter().any(|r| {
+        r.session_id == session
+            && (interactive(r)
+                // A background job a live session is parked as: it hands over
+                // with that session.
+                || r.job_id.as_ref().is_some_and(|j| {
+                    records
+                        .iter()
+                        .any(|o| interactive(o) && o.parked_job_id.as_ref() == Some(j))
+                }))
     })
 }
 
@@ -1367,7 +1384,10 @@ mod tests {
         assert_eq!(jobs.len(), 1, "only the live background job");
         let raw = std::fs::read_to_string(sessions.join(format!("{me}.json"))).unwrap();
         let mut r: super::Raw = serde_json::from_str(&raw).unwrap();
-        assert_eq!(super::follow_parked(&mut r, &jobs), Some(job.id() as i32));
+        assert_eq!(
+            super::follow_parked(&mut r, &jobs).map(|p| (p.pid, p.job)),
+            Some((job.id() as i32, "68809048".to_string()))
+        );
         assert_eq!(
             (
                 r.session_id.as_str(),
@@ -1376,6 +1396,10 @@ mod tests {
             ),
             ("68809048-live", Some("idle"), 500),
             "the job's conversation and state, not where it was parked"
+        );
+        assert!(
+            super::is_interactive(&cfg, "68809048-live"),
+            "the job hands over with the session parked as it"
         );
         // A job that has ended leaves the session as its own record says.
         let _ = job.kill();
@@ -1386,6 +1410,7 @@ mod tests {
             None
         );
         assert_eq!(r.session_id, "old-0000");
+        assert!(!super::is_interactive(&cfg, "68809048-live"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
