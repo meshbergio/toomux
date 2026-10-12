@@ -32,6 +32,7 @@ still change configuration and command details while they settle.
 
 ### Fixed
 
+- Follow a session that Claude Code has parked as a background job: its row, context, cost and state now come from the job that holds the conversation, rather than from where it was parked (which could show 120k context for a conversation at 517k). Such a session isn't handed over, since restarting its pane would leave the job running on its own.
 - Memory search (`mem_search`) stays in the session's project and global notes unless it asks for `where: "all"`; it no longer fills up with other projects' matches when its own project has few.
 - Handovers no longer stall silently: a handover waiting on text in the prompt shows "handing over · waiting: …", logs why, and after 30 minutes fails visibly. Retries run on their own schedule without an attached tmux client, and a fresh session that won't start puts the old conversation back and backs off (30 minutes, 2 hours, then a day after three attempts) instead of looping.
 - Verify that typed prompts are sent and cleared prompts are empty, including multi-line drafts, rather than assuming it.

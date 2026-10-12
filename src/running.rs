@@ -151,7 +151,11 @@ pub fn registered(cfg: &Config) -> Vec<Holder> {
             else {
                 continue;
             };
-            if r.kind.as_deref().is_none_or(|k| k == "interactive")
+            // A background job holds its conversation open as much as an
+            // interactive session does.
+            if r.kind
+                .as_deref()
+                .is_none_or(|k| k == "interactive" || k == "bg")
                 && crate::registry::alive(r.pid, r.proc_start.as_deref())
                 && !out.iter().any(|h| h.pid == r.pid)
             {

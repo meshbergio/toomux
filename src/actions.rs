@@ -2035,6 +2035,7 @@ mod tests {
             pane: None,
             unregistered: false,
             twin: None,
+            parked: None,
         }
     }
 
@@ -2339,6 +2340,7 @@ mod tests {
             env: vec![],
             unregistered: false,
             twin: None,
+            parked: None,
             tty: None,
             pane: Some(crate::tmux::Pane {
                 id: pane.to_string(),

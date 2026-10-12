@@ -267,6 +267,7 @@ impl Rig {
             env: Vec::new(),
             unregistered: false,
             twin: None,
+            parked: None,
             tty: None,
             pane: Some(crate::tmux::Pane {
                 id: self.pane.clone(),

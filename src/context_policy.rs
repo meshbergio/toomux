@@ -749,6 +749,7 @@ mod tests {
             pane: None,
             unregistered: false,
             twin: None,
+            parked: None,
         };
         assert!(needs_policy_boundary_for_session(&session, &current));
     }
@@ -784,6 +785,7 @@ mod tests {
             pane: None,
             unregistered: false,
             twin: None,
+            parked: None,
         };
 
         let policy = for_session(&cfg, &session);

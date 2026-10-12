@@ -885,6 +885,9 @@ pub fn due(cfg: &Config, sessions: &[Session], now: i64) -> Vec<i32> {
     sessions
         .iter()
         .filter(|s| !s.dormant && s.limit.is_none() && s.queued.is_none())
+        // Parked as a background job: restarting the pane would leave the job
+        // running the conversation on its own.
+        .filter(|s| s.parked.is_none())
         // A conversation hands over once: another process still holding it
         // afterwards is an old copy, not a second one to continue.
         .filter(|s| !lineage.iter().any(|l| l.old_id == s.id))
@@ -1376,6 +1379,11 @@ fn find(cfg: &Config, pid: i32) -> Option<Session> {
 /// The whole handover of a main session, start to finish.
 pub fn run(cfg: &Config, pid: i32) -> Result<String> {
     let s = find(cfg, pid).context("that session has gone")?;
+    if let Some(job) = s.parked {
+        bail!(
+            "it's parked as a Claude Code background job (pid {job}), which toomux can't hand over yet"
+        );
+    }
     if load_lineage().iter().any(|l| l.old_id == s.id) {
         let _ = std::fs::remove_file(marker_path(pid));
         bail!(
@@ -3412,6 +3420,7 @@ mod tests {
             }),
             unregistered: false,
             twin: None,
+            parked: None,
         }
     }
 
@@ -3437,6 +3446,12 @@ mod tests {
             due(&c, &[stale.clone(), live.clone()], now),
             vec![2],
             "only the live copy hands over, once its brief is written"
+        );
+        let mut parked = live.clone();
+        parked.parked = Some(99);
+        assert!(
+            due(&c, &[stale.clone(), parked], now).is_empty(),
+            "parked as a background job: restarting its pane would leave the job running"
         );
         remember(Lineage {
             old_id: "r".into(),
