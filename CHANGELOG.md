@@ -6,6 +6,8 @@ still change configuration and command details while they settle.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
 ### Added
 
 - Choose whether the fresh session a handover starts has Remote Control and bypass permissions: `handover_remote_control` and `handover_skip_permissions` (`keep`, `on`, `off`), also under a new `ctrl-g` settings screen. `keep` carries Remote Control turned on with `/remote-control` too.
@@ -206,7 +208,8 @@ still change configuration and command details while they settle.
 
 Initial public release: tmux session control, handovers, shared memory, multi-account usage/switching, transcript archives, background jobs and voyages.
 
-[Unreleased]: https://github.com/meshbergio/toomux/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/meshbergio/toomux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/meshbergio/toomux/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/meshbergio/toomux/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/meshbergio/toomux/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/meshbergio/toomux/compare/v0.4.1...v0.4.2
