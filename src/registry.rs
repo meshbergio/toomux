@@ -31,6 +31,12 @@ struct Raw {
     status_updated_at: i64,
     #[serde(default)]
     kind: Option<String>,
+    /// Set on an interactive session parked as a background job: the job
+    /// now holds the conversation.
+    #[serde(default)]
+    parked_job_id: Option<String>,
+    #[serde(default)]
+    job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -99,6 +105,9 @@ pub struct Session {
     pub unregistered: bool,
     /// Another live process has the same conversation open (its pid).
     pub twin: Option<i32>,
+    /// Parked as a Claude Code background job: the job's pid. The job holds
+    /// the conversation (`id`), and the pane shows it.
+    pub parked: Option<i32>,
 }
 
 impl Session {
@@ -355,6 +364,7 @@ pub fn load(cfg: &Config) -> Vec<Session> {
     let now = now_ms();
     let finished_window = cfg.finished_minutes as i64 * 60_000;
     let mut out: Vec<Session> = Vec::new();
+    let jobs = background_jobs_by_id(cfg);
 
     for dir in cfg.session_dirs() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -368,7 +378,7 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             let Ok(raw) = std::fs::read_to_string(&p) else {
                 continue;
             };
-            let Ok(r) = serde_json::from_str::<Raw>(&raw) else {
+            let Ok(mut r) = serde_json::from_str::<Raw>(&raw) else {
                 continue;
             };
             if r.kind.as_deref().is_some_and(|k| k != "interactive") {
@@ -377,6 +387,7 @@ pub fn load(cfg: &Config) -> Vec<Session> {
             if !alive(r.pid, r.proc_start.as_deref()) || out.iter().any(|s| s.pid == r.pid) {
                 continue;
             }
+            let parked = follow_parked(&mut r, &jobs);
 
             let environ = crate::platform::environ(r.pid);
             let config_dir = environ
@@ -467,6 +478,7 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 pane,
                 unregistered: false,
                 twin: None,
+                parked,
             };
             let meta = s
                 .transcript(cfg)
@@ -519,6 +531,42 @@ pub fn load(cfg: &Config) -> Vec<Session> {
         }
     }
     out.sort_by(|a, b| a.state.cmp(&b.state).then(b.since_ms.cmp(&a.since_ms)));
+    out
+}
+
+/// A session parked as a background job: the conversation and what it's
+/// doing are the job's (its own record stops where it was parked). The job's
+/// pid, if it's one.
+fn follow_parked(r: &mut Raw, jobs: &std::collections::HashMap<String, Raw>) -> Option<i32> {
+    let job = jobs.get(r.parked_job_id.as_deref()?)?;
+    r.session_id = job.session_id.clone();
+    r.status = job.status.clone();
+    r.waiting_for = job.waiting_for.clone();
+    r.updated_at = job.updated_at;
+    r.status_updated_at = job.status_updated_at;
+    Some(job.pid)
+}
+
+/// Live Claude Code background jobs (`claude --bg`, or a session parked as
+/// one), by job id.
+fn background_jobs_by_id(cfg: &Config) -> std::collections::HashMap<String, Raw> {
+    let mut out = std::collections::HashMap::new();
+    for dir in cfg.session_dirs() {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let Some(r) = std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Raw>(&raw).ok())
+            else {
+                continue;
+            };
+            if r.kind.as_deref() == Some("bg")
+                && alive(r.pid, r.proc_start.as_deref())
+                && let Some(j) = r.job_id.clone()
+            {
+                out.entry(j).or_insert(r);
+            }
+        }
+    }
     out
 }
 
@@ -611,6 +659,7 @@ fn unregistered(
             pane: Some(pane.clone()),
             unregistered: true,
             twin: None,
+            parked: None,
         };
         let meta = s
             .transcript(cfg)
@@ -691,6 +740,7 @@ pub fn dormant(cfg: &Config, live: &[Session]) -> Vec<Session> {
                 pane: None,
                 unregistered: false,
                 twin: None,
+                parked: None,
             };
             if let Some(t) = s.transcript(cfg) {
                 let modified = std::fs::metadata(&t).and_then(|m| m.modified()).ok();
@@ -768,6 +818,7 @@ fn placeholders(
                 pane: None,
                 unregistered: false,
                 twin: None,
+                parked: None,
             };
             if let Some(t) = s.transcript(cfg) {
                 s.pr = crate::transcript::meta(&t).pr;
@@ -868,6 +919,7 @@ pub fn conversation(
         pane: None,
         unregistered: false,
         twin: None,
+        parked: None,
     })
 }
 
@@ -1147,6 +1199,7 @@ mod tests {
             pane: None,
             unregistered: false,
             twin: None,
+            parked: None,
         }
     }
 
@@ -1274,6 +1327,66 @@ mod tests {
             let _ = c.wait();
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_parked_as_a_background_job_is_the_jobs_conversation() {
+        let root = std::env::temp_dir().join(format!("toomux-parked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sessions = root.join("acct").join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let mut job = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let me = std::process::id();
+        let write = |pid: u32, body: String| {
+            std::fs::write(sessions.join(format!("{pid}.json")), body).unwrap();
+        };
+        write(
+            me,
+            format!(
+                r#"{{"pid":{me},"sessionId":"old-0000","cwd":"/w","kind":"interactive","status":"busy",
+                "statusUpdatedAt":1,"updatedAt":1,"parkedJobId":"68809048"}}"#
+            ),
+        );
+        write(
+            job.id(),
+            format!(
+                r#"{{"pid":{},"sessionId":"68809048-live","cwd":"/w","kind":"bg","jobId":"68809048",
+                "status":"idle","statusUpdatedAt":500,"updatedAt":600}}"#,
+                job.id()
+            ),
+        );
+        let mut cfg = crate::config::Config::default();
+        cfg.accounts = vec![crate::config::Account {
+            name: "a".into(),
+            config_dir: root.join("acct").display().to_string(),
+        }];
+        let jobs = super::background_jobs_by_id(&cfg);
+        assert_eq!(jobs.len(), 1, "only the live background job");
+        let raw = std::fs::read_to_string(sessions.join(format!("{me}.json"))).unwrap();
+        let mut r: super::Raw = serde_json::from_str(&raw).unwrap();
+        assert_eq!(super::follow_parked(&mut r, &jobs), Some(job.id() as i32));
+        assert_eq!(
+            (
+                r.session_id.as_str(),
+                r.status.as_deref(),
+                r.status_updated_at
+            ),
+            ("68809048-live", Some("idle"), 500),
+            "the job's conversation and state, not where it was parked"
+        );
+        // A job that has ended leaves the session as its own record says.
+        let _ = job.kill();
+        let _ = job.wait();
+        let mut r: super::Raw = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            super::follow_parked(&mut r, &super::background_jobs_by_id(&cfg)),
+            None
+        );
+        assert_eq!(r.session_id, "old-0000");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

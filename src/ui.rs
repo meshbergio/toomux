@@ -5363,6 +5363,7 @@ mod tests {
             pane: None,
             unregistered: false,
             twin: None,
+            parked: None,
         }
     }
 
