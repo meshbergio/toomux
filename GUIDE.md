@@ -188,6 +188,7 @@ In the list (`alt-?` or `?` shows these too):
 | `ctrl-u` | usage: each account's 5-hour and weekly limits (clears a half-typed filter first) |
 | `alt-a` | accounts |
 | `alt-r` | remote access (coming) |
+| `ctrl-g` | [settings](#remote-control-and-permissions-after-a-handover): what a handover starts the fresh session with |
 | `ctrl-s` | clean up sessions idle for more than `stale_days` |
 | `ctrl-e` | reopen what was running before a restart |
 | `tab` | group by attention, account or project |
@@ -290,7 +291,8 @@ over again at once.
 2. **The restart.** Once the brief is written and the turn is over, the session
    continues as a fresh conversation, with the same account, flags and name,
    that opens with the brief. It happens in the same pane, or, for a session in
-   a plain terminal, in a tmux server of its own.
+   a plain terminal, in a tmux server of its own. Remote Control and bypass
+   permissions follow your [settings](#remote-control-and-permissions-after-a-handover).
 3. **What you didn't see.** The fresh session takes the pane moments after the
    old one's last reply, often before you've read it. So toomux copies that
    reply, and every file sent since your last message, from the old transcript
@@ -313,6 +315,20 @@ every call. Past `fork_context_tokens` the caller is refused the fork and asked
 to brief a general-purpose subagent instead. Measured over a day of real use,
 forks started past 240k cost 2.6 times what the same calls would have cost
 starting fresh; below 180k they were close to even.
+
+### Remote Control and permissions after a handover
+
+Two settings decide how the fresh session starts. Change them under `ctrl-g` in
+toomux, or in the config file:
+
+| setting | `keep` (default) | `on` | `off` |
+|---|---|---|---|
+| `handover_remote_control` | on if the old session had it, whether started with `--remote-control` or turned on with `/remote-control` | always `--remote-control` | never |
+| `handover_skip_permissions` | the old session's permission flags as they were | always `--dangerously-skip-permissions` (replacing another `--permission-mode`) | the bypass flags are dropped |
+
+The first time an account runs with bypass permissions, Claude Code asks you to
+accept it; a fresh session on an account that hasn't stops there and shows as
+needing you.
 
 ### When it doesn't go through
 
@@ -982,6 +998,8 @@ comment on each. Changes apply the next time toomux opens.
 | `archive_transcripts` | `true` | upkeep keeps a compressed copy of every transcript |
 | `resume_after_limit` | `"working"` | which sessions carry on after a limit resets: `working`, `all` or `off` |
 | `auto_continue_at_limit` | `false` | choose Claude Code's "Wait here, then continue automatically" at the limit dialog |
+| `handover_remote_control` | `"keep"` | Remote Control on the fresh session a handover starts: `keep`, `on` or `off` ([more](#remote-control-and-permissions-after-a-handover)) |
+| `handover_skip_permissions` | `"keep"` | `--dangerously-skip-permissions` on the fresh session a handover starts: `keep`, `on` or `off` |
 
 Accounts, folder rules and colours are tables:
 

@@ -164,6 +164,13 @@ pub struct Config {
     /// continue automatically" (resets under a day away) instead of waiting
     /// for the reset to dismiss it.
     pub auto_continue_at_limit: bool,
+    /// Remote Control on the fresh session a handover starts: "keep" (on if
+    /// the old session had it), "on" or "off".
+    pub handover_remote_control: String,
+    /// Bypass permissions (`--dangerously-skip-permissions`) on the fresh
+    /// session a handover starts: "keep" (as the old session ran), "on" or
+    /// "off".
+    pub handover_skip_permissions: String,
     pub rules: Vec<Rule>,
     pub colors: Colors,
 }
@@ -195,6 +202,8 @@ impl Default for Config {
             archive_transcripts: true,
             resume_after_limit: "working".into(),
             auto_continue_at_limit: false,
+            handover_remote_control: "keep".into(),
+            handover_skip_permissions: "keep".into(),
             rules: Vec::new(),
             colors: Colors::default(),
         }
@@ -432,6 +441,12 @@ subagent_handover_tokens = 250000
 # every call. Past this many, the caller is asked to launch a general-purpose
 # subagent with a complete brief instead. 0: forks are always allowed.
 fork_context_tokens = 200000
+# The fresh session a handover starts: with Remote Control (claude.ai and the
+# Claude app can follow it) and with bypass permissions
+# (--dangerously-skip-permissions). "keep": as the old session had it; "on";
+# "off". Also under ctrl-g (settings) in toomux.
+handover_remote_control = "keep"
+handover_skip_permissions = "keep"
 
 # Optional per-session/model lifecycle policies. More-specific matches override
 # only the fields they specify. compaction = "toomux" is accepted only when
@@ -590,6 +605,32 @@ pub fn save_accounts(accounts: &[Account], renamed: Option<(&str, &str)>) -> Res
     Ok(())
 }
 
+/// Write one top-level setting into the config file, keeping everything
+/// else as it was written (comments too).
+pub fn save_setting(key: &str, value: impl Into<toml_edit::Value>) -> Result<()> {
+    let path = Config::path();
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| Config::render_default());
+    let mut doc: toml_edit::DocumentMut = raw
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    match doc.get_mut(key).and_then(|i| i.as_value_mut()) {
+        // In place, so its comment and position stay.
+        Some(v) => {
+            let decor = v.decor().clone();
+            *v = value.into();
+            *v.decor_mut() = decor;
+        }
+        None => doc[key] = toml_edit::value(value),
+    }
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let tmp = path.with_extension(format!("toml.{}", std::process::id()));
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(tmp, &path)?;
+    Ok(())
+}
+
 /// Settings written below an `[[accounts]]` table belong to that account as
 /// far as TOML is concerned (toomux's first config template did this). Move
 /// them back to the top level so they take effect.
@@ -618,6 +659,8 @@ fn lift_settings(mut t: toml::Table) -> toml::Table {
         "archive_transcripts",
         "resume_after_limit",
         "auto_continue_at_limit",
+        "handover_remote_control",
+        "handover_skip_permissions",
     ];
     let mut lifted = Vec::new();
     if let Some(toml::Value::Array(accounts)) = t.get_mut("accounts") {
