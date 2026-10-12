@@ -788,6 +788,9 @@ pub enum Phase {
     Asked { written: bool },
     /// The last try failed, and why.
     Failed(String),
+    /// Far past its hard limit with no handover asked for or under way:
+    /// its context, and why nothing is handing it over.
+    Overdue { tokens: u64, why: String },
 }
 
 pub fn phase(session: &str, pid: i32) -> Option<Phase> {
@@ -821,6 +824,77 @@ pub fn phase(session: &str, pid: i32) -> Option<Phase> {
     })
 }
 
+/// Past this a session is overdue: a quarter again its hard limit. Below it,
+/// a long turn can be past the limit for a while before its next tool call
+/// asks for the brief.
+fn overdue_at(policy: &ResolvedContextPolicy) -> u64 {
+    policy.handover_tokens / 4 * 5
+}
+
+/// A session far past its hard limit that nothing is handing over, and why,
+/// so it can't go unnoticed (a session parked as a background job once ran on
+/// to 586k this way). `tokens` is its status line's latest figure.
+pub fn overdue(cfg: &Config, s: &Session, tokens: u64) -> Option<Phase> {
+    if s.dormant
+        || s.unregistered
+        || s.limit.is_some()
+        || s.queued.is_some()
+        || s.handover.is_some()
+    {
+        return None;
+    }
+    let policy = context_policy::for_session(cfg, s);
+    if policy.handover_tokens == 0 || tokens < overdue_at(&policy) {
+        return None;
+    }
+    // Reopened on purpose after it handed over: it carries on as it is.
+    if load_lineage().iter().any(|l| l.old_id == s.id) {
+        return None;
+    }
+    let why = if !registry::is_interactive(cfg, &s.id) {
+        "not seen as interactive, so never asked"
+    } else if s
+        .transcript(cfg)
+        .is_some_and(|t| born_big(policy.handover_tokens, &t))
+    {
+        "opened near its limit, so never asked"
+    } else {
+        "not asked for its brief yet"
+    };
+    Some(Phase::Overdue {
+        tokens,
+        why: why.into(),
+    })
+}
+
+fn overdue_path(session: &str) -> PathBuf {
+    dir().join(format!("overdue-{session}"))
+}
+
+/// Log each overdue session once, when it becomes overdue; the next time it
+/// does (after it has handed over or come back under) it's logged again.
+fn note_overdue(sessions: &[Session]) {
+    for s in sessions {
+        let p = overdue_path(&s.id);
+        match &s.handover {
+            Some(Phase::Overdue { tokens, why }) => {
+                if !p.exists() {
+                    touch(&p, &tokens.to_string());
+                    log(json!({"event": "overdue", "session": s.id, "pid": s.pid,
+                        "title": s.title, "tokens": tokens, "why": why}));
+                }
+            }
+            // Handing over, or failed: that has its own log lines.
+            Some(_) => {}
+            None => {
+                if p.exists() {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+    }
+}
+
 /// A session asked by the gate to hand over (its brief may be on the way).
 pub fn requested(session: &str) -> bool {
     requested_path(session, None).exists()
@@ -841,6 +915,7 @@ pub fn prune() {
             || name.starts_with("tick-")
             || name.starts_with("retry-")
             || name.starts_with("typed-")
+            || name.starts_with("overdue-")
             || marker
             || stray)
         {
@@ -1068,6 +1143,7 @@ pub fn start_due(cfg: &Config, sessions: &[Session], now: i64) {
             Some(wait) => defer(cfg, s, wait, now),
         }
     }
+    note_overdue(sessions);
     carry(cfg, sessions);
 }
 
@@ -3420,6 +3496,78 @@ mod tests {
             twin: None,
             parked: None,
         }
+    }
+
+    #[test]
+    fn a_session_far_past_its_limit_that_nothing_hands_over_is_overdue_and_logged_once() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-overdue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.join("state")) };
+        let c = cfg_with(400_000, &tmp, &["mine"]);
+        let s = session(1, "mine", 60_000, true);
+        assert_eq!(
+            overdue(&c, &s, 499_999),
+            None,
+            "a long turn can run past the limit a while"
+        );
+        let over = overdue(&c, &s, 586_000);
+        assert_eq!(
+            over,
+            Some(Phase::Overdue {
+                tokens: 586_000,
+                why: "not asked for its brief yet".into()
+            })
+        );
+        let job = session(2, "a-background-job", 60_000, true);
+        assert!(
+            matches!(overdue(&c, &job, 586_000), Some(Phase::Overdue { why, .. }) if why.contains("not seen as interactive")),
+            "says why nothing will ask it"
+        );
+        let mut asked = s.clone();
+        asked.handover = Some(Phase::Asked { written: false });
+        assert_eq!(overdue(&c, &asked, 586_000), None, "already on its way");
+        let mut limited = s.clone();
+        limited.limit = Some("resets 5pm".into());
+        assert_eq!(
+            overdue(&c, &limited, 586_000),
+            None,
+            "the limit is the news"
+        );
+        assert_eq!(
+            overdue(&cfg_with(0, &tmp, &["mine"]), &s, 900_000),
+            None,
+            "handover off"
+        );
+
+        let mut shown = s.clone();
+        shown.handover = over;
+        let overdue_lines = || {
+            std::fs::read_to_string(dir().join("log.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| l.contains("\"overdue\""))
+                .count()
+        };
+        let (word, rest, _) = shown.state_parts(registry::now_ms());
+        assert_eq!(
+            (word.as_str(), rest.as_deref()),
+            (
+                "handover overdue",
+                Some("586k · not asked for its brief yet")
+            )
+        );
+        note_overdue(std::slice::from_ref(&shown));
+        note_overdue(std::slice::from_ref(&shown));
+        assert_eq!(overdue_lines(), 1, "once per episode, not every tick");
+        note_overdue(std::slice::from_ref(&s));
+        note_overdue(std::slice::from_ref(&shown));
+        assert_eq!(
+            overdue_lines(),
+            2,
+            "back under, then over again: a new episode"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -223,6 +223,7 @@ nothing to start in.
 | `○` idle | settled work fades back |
 | handing over | writing its brief, waiting to start the fresh session, or brief written and going when its turn ends |
 | handover failed | with the reason in a few words, for six hours or until a retry succeeds |
+| handover overdue | a quarter past its handover limit with no handover asked for or under way, with its context and why |
 | not running | a pinned conversation that has exited, with when it was last active |
 | before the restart | was running before a reboot or a lost tmux server, and is offered back (see [After a restart](#after-a-restart)) |
 | open twice | the same conversation is open in two processes: close one |
@@ -1106,6 +1107,18 @@ These run from Claude Code hooks. Check:
   <name> --dir <folder>` brings it in.
 - The handover limit isn't off (`handover_tokens = 0`), and no context policy
   raises it (`toomux context-policy --model <id>`).
+
+A session a quarter past its limit that nothing is handing over shows
+`handover overdue` with the reason, and is logged once in
+`~/.local/state/toomux/handovers/log.jsonl` (`"event":"overdue"`):
+
+- `not seen as interactive, so never asked`: Claude Code's registry doesn't
+  list it as a session toomux can restart (a `claude -p` or SDK run, or a
+  background job no session is parked as).
+- `opened near its limit, so never asked`: it started within a quarter of the
+  limit (a big conversation reopened), and is left to carry on.
+- `not asked for its brief yet`: the hooks haven't asked it. Check the list
+  above, or run `toomux handover <pid>`.
 
 ### A session sits at a Claude Code screen
 

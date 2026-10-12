@@ -2156,6 +2156,78 @@ mod tests {
         }
     }
 
+    /// A parked session's background job, and a stand-in for `claude` that
+    /// records how it was asked and, if `obey`, stops the job.
+    fn parked_job(name: &str, obey: bool) -> (std::path::PathBuf, std::process::Child, Config) {
+        let root =
+            std::env::temp_dir().join(format!("toomux-stopjob-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let job = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let kill = if obey {
+            format!("kill {}", job.id())
+        } else {
+            String::new()
+        };
+        let claude = root.join("claude");
+        std::fs::write(
+            &claude,
+            format!(
+                "#!/bin/sh\necho \"$* $CLAUDE_CONFIG_DIR\" > {}/asked\n{kill}\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut c = Config::default();
+        c.claude_bin = claude.display().to_string();
+        (root, job, c)
+    }
+
+    #[test]
+    fn a_parked_sessions_job_is_stopped_through_its_own_account() {
+        let (root, mut job, c) = parked_job("obey", true);
+        let mut s = session(None, Some("/acct/personal"));
+        let p = crate::registry::Parked {
+            pid: job.id() as i32,
+            proc_start: None,
+            job: "68809048".into(),
+        };
+        s.parked = Some(p.clone());
+        super::stop_job(&c, &s, &p).unwrap();
+        let _ = job.wait();
+        assert_eq!(
+            std::fs::read_to_string(root.join("asked")).unwrap().trim(),
+            "stop 68809048 /acct/personal"
+        );
+        assert!(!crate::registry::alive(p.pid, None));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_job_that_wont_stop_is_an_error_and_is_left_running() {
+        let (root, mut job, c) = parked_job("refuse", false);
+        let s = session(None, None);
+        let p = crate::registry::Parked {
+            pid: job.id() as i32,
+            proc_start: None,
+            job: "68809048".into(),
+        };
+        let e = super::stop_job(&c, &s, &p).unwrap_err().to_string();
+        assert!(e.contains("didn't stop"), "{e}");
+        assert!(
+            crate::registry::alive(p.pid, None),
+            "left running, not killed"
+        );
+        let _ = job.kill();
+        let _ = job.wait();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn provider_ids(env: &[String]) -> Vec<&str> {
         env.iter()
             .filter_map(|e| e.strip_prefix("TOOMUX_PROVIDER_SESSION_ID="))

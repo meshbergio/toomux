@@ -190,6 +190,13 @@ impl Session {
                     since,
                 );
             }
+            Some(Phase::Overdue { tokens, why }) => {
+                return (
+                    "handover overdue".into(),
+                    Some(format!("{}k · {why}", tokens / 1000)),
+                    since,
+                );
+            }
             // Limited, it can't hand over until the reset, and is tried then:
             // the limit is the news.
             Some(Phase::Failed(why)) if self.limit.is_none() => {
@@ -374,6 +381,7 @@ pub fn load(cfg: &Config) -> Vec<Session> {
     let finished_window = cfg.finished_minutes as i64 * 60_000;
     let mut out: Vec<Session> = Vec::new();
     let jobs = background_jobs_by_id(cfg);
+    let context = crate::usage::sessions();
 
     for dir in cfg.session_dirs() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -518,6 +526,16 @@ pub fn load(cfg: &Config) -> Vec<Session> {
                 if s.limit.is_some() {
                     s.state = State::NeedsYou;
                 }
+            }
+            if let Some(t) = context
+                .get(&s.id)
+                .filter(|i| now - i.at_ms < 6 * 3_600_000)
+                .and_then(|i| i.tokens)
+            {
+                s.handover = s
+                    .handover
+                    .take()
+                    .or_else(|| crate::handover::overdue(cfg, &s, t));
             }
             out.push(s);
         }
@@ -1401,6 +1419,22 @@ mod tests {
             super::is_interactive(&cfg, "68809048-live"),
             "the job hands over with the session parked as it"
         );
+        // A job of its own (`claude --bg`), parked by no one: not toomux's to restart.
+        let mut own = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        write(
+            own.id(),
+            format!(
+                r#"{{"pid":{},"sessionId":"b1fd7aa5-own","cwd":"/w","kind":"bg","jobId":"b1fd7aa5",
+                "status":"busy","statusUpdatedAt":1,"updatedAt":1}}"#,
+                own.id()
+            ),
+        );
+        assert!(!super::is_interactive(&cfg, "b1fd7aa5-own"));
+        let _ = own.kill();
+        let _ = own.wait();
         // A job that has ended leaves the session as its own record says.
         let _ = job.kill();
         let _ = job.wait();
