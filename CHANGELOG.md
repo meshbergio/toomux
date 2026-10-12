@@ -10,6 +10,10 @@ still change configuration and command details while they settle.
 
 - Show a session as `handover overdue` when its context is a quarter past its handover limit and no handover has been asked for or is under way, with its context and the reason (for example "not seen as interactive, so never asked"). Each such session is logged once in `handovers/log.jsonl`, so a session can no longer run far past its limit unnoticed.
 
+### Removed
+
+- Remove the experimental browser-based ChatGPT provider: the `toomux provider` command, its 30-second lease reconcile in the status tick, and its hardcoded private Claude Code profile. Per-model context policies still cover any non-Claude model you route Claude Code to.
+
 ### Reliability
 
 - Test that a parked session's background job is stopped through its own account, and that a job that won't stop fails the handover and is left running.

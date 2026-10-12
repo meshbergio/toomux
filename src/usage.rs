@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn custom_provider_status_does_not_report_behaves_as_list_price() {
         let custom = serde_json::json!({
-            "model": { "id": "chatgpt-browser" },
+            "model": { "id": "proxy-1m" },
             "cost": { "total_cost_usd": 12.34 }
         });
         assert_eq!(status_cost(&custom), None);
