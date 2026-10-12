@@ -32,6 +32,7 @@ still change configuration and command details while they settle.
 
 ### Fixed
 
+- Memory search (`mem_search`) stays in the session's project and global notes unless it asks for `where: "all"`; it no longer fills up with other projects' matches when its own project has few.
 - Handovers no longer stall silently: a handover waiting on text in the prompt shows "handing over · waiting: …", logs why, and after 30 minutes fails visibly. Retries run on their own schedule without an attached tmux client, and a fresh session that won't start puts the old conversation back and backs off (30 minutes, 2 hours, then a day after three attempts) instead of looping.
 - Verify that typed prompts are sent and cleared prompts are empty, including multi-line drafts, rather than assuming it.
 - Don't start a handover while Claude Code is counting down to continue after a usage limit, and recognise all of Claude Code 2.1.296's auto-continue screens so toomux never cancels that countdown.

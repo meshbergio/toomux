@@ -408,11 +408,11 @@ Sessions get the MCP tools `mem_search`, `mem_get`, `mem_save`, `mem_forget` and
 
 **What a session can see.** There is one memory per machine, across all
 accounts. `mem_search` looks in the session's own project and global notes
-first. When that finds fewer results than asked for, it fills up with matches
-from other projects, marked as coming from elsewhere. `where: "all"` searches
-every project from the start. `toomux mem` searches the current project and global
-notes unless you add `--all`. If you keep client work on this machine that other projects'
-sessions must not see, run it under a separate user, or a separate `TOOMUX_HOME`
+only; when nothing there matches, it says so and that `where: "all"` would search
+every project. Other projects come in only when a session asks for `where: "all"`,
+or names a session (`session`) or an entry (`mem_get`) by id. `toomux mem`
+searches the current project and global notes unless you add `--all`. If you keep
+client work on this machine that other projects' sessions must never reach, run it under a separate user, or a separate `TOOMUX_HOME`
 (see [Where things are](#where-things-are)).
 
 Claude Code loads only a session's own `MEMORY.md` index, re-reading it on every

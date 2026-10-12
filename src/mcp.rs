@@ -103,7 +103,7 @@ fn tools() -> Value {
             "description": "Search toomux memory: past conversations (what was asked and decided), handover briefs, saved notes and kept command outputs. Word and typo-tolerant matching. Defaults to this project plus global notes.",
             "inputSchema": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "What to look for, in plain words"},
-                "where": {"type": "string", "enum": ["here", "all", "global"], "description": "here = this project and global notes (default); all = every project"},
+                "where": {"type": "string", "enum": ["here", "all", "global"], "description": "here = this project and global notes (default); all = every project (only when the person's work in other projects is fair to draw on)"},
                 "session": {"type": "string", "description": "Only this session's conversation (a session id, or its first 8 characters)"},
                 "limit": {"type": ["integer", "string"], "description": "How many results (default 8, at most 30)"}
             }, "required": ["query"]}
@@ -186,21 +186,15 @@ fn call(name: &str, a: &Value, here: &str) -> Result<String> {
                 None => (scopes, None),
             };
             let hits = m.search(&scopes, prefix, q, limit)?;
-            // Too little here: what other projects know, marked as such (the
-            // work may have been done from another folder).
-            let mut elsewhere = Vec::new();
-            if session.is_none() && where_ == "here" && hits.len() < limit {
-                let seen: std::collections::HashSet<String> =
-                    hits.iter().map(|h| h.id.clone()).collect();
-                elsewhere = m
-                    .search(&[], None, q, limit)?
-                    .into_iter()
-                    .filter(|h| !seen.contains(&h.id))
-                    .take(limit - hits.len())
-                    .collect();
-            }
-            if hits.is_empty() && elsewhere.is_empty() {
-                return Ok(format!("nothing in memory matches {q:?}"));
+            // Other projects stay out unless asked for: one machine's memory
+            // can hold work (a client's, say) that must stay apart.
+            if hits.is_empty() {
+                return Ok(match (&session, where_) {
+                    (None, "here") => format!(
+                        "nothing in this project or global notes matches {q:?} · where: \"all\" searches every project"
+                    ),
+                    _ => format!("nothing in memory matches {q:?}"),
+                });
             }
             let show = |h: &memory::Hit| {
                 // A memory file citing paths that are gone may be out of date.
@@ -222,17 +216,7 @@ fn call(name: &str, a: &Value, here: &str) -> Result<String> {
                     h.snippet.replace('\n', " ")
                 )
             };
-            let mut text = hits.iter().map(show).collect::<Vec<_>>().join("\n");
-            if !elsewhere.is_empty() {
-                if hits.is_empty() {
-                    text = "nothing from this project; from others:".into();
-                } else {
-                    text.push_str("\n\nfrom other projects:");
-                }
-                text.push('\n');
-                text.push_str(&elsewhere.iter().map(show).collect::<Vec<_>>().join("\n"));
-            }
-            Ok(text)
+            Ok(hits.iter().map(show).collect::<Vec<_>>().join("\n"))
         }
         "mem_get" => {
             let m = Memory::open()?;
@@ -353,6 +337,41 @@ fn clip(s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_stays_in_this_project_unless_asked() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-mcp-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        unsafe { std::env::set_var("TOOMUX_HOME", &tmp) };
+        let save = |content: &str, here: &str| {
+            call("mem_save", &json!({"content": content}), here).unwrap();
+        };
+        save("the zebra migration plan for the client", "/work/client");
+        save("zebra crossing notes", "/work/mine");
+        let search = |q: &str, here: &str, extra: Value| {
+            let mut a = json!({"query": q});
+            a.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            call("mem_search", &a, here).unwrap()
+        };
+        let mine = search("zebra", "/work/mine", json!({}));
+        assert!(mine.contains("crossing"), "{mine}");
+        assert!(
+            !mine.contains("client"),
+            "another project's memory stays out: {mine}"
+        );
+        let none = search("migration", "/work/mine", json!({}));
+        assert!(
+            none.starts_with("nothing in this project") && !none.contains("client"),
+            "{none}"
+        );
+        let all = search("migration", "/work/mine", json!({"where": "all"}));
+        assert!(all.contains("client"), "asked for: every project: {all}");
+        unsafe { std::env::remove_var("TOOMUX_HOME") };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn speaks_mcp() {
