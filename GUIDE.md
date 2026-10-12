@@ -303,6 +303,13 @@ over again at once.
    which outlive the session; the successor re-attaches with `toomux job follow
    <id>`.
 
+**A session parked as a background job.** Claude Code can move a conversation
+out of its pane into a background job, leaving the pane's process behind. toomux
+lists the session with the job's context, cost and state, and hands it over like
+any other: the job writes the brief, toomux stops it with `claude stop` (which
+keeps the conversation) and starts the fresh session in the pane. If the job
+doesn't stop, the handover fails before the pane is touched.
+
 **Subagents** are measured by the same gate. Past their limit they write a brief
 and end with a `HANDOVER:` message, and the parent launches a fresh subagent of
 the same type from it. Read-only agents put the brief in their final message. A
@@ -341,8 +348,9 @@ needing you.
 - A failed handover is tried again after 30 minutes, or sooner once a new brief
   has been written. The list shows `handover failed` and the reason.
 - If the fresh session won't start, the old conversation is put back in its
-  pane. After 3 fresh sessions that wouldn't start, the conversation is left to
-  carry on as it is for a day.
+  pane and the next try waits longer: 30 minutes, then 2 hours. After 3 fresh
+  sessions that wouldn't start, the conversation is left to carry on as it is
+  for a day.
 - Each conversation hands over once, even if an old copy of it is still open
   somewhere else.
 - Every start and outcome is logged in `~/.local/state/toomux/handovers/log.jsonl`.
@@ -1133,8 +1141,8 @@ The list shows the reason. Common ones: text typed in its prompt (toomux won't
 overwrite it; it tries again a minute later and gives up after 30 minutes), the
 fresh session wouldn't start (the old conversation is put back), or a usage
 limit (it hands over after the reset). Failed handovers are retried after 30
-minutes; after 3 fresh sessions that wouldn't start, a conversation is left
-alone for a day. Every step is in `~/.local/state/toomux/handovers/log.jsonl`.
+minutes (2 hours after a second fresh session that wouldn't start); after 3, a
+conversation is left alone for a day. Every step is in `~/.local/state/toomux/handovers/log.jsonl`.
 
 ### A session didn't carry on after a limit reset
 
