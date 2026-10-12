@@ -453,7 +453,7 @@ handover_skip_permissions = "keep"
 # the context window is known and the hard handover plus safety reserve fits
 # below it; otherwise native compaction remains enabled.
 # [[context_policy]]
-# model = "chatgpt-browser"
+# model = "proxy-1m"
 # context_window_tokens = 1000000
 # handover_turn_end_tokens = 200000
 # handover_tokens = 400000

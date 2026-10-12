@@ -282,8 +282,6 @@ fn wildcard(pattern: &str, value: &str) -> bool {
 pub fn provider_for_model(model: &str) -> Option<String> {
     if model.starts_with("claude-") {
         Some("anthropic".into())
-    } else if model.eq_ignore_ascii_case("chatgpt-browser") {
-        Some("chatgpt-browser".into())
     } else if model.starts_with("local-") {
         Some("local".into())
     } else if !model.is_empty() {
@@ -631,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_and_local_models_can_have_independent_concurrent_policies() {
+    fn custom_and_local_models_can_have_independent_concurrent_policies() {
         let mut cfg = Config::default();
         cfg.context_policy = vec![
             ContextPolicyRule {
@@ -661,11 +659,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let browser = resolve(
+        let custom = resolve(
             &cfg,
             PolicySubject {
                 account: Some("work".into()),
-                model: Some("chatgpt-browser".into()),
+                model: Some("proxy-1m".into()),
                 ..Default::default()
             },
         );
@@ -684,7 +682,7 @@ mod tests {
             },
         );
         assert_eq!(
-            (browser.turn_end_limit(), browser.handover_tokens),
+            (custom.turn_end_limit(), custom.handover_tokens),
             (200_000, 400_000)
         );
         assert_eq!(
@@ -695,7 +693,7 @@ mod tests {
             (large.turn_end_limit(), large.handover_tokens),
             (60_000, 90_000)
         );
-        assert!(browser.owns_compaction() && small.owns_compaction() && large.owns_compaction());
+        assert!(custom.owns_compaction() && small.owns_compaction() && large.owns_compaction());
     }
 
     #[test]

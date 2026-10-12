@@ -51,7 +51,7 @@ owns. The main ones:
 | Screens | `ui` (+ `ui/render.rs`, `ui/shell.rs`, `ui/memory.rs`), `watch` (notices) |
 | Reports | `tokens`, `price`, `transcript` |
 | Setup and storage | `setup` (hooks, status line, MCP registration), `install` (self-contained bundles), `config`, `paths`, `state`, `lock`, `places` (frecent folders), `jobs` (background commands) |
-| Optional | `remote` (phone and Android remote), `provider` (local model provider) |
+| Optional | `remote` (phone and Android remote) |
 
 ## Development
 
