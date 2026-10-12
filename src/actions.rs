@@ -2045,7 +2045,7 @@ pub fn close(cfg: &Config, s: &Session) -> Result<String> {
 
 /// Run a switch in a detached process so it survives the popup closing.
 pub fn switch_later(s: &Session, account_name: &str) -> Result<()> {
-    let exe = std::env::current_exe()?;
+    let exe = crate::install::active_exe()?;
     let mut cmd = Command::new(exe);
     cmd.args([
         "switch",

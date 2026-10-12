@@ -74,6 +74,26 @@ fn from_exe(exe: &Path) -> Option<BundleInstall> {
     })
 }
 
+/// The toomux to start work in the background with. In a self-contained
+/// install that's the bundle installed now: a process started before an
+/// upgrade (a full-screen toomux left open, say) would otherwise keep running
+/// the old version's code in everything it starts. Otherwise this executable.
+pub fn active_exe() -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let real = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+    Ok(installed_now(&real).unwrap_or(exe))
+}
+
+/// The current bundle's toomux, for an executable in a bundle install.
+fn installed_now(exe: &Path) -> Option<PathBuf> {
+    let bin = from_exe(exe)?
+        .root
+        .join("current")
+        .join("bin")
+        .join("toomux");
+    bin.is_file().then_some(bin)
+}
+
 pub fn current() -> Option<BundleInstall> {
     let exe = std::env::current_exe().ok()?;
     from_exe(&std::fs::canonicalize(&exe).unwrap_or(exe))
@@ -243,6 +263,23 @@ mod tests {
         assert_eq!(install.bin_dir, PathBuf::from("/tmp/toomux-bin"));
         assert!(install.managed_tmux);
         let _ = std::fs::remove_dir_all(&install.root);
+    }
+
+    #[test]
+    fn background_work_starts_the_bundle_installed_now() {
+        let (root, old) = fixture("active");
+        assert_eq!(installed_now(&old), None, "no current bundle: this one");
+        let new = root.join("versions/0.4.0-cafef00d/bin");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("toomux"), "").unwrap();
+        std::os::unix::fs::symlink("versions/0.4.0-cafef00d", root.join("current")).unwrap();
+        assert_eq!(
+            installed_now(&old),
+            Some(root.join("current/bin/toomux")),
+            "a process from before the upgrade starts the upgraded one"
+        );
+        assert_eq!(installed_now(Path::new("/usr/bin/toomux")), None);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
