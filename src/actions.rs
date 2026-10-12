@@ -1449,6 +1449,31 @@ pub fn rename(cfg: &Config, s: &Session, name: &str, for_you: bool) -> Result<St
 }
 
 /// End a claude process the way a person would: ctrl-c, then escalate.
+/// Stop the background job a session is parked as (`claude stop`), which
+/// keeps its conversation, and wait for it to exit.
+pub fn stop_job(cfg: &Config, s: &Session, p: &registry::Parked) -> Result<()> {
+    let mut cmd = Command::new(expand(&cfg.claude_bin));
+    cmd.args(["stop", &p.job])
+        .stdin(Stdio::null())
+        .env_remove("CLAUDE_CONFIG_DIR");
+    if let Some(d) = &s.config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", expand(d));
+    }
+    let out = cmd.output().context("running claude stop")?;
+    let t = Instant::now();
+    while registry::alive(p.pid, p.proc_start.as_deref()) && t.elapsed() < Duration::from_secs(10) {
+        sleep(Duration::from_millis(100));
+    }
+    if registry::alive(p.pid, p.proc_start.as_deref()) {
+        bail!(
+            "its background job {} didn't stop ({})",
+            p.job,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 pub fn stop(s: &Session) -> Result<()> {
     let start = s.proc_start.as_deref();
     let gone = |d: Duration| {
