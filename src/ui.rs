@@ -166,7 +166,9 @@ impl Palette {
             return self.muted;
         }
         match &s.handover {
-            Some(crate::handover::Phase::Failed(_)) => return self.attention_word,
+            Some(crate::handover::Phase::Failed(_) | crate::handover::Phase::Overdue { .. }) => {
+                return self.attention_word;
+            }
             Some(_) => return self.working_word,
             None => {}
         }
@@ -3969,8 +3971,11 @@ impl App {
         // important first, when the line would otherwise wrap. A limit keeps
         // when it lifts; a queued move always shows.
         // A limit keeps when it lifts, a failed handover keeps why.
-        let limited =
-            s.limit.is_some() || matches!(s.handover, Some(crate::handover::Phase::Failed(_)));
+        let limited = s.limit.is_some()
+            || matches!(
+                s.handover,
+                Some(crate::handover::Phase::Failed(_) | crate::handover::Phase::Overdue { .. })
+            );
         let mut parts: Vec<(u8, String, Style)> = Vec::new();
         if let Some(r) = rest {
             parts.push((if limited { 1 } else { 3 }, r, Style::new().fg(p.muted)));
