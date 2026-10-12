@@ -3273,7 +3273,7 @@ impl App {
             .unwrap_or(0);
         let mut lines = vec![
             Line::from(Span::styled(
-                "settings",
+                "what a handover starts the fresh session with",
                 Style::new().fg(p.text).add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
