@@ -1,6 +1,6 @@
 [package]
 name = "toomux"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Claude Code, minus the babysitting: every session on one screen in tmux, handover to a fresh session before context gets slow and expensive, and recovery from restarts and usage limits"

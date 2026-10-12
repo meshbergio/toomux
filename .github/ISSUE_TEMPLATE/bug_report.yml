@@ -13,7 +13,7 @@ body:
     attributes:
       label: toomux version
       description: Output of `toomux --version`, or the commit if you built it yourself.
-      placeholder: "toomux 0.4.4"
+      placeholder: "toomux 0.5.0"
     validations:
       required: true
   - type: input
