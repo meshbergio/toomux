@@ -8,6 +8,7 @@ still change configuration and command details while they settle.
 
 ### Added
 
+- Choose whether the fresh session a handover starts has Remote Control and bypass permissions: `handover_remote_control` and `handover_skip_permissions` (`keep`, `on`, `off`), also under a new `ctrl-g` settings screen. `keep` carries Remote Control turned on with `/remote-control` too.
 - Close Claude Code's usage-limit dialog a minute after the limit resets and carry on: a session the limit cut off mid-work gets a short "carry on" prompt, and voyages and pending handovers always continue. Set `resume_after_limit` to `"working"` (default), `"all"` or `"off"`; `auto_continue_at_limit = true` picks Claude's own "wait, then continue" option instead. Each step is logged in `limits/log.jsonl`, and it works with no tmux client attached.
 - Add `alt-n` to start a new session from anywhere in the full-screen shell, and `toomux new [folder] [--account A] [--detach]` to do the same from a shell.
 - Let `toomux reopen <id> [--account A]` open any conversation an account holds, by its id.

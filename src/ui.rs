@@ -271,6 +271,8 @@ enum Cmd {
     AccountRemove,
     /// An entry of the right-click menu.
     MenuPick(usize),
+    /// Settings: the next choice for this row.
+    SettingNext(usize),
 }
 
 enum Pending {
@@ -486,6 +488,40 @@ enum Mode {
     Menu(Menu),
     Accounts(AccountsView),
     Remote(String),
+    /// ctrl-g: settings, the selected row.
+    Settings(usize),
+}
+
+/// The settings ctrl-g shows: config key, label, its choices, what they do.
+const SETTINGS: &[(&str, &str, &[&str], &str)] = &[
+    (
+        "handover_remote_control",
+        "Remote Control after a handover",
+        &["keep", "on", "off"],
+        "keep: on if the old session had it · on: always · off: never",
+    ),
+    (
+        "handover_skip_permissions",
+        "bypass permissions after a handover",
+        &["keep", "on", "off"],
+        "--dangerously-skip-permissions · keep: as the old session ran",
+    ),
+];
+
+fn setting(cfg: &Config, key: &str) -> String {
+    match key {
+        "handover_remote_control" => cfg.handover_remote_control.clone(),
+        "handover_skip_permissions" => cfg.handover_skip_permissions.clone(),
+        _ => String::new(),
+    }
+}
+
+fn set_setting(cfg: &mut Config, key: &str, value: &str) {
+    match key {
+        "handover_remote_control" => cfg.handover_remote_control = value.into(),
+        "handover_skip_permissions" => cfg.handover_skip_permissions = value.into(),
+        _ => {}
+    }
 }
 
 struct Menu {
@@ -1075,6 +1111,10 @@ impl App {
             self.account_key(k);
             return;
         }
+        if let Mode::Settings(sel) = self.mode {
+            self.settings_key(k, sel);
+            return;
+        }
         match &self.mode {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Remote(_) => match k.code {
@@ -1236,6 +1276,7 @@ impl App {
                     self.exec(Cmd::New)
                 }
                 KeyCode::Char('s') if ctrl => self.exec(Cmd::Sweep),
+                KeyCode::Char('g') if ctrl => self.mode = Mode::Settings(0),
                 KeyCode::Char('e') if ctrl => self.exec(Cmd::RestoreAll),
                 KeyCode::Char('?') if self.filter.is_empty() => self.mode = Mode::Help,
                 KeyCode::Char('r') if ctrl => self.exec(Cmd::Rename),
@@ -1264,7 +1305,43 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Accounts(_) => unreachable!(),
+            Mode::Accounts(_) | Mode::Settings(_) => unreachable!(),
+        }
+    }
+
+    fn settings_key(&mut self, k: KeyEvent, sel: usize) {
+        let step: isize = match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                self.mode = Mode::Settings((sel + 1).min(SETTINGS.len() - 1));
+                return;
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                self.mode = Mode::Settings(sel.saturating_sub(1));
+                return;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => 1,
+            KeyCode::Left | KeyCode::Char('h') => -1,
+            _ => return,
+        };
+        self.cycle_setting(sel, step);
+    }
+
+    /// Move one setting to its next (or previous) choice and write it to the
+    /// config file, where handovers read it.
+    fn cycle_setting(&mut self, sel: usize, step: isize) {
+        let Some((key, _, choices, _)) = SETTINGS.get(sel) else {
+            return;
+        };
+        let now = setting(&self.cfg, key);
+        let at = choices.iter().position(|c| *c == now).unwrap_or(0) as isize;
+        let next = choices[(at + step).rem_euclid(choices.len() as isize) as usize];
+        match crate::config::save_setting(key, next) {
+            Ok(()) => set_setting(&mut self.cfg, key, next),
+            Err(e) => self.fail(format!("couldn't save the setting: {e}")),
         }
     }
 
@@ -1786,7 +1863,10 @@ impl App {
             self.exec(cmd);
             return;
         }
-        if matches!(self.mode, Mode::Menu(_) | Mode::Help | Mode::Remote(_)) {
+        if matches!(
+            self.mode,
+            Mode::Menu(_) | Mode::Help | Mode::Remote(_) | Mode::Settings(_)
+        ) {
             self.mode = Mode::Normal;
             return;
         }
@@ -1921,6 +2001,14 @@ impl App {
     }
 
     fn exec(&mut self, cmd: Cmd) {
+        if matches!(self.mode, Mode::Settings(_)) {
+            match cmd {
+                Cmd::No => self.mode = Mode::Normal,
+                Cmd::SettingNext(i) => self.cycle_setting(i, 1),
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.mode, Mode::Accounts(_)) {
             let key = match cmd {
                 Cmd::Yes => Some(KeyCode::Enter),
@@ -2215,7 +2303,8 @@ impl App {
             | Cmd::AccountShare
             | Cmd::AccountUnshare
             | Cmd::AccountRemove
-            | Cmd::MenuPick(_) => {}
+            | Cmd::MenuPick(_)
+            | Cmd::SettingNext(_) => {}
             Cmd::Help => self.mode = Mode::Help,
             Cmd::RestoreAll => {
                 let all: Vec<Session> = self
@@ -2772,13 +2861,17 @@ impl App {
         );
 
         // Overlays: everything behind them recedes, and only they take clicks.
-        if matches!(self.mode, Mode::Help | Mode::Menu(_) | Mode::Remote(_)) {
+        if matches!(
+            self.mode,
+            Mode::Help | Mode::Menu(_) | Mode::Remote(_) | Mode::Settings(_)
+        ) {
             recede(f.buffer_mut(), full, well, 0.62, &self.pal);
             self.cmd_hits.clear();
             self.list_hits.clear();
             match self.mode {
                 Mode::Help => self.draw_help(f, body),
                 Mode::Remote(_) => self.draw_remote(f, body),
+                Mode::Settings(_) => self.draw_settings(f, body),
                 _ => self.draw_menu(f, full),
             }
         }
@@ -3059,6 +3152,7 @@ impl App {
                     ("^u", "usage: each account's 5-hour and weekly limits"),
                     ("alt-a", "accounts: sign in, add, share, unshare or remove"),
                     ("alt-r", "remote: connect a phone with a one-use QR"),
+                    ("^g", "settings: what a handover starts with"),
                     ("^s", "clean up sessions idle for days"),
                     ("^e", "reopen what was running before a restart"),
                     ("tab", "group by attention, account or project"),
@@ -3158,6 +3252,89 @@ impl App {
         };
         f.render_widget(ratatui::widgets::Clear, r);
         let block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(p.muted).bg(p.overlay))
+            .style(Style::new().bg(p.overlay))
+            .padding(ratatui::widgets::Padding::new(3, 3, 1, 1));
+        let inner = block.inner(r);
+        f.render_widget(block, r);
+        f.render_widget(Paragraph::new(Text::from(lines)), inner);
+    }
+
+    fn draw_settings(&mut self, f: &mut Frame, area: Rect) {
+        let Mode::Settings(sel) = self.mode else {
+            return;
+        };
+        let p = &self.pal;
+        let label_w = SETTINGS
+            .iter()
+            .map(|(_, l, _, _)| l.len())
+            .max()
+            .unwrap_or(0);
+        let mut lines = vec![
+            Line::from(Span::styled(
+                "settings",
+                Style::new().fg(p.text).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "saved to {}",
+                    crate::config::tilde(&Config::path().display().to_string())
+                ),
+                Style::new().fg(p.dim),
+            )),
+            Line::raw(""),
+        ];
+        for (i, (key, label, choices, _)) in SETTINGS.iter().enumerate() {
+            let now = setting(&self.cfg, key);
+            let mark = if i == sel { "› " } else { "  " };
+            let mut spans = vec![
+                Span::styled(mark, Style::new().fg(p.accent)),
+                Span::styled(
+                    format!("{label:<label_w$}   "),
+                    Style::new().fg(if i == sel { p.text } else { p.dim }),
+                ),
+            ];
+            for c in *choices {
+                let style = if *c == now {
+                    Style::new().fg(p.accent).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(p.muted)
+                };
+                spans.push(Span::styled(format!(" {c} "), style));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::raw(""));
+        if let Some((_, _, _, help)) = SETTINGS.get(sel) {
+            lines.push(Line::from(Span::styled(
+                help.to_string(),
+                Style::new().fg(p.dim),
+            )));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("enter ", Style::new().fg(p.text)),
+            Span::styled("change", Style::new().fg(p.dim)),
+            Span::raw("   "),
+            Span::styled("↑↓ ", Style::new().fg(p.text)),
+            Span::styled("choose", Style::new().fg(p.dim)),
+            Span::raw("   "),
+            Span::styled("esc ", Style::new().fg(p.text)),
+            Span::styled("close", Style::new().fg(p.dim)),
+        ]));
+        let content_w = lines.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
+        let w = (content_w + 8).min(area.width);
+        let h = (lines.len() as u16 + 4).min(area.height);
+        let r = Rect {
+            x: area.x + area.width.saturating_sub(w) / 2,
+            y: area.y + area.height.saturating_sub(h) / 2,
+            width: w,
+            height: h,
+        };
+        f.render_widget(ratatui::widgets::Clear, r);
+        let block = Block::bordered()
+            .title(" settings ")
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(Style::new().fg(p.muted).bg(p.overlay))
             .style(Style::new().bg(p.overlay))
@@ -4981,6 +5158,13 @@ impl App {
         }
         let (lead, hints): (Option<String>, Vec<(String, String, Cmd)>) = match &self.mode {
             Mode::Help => (None, vec![("esc".into(), "close".into(), Cmd::No)]),
+            Mode::Settings(sel) => (
+                Some("settings".into()),
+                vec![
+                    ("enter".into(), "change".into(), Cmd::SettingNext(*sel)),
+                    ("esc".into(), "close".into(), Cmd::No),
+                ],
+            ),
             Mode::Remote(_) => (
                 Some("remote / phone".into()),
                 vec![
@@ -6457,6 +6641,48 @@ mod tests {
             out[0].contains("Do you want") && out[1].contains("invoice.rs?"),
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn ctrl_g_settings_change_what_a_handover_starts_with() {
+        let _env = crate::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("toomux-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("config.toml");
+        std::fs::write(
+            &path,
+            "# mine\nhandover_remote_control = \"keep\" # why\n\n[[accounts]]\nname = \"a\"\nconfig_dir = \"/x\"\n",
+        )
+        .unwrap();
+        unsafe { std::env::set_var("TOOMUX_CONFIG", &path) };
+        let mut app = App::with(cfg(), sample());
+        app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Settings(0)));
+        let out = render(&mut app, 120, 32);
+        assert!(out.contains("Remote Control after a handover"), "{out}");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cfg.handover_remote_control, "on");
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.cfg.handover_skip_permissions, "off");
+        let written = std::fs::read_to_string(&path).unwrap();
+        let back: Config = toml::from_str(&written).unwrap();
+        assert_eq!(
+            (
+                back.handover_remote_control.as_str(),
+                back.handover_skip_permissions.as_str()
+            ),
+            ("on", "off")
+        );
+        assert!(
+            written.contains("# mine") && written.contains("# why"),
+            "{written}"
+        );
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::Normal));
+        unsafe { std::env::remove_var("TOOMUX_CONFIG") };
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn with_usage() -> App {

@@ -243,6 +243,9 @@ fn launch_in(
         env.retain(|entry| !entry.starts_with(&format!("{key}=")));
         env.push(format!("{key}={value}"));
     }
+    if fresh.is_some() {
+        carried = handover_flags(cfg, s, carried);
+    }
     argv.extend(carried);
     if fresh.is_none() {
         argv.push("--resume".into());
@@ -254,6 +257,95 @@ fn launch_in(
         env,
         cmd: shell_words::join(&argv),
     }
+}
+
+/// Whether `flag` (or its `--flag=value` form) is `name`.
+fn is_flag(flag: &str, name: &str) -> bool {
+    flag == name || flag.strip_prefix(name).is_some_and(|r| r.starts_with('='))
+}
+
+/// Whether Remote Control is on in a running session: started with
+/// `--remote-control`, or turned on since (`/remote-control`), which Claude
+/// records in its session registry.
+fn remote_control_on(cfg: &Config, s: &Session) -> bool {
+    if s.args.iter().any(|a| is_flag(a, "--remote-control")) {
+        return true;
+    }
+    let record = session_dir(cfg, s)
+        .join("sessions")
+        .join(format!("{}.json", s.pid));
+    std::fs::read_to_string(record)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .is_some_and(|v| v.get("bridgeSessionId").is_some_and(|b| !b.is_null()))
+}
+
+/// The fresh session's flags after a handover, with Remote Control and
+/// bypass permissions as `handover_remote_control` and
+/// `handover_skip_permissions` say ("keep", "on", "off").
+fn handover_flags(cfg: &Config, s: &Session, args: Vec<String>) -> Vec<String> {
+    with_launch_modes(
+        args,
+        &cfg.handover_remote_control,
+        || remote_control_on(cfg, s),
+        &cfg.handover_skip_permissions,
+    )
+}
+
+fn with_launch_modes(
+    args: Vec<String>,
+    remote: &str,
+    remote_was_on: impl Fn() -> bool,
+    bypass: &str,
+) -> Vec<String> {
+    const BYPASS: &str = "--dangerously-skip-permissions";
+    let bypassing = |a: &[String]| {
+        a.iter().any(|x| x == BYPASS)
+            || a.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "bypassPermissions")
+            || a.iter().any(|x| x == "--permission-mode=bypassPermissions")
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut it = args.into_iter().peekable();
+    while let Some(a) = it.next() {
+        if is_flag(&a, "--remote-control") {
+            // Its optional name is a separate word only when it isn't a flag.
+            if a == "--remote-control" {
+                it.next_if(|n| !n.starts_with('-'));
+            }
+            continue;
+        }
+        if bypass != "keep" {
+            if a == BYPASS || a == "--permission-mode=bypassPermissions" {
+                continue;
+            }
+            if a == "--permission-mode" && it.peek().is_some_and(|v| v == "bypassPermissions") {
+                it.next();
+                continue;
+            }
+            // With bypass on, another starting mode would contradict it.
+            if bypass == "on" && is_flag(&a, "--permission-mode") {
+                if a == "--permission-mode" {
+                    it.next();
+                }
+                continue;
+            }
+        }
+        out.push(a);
+    }
+    if bypass == "on" && !bypassing(&out) {
+        out.push(BYPASS.into());
+    }
+    let remote = match remote {
+        "on" => true,
+        "off" => false,
+        _ => remote_was_on(),
+    };
+    // Last, so the next word (a flag) is never read as its optional name.
+    if remote {
+        out.push("--remote-control".into());
+    }
+    out
 }
 
 fn without_name(args: Vec<String>) -> Vec<String> {
@@ -2545,6 +2637,60 @@ mod tests {
                 "x.json",
                 "y.json"
             ]
+        );
+    }
+
+    #[test]
+    fn a_handover_starts_with_remote_control_and_bypass_as_configured() {
+        let modes = |args: &[&str], remote: &str, was_on: bool, bypass: &str| {
+            super::with_launch_modes(v(args), remote, || was_on, bypass)
+        };
+        // keep: as the old session ran, including Remote Control turned on
+        // with /remote-control after it started.
+        assert_eq!(
+            modes(&["--model", "opus"], "keep", true, "keep"),
+            v(&["--model", "opus", "--remote-control"])
+        );
+        assert_eq!(
+            modes(&["--dangerously-skip-permissions"], "keep", false, "keep"),
+            v(&["--dangerously-skip-permissions"])
+        );
+        // on: added once, whatever the old session had; a named Remote
+        // Control flag doesn't leave its name behind as a prompt.
+        assert_eq!(
+            modes(
+                &["--remote-control", "phone", "--permission-mode", "auto"],
+                "on",
+                false,
+                "on"
+            ),
+            v(&["--dangerously-skip-permissions", "--remote-control"])
+        );
+        assert_eq!(
+            modes(&["--permission-mode=bypassPermissions"], "on", false, "on"),
+            v(&["--dangerously-skip-permissions", "--remote-control"])
+        );
+        // off: both go.
+        assert_eq!(
+            modes(
+                &[
+                    "--remote-control=phone",
+                    "--dangerously-skip-permissions",
+                    "--permission-mode",
+                    "bypassPermissions",
+                    "--model",
+                    "opus"
+                ],
+                "off",
+                true,
+                "off"
+            ),
+            v(&["--model", "opus"])
+        );
+        // off keeps another starting mode.
+        assert_eq!(
+            modes(&["--permission-mode", "auto"], "off", false, "off"),
+            v(&["--permission-mode", "auto"])
         );
     }
 

@@ -942,12 +942,17 @@ impl App {
             )),
             foot,
         );
-        if matches!(self.mode, Mode::Help | Mode::Menu(_) | Mode::Remote(_)) {
+        if matches!(
+            self.mode,
+            Mode::Help | Mode::Menu(_) | Mode::Remote(_) | Mode::Settings(_)
+        ) {
             recede(f.buffer_mut(), framed, self.pal.well, 0.62, &self.pal);
             self.cmd_hits.clear();
             self.list_hits.clear();
             if matches!(self.mode, Mode::Help) {
                 self.draw_help(f, body);
+            } else if matches!(self.mode, Mode::Settings(_)) {
+                self.draw_settings(f, body);
             } else if matches!(self.mode, Mode::Remote(_)) {
                 self.draw_remote(f, body);
             } else {
