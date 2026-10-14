@@ -212,6 +212,16 @@ pub fn pre_tool_hook(cfg: &crate::config::Config) -> Result<()> {
     Ok(())
 }
 
+/// Polls for `cap` to finish, 20 × 50 ms at most (see `rewrite`).
+const CAP_WAIT: &str = "for __toomux_i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 $__toomux_cap 2>/dev/null || break; sleep 0.05; done";
+
+/// `cmd` with its output piped through the `cap` command line (see `rewrite`).
+fn wrap(cap: &str, cmd: &str) -> String {
+    format!(
+        "exec {{__toomux}}> >(exec {cap}); __toomux_cap=$!; {{ exec {{__toomux}}>&-; {cmd}\n\n}} >&$__toomux 2>&1; __toomux_rc=$?; exec {{__toomux}}>&-; {CAP_WAIT}; (exit $__toomux_rc)"
+    )
+}
+
 fn rewrite(v: &Value) -> Option<String> {
     if v.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return None;
@@ -290,10 +300,13 @@ fn rewrite(v: &Value) -> Option<String> {
     // The command's output goes to a pipe into `cap`, opened on a descriptor
     // of its own that is closed again inside the group, so background jobs
     // the command starts don't hold the pipe open. The blank line ends a
-    // trailing backslash; the exit status comes back unchanged.
-    let wrapped = format!(
-        "exec {{__toomux}}> >(exec {cap}); {{ exec {{__toomux}}>&-; {cmd}\n\n}} >&$__toomux 2>&1; __toomux=$?; (exit $__toomux)"
-    );
+    // trailing backslash; the exit status comes back unchanged. Afterwards
+    // the shell closes its end and gives `cap` up to a second to finish:
+    // Claude Code takes the output when the shell exits, and a command that
+    // prints a line and returns at once otherwise beats `cap` to its write
+    // (seen as an empty `uname -r`). A background job still holding the pipe
+    // only costs that second; it is never waited on or stopped.
+    let wrapped = wrap(&cap, cmd);
     if !parses(&wrapped) {
         let _ = std::fs::remove_file(&meta);
         return None;
@@ -941,6 +954,38 @@ mod tests {
         assert!(!is_ours("cd /home/x/toomux && cargo test"));
     }
 
+    /// Runs `wrap` as Claude Code does: stdout is a file, read the moment the
+    /// shell exits. `slow_cap` starts late, as a loaded host's `cap` may.
+    fn run_wrapped(cmd: &str) -> (String, i32, std::time::Duration) {
+        let out = std::env::temp_dir().join(format!("toomux-wrap-{}", new_id()));
+        let slow_cap = "sh -c 'sleep 0.3; exec cat'";
+        let started = std::time::Instant::now();
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(wrap(slow_cap, cmd))
+            .stdout(std::fs::File::create(&out).unwrap())
+            .status()
+            .unwrap();
+        let took = started.elapsed();
+        let text = std::fs::read_to_string(&out).unwrap();
+        let _ = std::fs::remove_file(&out);
+        (text, status.code().unwrap_or(-1), took)
+    }
+
+    #[test]
+    fn a_quick_command_keeps_its_output() {
+        let (text, code, _) = run_wrapped("echo hi; (exit 3)");
+        assert_eq!((text.as_str(), code), ("hi\n", 3));
+    }
+
+    #[test]
+    fn a_background_job_holding_the_pipe_costs_at_most_the_wait() {
+        let (text, code, took) = run_wrapped("sleep 5 & echo hi");
+        assert_eq!(code, 0);
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+        assert!(text.is_empty() || text == "hi\n", "{text:?}");
+    }
+
     #[test]
     fn hook_rewrites_only_what_it_should() {
         // The background case records a job: keep it out of the real state.
@@ -969,7 +1014,9 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            cmd.contains("exec {__toomux}>&-; npm test\n\n}") && cmd.contains("(exit $__toomux)"),
+            cmd.contains("exec {__toomux}>&-; npm test\n\n}")
+                && cmd.contains("__toomux_rc=$?; exec {__toomux}>&-; for __toomux_i")
+                && cmd.ends_with("(exit $__toomux_rc)"),
             "{cmd}"
         );
         assert_eq!(
