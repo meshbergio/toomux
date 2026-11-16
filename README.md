@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo/svg/toomux-logo-reversed.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/brand/logo/svg/toomux-logo-primary.svg">
-    <img src="assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="340">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/svg/toomux-lockup-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/svg/toomux-lockup-on-light.svg">
+    <img src="assets/brand/svg/toomux-lockup-on-light.svg" alt="toomux" width="340">
   </picture>
 </p>
 
@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/meshbergio/toomux/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/meshbergio/toomux/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/meshbergio/toomux/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/meshbergio/toomux?color=4fd1b5&label=release"></a>
+  <a href="https://github.com/meshbergio/toomux/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/meshbergio/toomux?color=d3a86c&label=release"></a>
   <img alt="One Rust binary" src="https://img.shields.io/badge/one%20binary-Rust%201.88%2B-e8a33d">
   <img alt="Linux, macOS, WSL 2" src="https://img.shields.io/badge/linux%20%C2%B7%20macOS%20%C2%B7%20WSL%202-supported-7c8590">
   <a href="#license"><img alt="MIT or Apache 2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-7c8590"></a>
