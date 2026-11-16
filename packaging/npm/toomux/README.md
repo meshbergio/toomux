@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/meshbergio/toomux/master/assets/brand/logo/svg/toomux-logo-primary.svg" alt="toomux" width="300"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/meshbergio/toomux/master/assets/brand/svg/toomux-lockup-on-light.svg" alt="toomux" width="300"></p>
 
 **Claude Code, minus the babysitting.** Every Claude Code session you run, on
 one screen in tmux. Long conversations hand over to a fresh session before
